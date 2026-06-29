@@ -432,6 +432,44 @@ class CoreTest(unittest.TestCase):
         row = self.conn.execute("SELECT status FROM github_repos").fetchone()
         self.assertEqual(row["status"], "unauthenticated")
 
+    def test_system_source_errors_are_diagnostics_not_project_risks(self):
+        week_key = current_week_key("Asia/Shanghai")
+        save_weekly_update(self.conn, self.project_id, {"completed": "project work happened"})
+        now = datetime.now(ZoneInfo("UTC")).isoformat()
+        self.conn.execute(
+            """
+            INSERT INTO github_repos
+            (project_id, repo, status, status_message, created_at, updated_at)
+            VALUES (?, 'owner/repo', 'unauthenticated', 'login required', ?, ?)
+            """,
+            (self.project_id, now, now),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO materials
+            (project_id, filename, content_type, storage_path, size_bytes, checksum, source_type, extraction_status, extraction_error, created_at, updated_at)
+            VALUES (?, 'broken.pdf', 'application/pdf', '/tmp/broken.pdf', 1, 'checksum', 'upload', 'failed', 'parse failed', ?, ?)
+            """,
+            (self.project_id, now, now),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO generation_jobs
+            (project_id, week_key, trigger_type, provider, status, failure_reason, started_at, completed_at)
+            VALUES (?, ?, 'manual', 'codex', 'failed', 'provider failed', ?, ?)
+            """,
+            (self.project_id, week_key, now, now),
+        )
+        evaluate_risks(self.conn, self.project_id)
+        rules = {row["rule"] for row in self.conn.execute("SELECT rule FROM risk_warnings WHERE status = 'active'")}
+        self.assertNotIn("github_unavailable", rules)
+        self.assertNotIn("material_extraction_failed", rules)
+        self.assertNotIn("generation_failed", rules)
+        self.assertEqual(progress_status(self.conn, self.project_id), "on track")
+        data = workspace(self.conn, self.project_id)
+        self.assertEqual(data["risks"], [])
+        self.assertEqual({item["kind"] for item in data["source_diagnostics"]}, {"github", "material", "generation"})
+
 
 if __name__ == "__main__":
     unittest.main()

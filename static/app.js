@@ -397,9 +397,13 @@ function renderHistoryReport(report) {
 function renderRisks(ws) {
   $("tab-risks").innerHTML = `
     <div class="panel">
-      <div class="panel-head"><h2>进度和风险</h2><span>Deterministic warnings</span></div>
+      <div class="panel-head"><h2>进度和风险</h2><span>Project risks only</span></div>
       <p>Progress status: <span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(ws.progress_status)}</span></p>
       <table class="table"><thead><tr><th>Severity</th><th>Rule</th><th>Title</th><th>Status</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td><span class="status ${r.severity}">${r.severity}</span></td><td>${escapeHtml(r.rule)}</td><td>${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td>${escapeHtml(r.status)}</td></tr>`).join("") || "<tr><td colspan='4'>No risks.</td></tr>"}</tbody></table>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h2>系统诊断</h2><span>Sources and generation status</span></div>
+      <table class="table"><thead><tr><th>Type</th><th>Severity</th><th>Title</th><th>Updated</th></tr></thead><tbody>${(ws.source_diagnostics || []).map(d => `<tr><td>${escapeHtml(d.kind)}</td><td><span class="status ${d.severity}">${escapeHtml(d.severity)}</span></td><td>${escapeHtml(d.title)}<br>${escapeHtml(d.details || "")}</td><td>${escapeHtml(formatChinaTime(d.updated_at))}</td></tr>`).join("") || "<tr><td colspan='4'>No diagnostics.</td></tr>"}</tbody></table>
     </div>
   `;
 }
@@ -487,6 +491,7 @@ $("new-project").onclick = () => {
   $("project-form").start_date.value = new Date().toISOString().slice(0, 10);
   $("project-dialog").showModal();
 };
+$("cancel-project").onclick = () => $("project-dialog").close();
 $("project-form").onsubmit = async (event) => {
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(event.target).entries());

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Progress status tracking
-The system SHALL track project progress status from plan milestones, weekly planned outcomes, manual updates, source availability, and deterministic project-risk rules.
+The system SHALL track project progress status from plan milestones, weekly planned outcomes, manual updates, and deterministic project-risk rules.
 
 #### Scenario: Calculate weekly progress status
 - **WHEN** a project week has planned outcomes and progress updates
@@ -29,20 +29,20 @@ The system SHALL create a risk warning when milestones or planned weekly outcome
 - **WHEN** a weekly planned outcome is marked blocked
 - **THEN** the system creates or updates a blocked outcome risk warning
 
-### Requirement: Source health risk warnings
-The system SHALL create deterministic risk warnings when configured source ingestion is unavailable for the current project period.
+### Requirement: System diagnostics separation
+The system SHALL display source and generation failures as operational diagnostics without creating project risk warnings.
 
 #### Scenario: Keep report generation failure out of project risks
 - **WHEN** a scheduled or manual report generation job fails for the current project week
 - **THEN** the system records the failure in generation history without creating a project risk warning
 
-#### Scenario: Warn on unavailable GitHub source
+#### Scenario: Keep unavailable GitHub source out of project risks
 - **WHEN** a project has an associated GitHub repository and local `gh` is missing, unauthenticated, or unable to access the repository during the current period
-- **THEN** the system creates or updates a GitHub source unavailable risk warning
+- **THEN** the system displays a GitHub source diagnostic without creating a project risk warning
 
-#### Scenario: Warn on material extraction failure
+#### Scenario: Keep material extraction failure out of project risks
 - **WHEN** a project material needed for report context has failed text extraction
-- **THEN** the system creates or updates a material extraction risk warning
+- **THEN** the system displays a material extraction diagnostic without creating a project risk warning
 
 ### Requirement: Generated report risk section separation
 The system SHALL keep agent-generated risk forecasts in the weekly report content separate from deterministic system risk warning records.
@@ -76,3 +76,7 @@ The system SHALL display progress status and active risk warnings in the project
 #### Scenario: View project risks
 - **WHEN** a user opens a project's progress or risk view
 - **THEN** the system displays current progress status, active warnings, severity, affected plan items, and last updated time
+
+#### Scenario: View operational diagnostics
+- **WHEN** a user opens a project's progress or risk view
+- **THEN** the system separately displays source and generation diagnostics without including them in active project risk counts

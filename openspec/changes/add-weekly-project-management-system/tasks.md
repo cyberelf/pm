@@ -67,7 +67,7 @@
 - [x] 8.1 Implement progress status calculation for on track, at risk, blocked, and complete states
 - [x] 8.2 Implement missing update risk warnings after configured update times pass without current-period input or activity
 - [x] 8.3 Implement overdue milestone and blocked weekly outcome risk warnings
-- [x] 8.4 Implement deterministic source health warnings for unavailable local `gh`, inaccessible GitHub repositories, and material extraction failures; keep report generation failures in generation history only
+- [x] 8.4 Display unavailable local `gh`, inaccessible GitHub repositories, material extraction failures, and report generation failures as diagnostics rather than project risk warnings
 - [x] 8.5 Keep generated report risk forecasts as Markdown report content separate from deterministic system risk warning records
 - [x] 8.6 Ensure the first-release risk UI does not provide promotion from generated report risk forecasts into system warnings
 - [x] 8.7 Implement risk warning lifecycle actions for create, update, resolve, and dismiss
@@ -80,6 +80,6 @@
 - [x] 9.3 Add tests for current-week report overwrite, generation history visibility, hidden old report bodies by default, and preservation on failed regeneration
 - [x] 9.4 Add tests for CLI provider timeout, missing output file, temporary file handoff, and failure states
 - [x] 9.5 Add tests for Markdown sanitization
-- [x] 9.6 Add tests for progress status, deterministic risk warning rules, source health warnings, report generation failure separation, no promotion action for generated report risk forecasts, and separation of generated report risk forecasts from system warnings
+- [x] 9.6 Add tests for progress status, deterministic risk warning rules, source/generation diagnostic separation, no promotion action for generated report risk forecasts, and separation of generated report risk forecasts from system warnings
 - [x] 9.7 Run OpenSpec validation and the project test suite before marking the change complete
 - [x] 9.8 Verify local runtime setup documentation covers required CLIs, local workspace storage, and the remote deployment non-goal

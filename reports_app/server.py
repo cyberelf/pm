@@ -287,9 +287,73 @@ def workspace(conn, project_id):
         "report": report_dict,
         "report_history": report_history,
         "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? ORDER BY id DESC", (project_id, week_key))],
-        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
+        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'blocked_outcome') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
+        "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "progress_status": progress_status(conn, project_id),
     }
+
+
+def source_diagnostics(conn, project_id, week_key):
+    items = []
+    latest_job = conn.execute(
+        """
+        SELECT id, provider, status, failure_reason, started_at, completed_at
+        FROM generation_jobs
+        WHERE project_id = ? AND week_key = ?
+        ORDER BY started_at DESC, id DESC LIMIT 1
+        """,
+        (project_id, week_key),
+    ).fetchone()
+    if latest_job and latest_job["status"] == "failed":
+        items.append(
+            {
+                "kind": "generation",
+                "severity": "error",
+                "title": "Report generation failed",
+                "details": latest_job["failure_reason"],
+                "source_ref": str(latest_job["id"]),
+                "updated_at": latest_job["completed_at"] or latest_job["started_at"],
+            }
+        )
+    for row in conn.execute(
+        """
+        SELECT id, repo, status, status_message, updated_at
+        FROM github_repos
+        WHERE project_id = ? AND status IN ('disconnected', 'unauthenticated', 'inaccessible')
+        ORDER BY updated_at DESC, id DESC
+        """,
+        (project_id,),
+    ):
+        items.append(
+            {
+                "kind": "github",
+                "severity": "warning",
+                "title": "GitHub source unavailable",
+                "details": f"{row['repo']}: {row['status_message']}",
+                "source_ref": str(row["id"]),
+                "updated_at": row["updated_at"],
+            }
+        )
+    for row in conn.execute(
+        """
+        SELECT id, filename, extraction_error, updated_at
+        FROM materials
+        WHERE project_id = ? AND extraction_status = 'failed'
+        ORDER BY updated_at DESC, id DESC
+        """,
+        (project_id,),
+    ):
+        items.append(
+            {
+                "kind": "material",
+                "severity": "warning",
+                "title": "Material text extraction failed",
+                "details": f"{row['filename']}: {row['extraction_error']}",
+                "source_ref": str(row["id"]),
+                "updated_at": row["updated_at"],
+            }
+        )
+    return items
 
 
 def plan_dict(conn, project_id):

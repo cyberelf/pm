@@ -20,7 +20,8 @@ The first release runs as a local personal web application: the browser provides
 - Store generated weekly reports as Markdown and overwrite the current week's report when regeneration is required.
 - Allow manual immediate generation or regeneration using the same report context snapshot and overwrite rules as scheduled jobs.
 - Show generation job history to the workspace user for audit and troubleshooting, and show prior project-week reports as read-only historical reports.
-- Track progress and generate project risk warnings from deterministic rules over plan status, missing updates, source availability, and project gaps.
+- Track progress and generate project risk warnings from deterministic rules over plan status, missing updates, and project gaps.
+- Show source and generation failures as system diagnostics, not project risks.
 - Ask the report provider to include a risk section that can summarize observed risks and forecast likely follow-on risks from the assembled context.
 
 **Non-Goals:**
@@ -90,7 +91,7 @@ The first release runs as a local personal web application: the browser provides
 
 14. Generate system risk warnings with deterministic rules and keep model-predicted risks in report content.
 
-   Rationale: overdue milestones, missing weekly updates, no activity after a scheduled update time, and unavailable source inputs can be tested and explained as project risks. Report generation failures are operational diagnostics and remain in generation history rather than project risk warnings. The generated weekly report can still include a risk section where the CLI provider summarizes risks and forecasts likely follow-on risks, but those generated statements remain report content unless a deterministic project-risk rule also creates a warning. The first release does not support manually promoting report risk forecasts into system warnings. The alternative was allowing generated text or user-selected generated text to create dashboard warnings, which is deferred because it would require additional source tracking and triage semantics.
+   Rationale: overdue milestones, missing weekly updates, no activity after a scheduled update time, and blocked weekly outcomes can be tested and explained as project risks. Report generation failures, GitHub connectivity/authentication failures, and material extraction failures are operational diagnostics and remain outside project risk warnings. The generated weekly report can still include a risk section where the CLI provider summarizes risks and forecasts likely follow-on risks, but those generated statements remain report content unless a deterministic project-risk rule also creates a warning. The first release does not support manually promoting report risk forecasts into system warnings. The alternative was allowing generated text or user-selected generated text to create dashboard warnings, which is deferred because it would require additional source tracking and triage semantics.
 
 15. Treat the first release as a personal single-user workspace.
 

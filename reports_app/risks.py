@@ -69,41 +69,16 @@ def evaluate_risks(conn, project_id):
     ):
         upsert_warning(conn, project_id, week_key, "blocked_outcome", "high", "Weekly outcome is blocked", row["title"], str(row["id"]))
 
-    for row in conn.execute(
-        "SELECT id, repo, status_message FROM github_repos WHERE project_id = ? AND status IN ('disconnected', 'unauthenticated', 'inaccessible')",
-        (project_id,),
-    ):
-        upsert_warning(
-            conn,
-            project_id,
-            week_key,
-            "github_unavailable",
-            "medium",
-            "GitHub source unavailable",
-            f"{row['repo']}: {row['status_message']}",
-            str(row["id"]),
-        )
-    for row in conn.execute(
-        "SELECT id, filename, extraction_error FROM materials WHERE project_id = ? AND extraction_status = 'failed'",
-        (project_id,),
-    ):
-        upsert_warning(
-            conn,
-            project_id,
-            week_key,
-            "material_extraction_failed",
-            "low",
-            "Material text extraction failed",
-            f"{row['filename']}: {row['extraction_error']}",
-            str(row["id"]),
-        )
-
 
 def progress_status(conn, project_id):
     project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
     week_key = current_week_key(project["timezone"])
     active = conn.execute(
-        "SELECT severity FROM risk_warnings WHERE project_id = ? AND week_key = ? AND status = 'active'",
+        """
+        SELECT severity FROM risk_warnings
+        WHERE project_id = ? AND week_key = ? AND status = 'active'
+          AND rule IN ('missing_update', 'overdue_milestone', 'blocked_outcome')
+        """,
         (project_id, week_key),
     ).fetchall()
     if any(row["severity"] == "high" for row in active):
