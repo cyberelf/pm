@@ -15,7 +15,7 @@ Individual knowledge workers need a consistent way to track weekly project work 
 - Add per-project system prompt configuration for weekly report generation.
 - Add a default Markdown weekly report template and allow each project to configure its own report template.
 - Render weekly reports in Markdown by default and support one canonical report per project week; multiple configured update times are refresh checkpoints that overwrite the current week's visible report after successful regeneration.
-- Add progress tracking and risk warning views based on deterministic rules over plans, weekly updates, generation health, source availability, and detected gaps.
+- Add progress tracking and risk warning views based on deterministic rules over plans, weekly updates, source availability, and detected project gaps.
 - Include a risk section in generated weekly reports where the CLI provider can summarize observed risks and forecast likely follow-on risks from available context.
 - Scope the first release to a personal single-user workspace where each project has one owner and no team membership or role-based collaboration.
 - Scope the first release to a local web application where the backend and required CLIs run on the same machine as the workspace data.

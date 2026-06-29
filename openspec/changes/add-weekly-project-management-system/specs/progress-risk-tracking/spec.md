@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Progress status tracking
-The system SHALL track project progress status from plan milestones, weekly planned outcomes, manual updates, source availability, generation health, and deterministic risk rules.
+The system SHALL track project progress status from plan milestones, weekly planned outcomes, manual updates, source availability, and deterministic project-risk rules.
 
 #### Scenario: Calculate weekly progress status
 - **WHEN** a project week has planned outcomes and progress updates
@@ -29,12 +29,12 @@ The system SHALL create a risk warning when milestones or planned weekly outcome
 - **WHEN** a weekly planned outcome is marked blocked
 - **THEN** the system creates or updates a blocked outcome risk warning
 
-### Requirement: Source and generation health risk warnings
-The system SHALL create deterministic risk warnings when report generation or configured source ingestion is unavailable for the current project period.
+### Requirement: Source health risk warnings
+The system SHALL create deterministic risk warnings when configured source ingestion is unavailable for the current project period.
 
-#### Scenario: Warn on report generation failure
+#### Scenario: Keep report generation failure out of project risks
 - **WHEN** a scheduled or manual report generation job fails for the current project week
-- **THEN** the system creates or updates a report generation failure risk warning
+- **THEN** the system records the failure in generation history without creating a project risk warning
 
 #### Scenario: Warn on unavailable GitHub source
 - **WHEN** a project has an associated GitHub repository and local `gh` is missing, unauthenticated, or unable to access the repository during the current period

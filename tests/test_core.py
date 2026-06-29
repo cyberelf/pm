@@ -349,17 +349,17 @@ class CoreTest(unittest.TestCase):
         )
         self.assertTrue(changed_since_last_success(self.conn, self.project_id, current_week_key("Asia/Shanghai")))
 
-    def test_generation_failed_risk_uses_latest_job_only(self):
+    def test_generation_failure_is_not_project_risk(self):
         week_key = current_week_key("Asia/Shanghai")
+        save_weekly_update(self.conn, self.project_id, {"completed": "project work happened"})
         self.conn.execute(
             """
             INSERT INTO generation_jobs
             (project_id, week_key, trigger_type, provider, status, failure_reason, started_at, completed_at)
-            VALUES (?, ?, 'manual', 'codex', 'failed', 'old failure', '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:01+00:00')
+            VALUES (?, ?, 'manual', 'codex', 'failed', 'provider failed', '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:01+00:00')
             """,
             (self.project_id, week_key),
         )
-        generate_report(self.conn, self.project_id, "manual", force=True)
         evaluate_risks(self.conn, self.project_id)
         active = self.conn.execute(
             """
@@ -369,6 +369,7 @@ class CoreTest(unittest.TestCase):
             (self.project_id, week_key),
         ).fetchone()["n"]
         self.assertEqual(active, 0)
+        self.assertEqual(progress_status(self.conn, self.project_id), "on track")
 
     def test_evaluate_schedules_respects_configured_time(self):
         with mock.patch("reports_app.server.schedule_due", return_value=True):

@@ -464,7 +464,7 @@ Generated for {context['week_key']} from local workspace context.
 {(context.get('weekly_update') or {}).get('blockers', '') or 'No blockers recorded.'}
 
 ## Risk Forecast
-Review overdue milestones, blocked planned outcomes, source availability, and generation failures.
+Review overdue milestones, blocked planned outcomes, source availability, missing project inputs, and stale project evidence.
 
 ## Next Week Plan
 {(context.get('weekly_update') or {}).get('next_steps', '') or 'No next steps recorded.'}

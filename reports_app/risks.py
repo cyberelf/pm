@@ -69,25 +69,6 @@ def evaluate_risks(conn, project_id):
     ):
         upsert_warning(conn, project_id, week_key, "blocked_outcome", "high", "Weekly outcome is blocked", row["title"], str(row["id"]))
 
-    latest_job = conn.execute(
-        """
-        SELECT id, status, failure_reason FROM generation_jobs
-        WHERE project_id = ? AND week_key = ?
-        ORDER BY started_at DESC, id DESC LIMIT 1
-        """,
-        (project_id, week_key),
-    ).fetchone()
-    if latest_job and latest_job["status"] == "failed":
-        upsert_warning(
-            conn,
-            project_id,
-            week_key,
-            "generation_failed",
-            "high",
-            "Report generation failed",
-            latest_job["failure_reason"],
-            str(latest_job["id"]),
-        )
     for row in conn.execute(
         "SELECT id, repo, status_message FROM github_repos WHERE project_id = ? AND status IN ('disconnected', 'unauthenticated', 'inaccessible')",
         (project_id,),
