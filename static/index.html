@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Weekly Reports Workspace</title>
+    <link rel="stylesheet" href="/styles.css?v=3" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">WR</div>
+          <div>
+            <strong>周报工作台</strong>
+            <span>Local workspace</span>
+          </div>
+        </div>
+        <button id="new-project" class="primary full">+ 新建项目</button>
+        <div id="project-list" class="project-list"></div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="project-title">周报工作台</h1>
+            <p id="project-meta">中国标准时间 · 本地个人项目管理</p>
+          </div>
+          <div class="actions">
+            <button id="schedule-check">检查计划</button>
+            <button id="generate-report" class="primary generate-action">生成周报</button>
+          </div>
+        </header>
+
+        <nav class="tabs" aria-label="Workspace views">
+          <button data-tab="overview" class="active">总览</button>
+          <button data-tab="settings">设置</button>
+          <button data-tab="plan">计划</button>
+          <button data-tab="updates">本周进展</button>
+          <button data-tab="sources">资料源</button>
+          <button data-tab="report">周报</button>
+          <button data-tab="risks">风险</button>
+        </nav>
+
+        <section id="empty-state" class="empty">
+          <h2>创建项目</h2>
+          <p>从项目设置开始，然后添加计划、资料源、本周进展和自动周报。</p>
+        </section>
+
+        <section id="workspace" class="workspace hidden">
+          <div id="tab-overview" class="tab-panel"></div>
+          <div id="tab-settings" class="tab-panel hidden"></div>
+          <div id="tab-plan" class="tab-panel hidden"></div>
+          <div id="tab-updates" class="tab-panel hidden"></div>
+          <div id="tab-sources" class="tab-panel hidden"></div>
+          <div id="tab-report" class="tab-panel hidden"></div>
+          <div id="tab-risks" class="tab-panel hidden"></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="project-dialog">
+      <form method="dialog" id="project-form" class="modal-form">
+        <h2>新建项目</h2>
+        <label>项目名称 <input name="name" required /></label>
+        <label>描述 <textarea name="description"></textarea></label>
+        <label>开始日期 <input name="start_date" type="date" required /></label>
+        <label>Timezone
+          <select name="timezone">
+            <option value="Asia/Shanghai">中国标准时间 (Asia/Shanghai)</option>
+          </select>
+        </label>
+        <label>生成器
+          <select name="report_provider">
+            <option value="codex">Codex CLI</option>
+            <option value="claude">Claude Code CLI</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button value="cancel">取消</button>
+          <button class="primary" value="default">创建</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="true">
+      <div class="loading-box">
+        <div class="spinner"></div>
+        <strong id="loading-title">Working</strong>
+        <span id="loading-detail">Please wait...</span>
+      </div>
+    </div>
+    <script src="/app.js?v=3"></script>
+  </body>
+</html>

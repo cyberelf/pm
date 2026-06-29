@@ -1,0 +1,142 @@
+from .timeutil import current_week_key, iso_now
+
+
+def upsert_warning(conn, project_id, week_key, rule, severity, title, details="", source_ref=""):
+    now = iso_now()
+    conn.execute(
+        """
+        INSERT INTO risk_warnings
+        (project_id, week_key, rule, severity, title, details, status, source_ref, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        ON CONFLICT(project_id, week_key, rule, source_ref)
+        DO UPDATE SET severity = excluded.severity, title = excluded.title, details = excluded.details,
+                      status = 'active', updated_at = excluded.updated_at
+        """,
+        (project_id, week_key, rule, severity, title, details, source_ref, now, now),
+    )
+
+
+def evaluate_risks(conn, project_id):
+    project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    week_key = current_week_key(project["timezone"])
+    conn.execute(
+        """
+        UPDATE risk_warnings
+        SET status = 'resolved', updated_at = ?
+        WHERE project_id = ? AND week_key = ? AND status = 'active'
+          AND rule IN (
+            'missing_update',
+            'overdue_milestone',
+            'blocked_outcome',
+            'generation_failed',
+            'github_unavailable',
+            'material_extraction_failed'
+          )
+        """,
+        (iso_now(), project_id, week_key),
+    )
+    update = conn.execute(
+        "SELECT * FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)
+    ).fetchone()
+    materials_changed = conn.execute("SELECT COUNT(*) AS n FROM materials WHERE project_id = ?", (project_id,)).fetchone()["n"]
+    repos_active = conn.execute(
+        "SELECT COUNT(*) AS n FROM github_repos WHERE project_id = ? AND status = 'connected'", (project_id,)
+    ).fetchone()["n"]
+    if not update and materials_changed == 0 and repos_active == 0:
+        upsert_warning(conn, project_id, week_key, "missing_update", "medium", "No current-period update or source activity")
+
+    plan = conn.execute("SELECT milestones_json FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
+    if plan:
+        import json
+        from datetime import date
+
+        today = date.today().isoformat()
+        for item in json.loads(plan["milestones_json"] or "[]"):
+            if item.get("target_date") and item.get("target_date") < today and item.get("status") != "complete":
+                upsert_warning(
+                    conn,
+                    project_id,
+                    week_key,
+                    "overdue_milestone",
+                    "high",
+                    "Milestone is overdue",
+                    item.get("title", ""),
+                    item.get("title", ""),
+                )
+    for row in conn.execute(
+        "SELECT id, title FROM weekly_outcomes WHERE project_id = ? AND week_key = ? AND status = 'blocked'",
+        (project_id, week_key),
+    ):
+        upsert_warning(conn, project_id, week_key, "blocked_outcome", "high", "Weekly outcome is blocked", row["title"], str(row["id"]))
+
+    latest_job = conn.execute(
+        """
+        SELECT id, status, failure_reason FROM generation_jobs
+        WHERE project_id = ? AND week_key = ?
+        ORDER BY started_at DESC, id DESC LIMIT 1
+        """,
+        (project_id, week_key),
+    ).fetchone()
+    if latest_job and latest_job["status"] == "failed":
+        upsert_warning(
+            conn,
+            project_id,
+            week_key,
+            "generation_failed",
+            "high",
+            "Report generation failed",
+            latest_job["failure_reason"],
+            str(latest_job["id"]),
+        )
+    for row in conn.execute(
+        "SELECT id, repo, status_message FROM github_repos WHERE project_id = ? AND status IN ('disconnected', 'unauthenticated', 'inaccessible')",
+        (project_id,),
+    ):
+        upsert_warning(
+            conn,
+            project_id,
+            week_key,
+            "github_unavailable",
+            "medium",
+            "GitHub source unavailable",
+            f"{row['repo']}: {row['status_message']}",
+            str(row["id"]),
+        )
+    for row in conn.execute(
+        "SELECT id, filename, extraction_error FROM materials WHERE project_id = ? AND extraction_status = 'failed'",
+        (project_id,),
+    ):
+        upsert_warning(
+            conn,
+            project_id,
+            week_key,
+            "material_extraction_failed",
+            "low",
+            "Material text extraction failed",
+            f"{row['filename']}: {row['extraction_error']}",
+            str(row["id"]),
+        )
+
+
+def progress_status(conn, project_id):
+    project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
+    week_key = current_week_key(project["timezone"])
+    active = conn.execute(
+        "SELECT severity FROM risk_warnings WHERE project_id = ? AND week_key = ? AND status = 'active'",
+        (project_id, week_key),
+    ).fetchall()
+    if any(row["severity"] == "high" for row in active):
+        return "blocked"
+    if active:
+        return "at risk"
+    done = conn.execute(
+        "SELECT COUNT(*) AS n FROM weekly_outcomes WHERE project_id = ? AND week_key = ? AND status = 'complete'",
+        (project_id, week_key),
+    ).fetchone()["n"]
+    total = conn.execute(
+        "SELECT COUNT(*) AS n FROM weekly_outcomes WHERE project_id = ? AND week_key = ?",
+        (project_id, week_key),
+    ).fetchone()["n"]
+    if total and done == total:
+        return "complete"
+    return "on track"
