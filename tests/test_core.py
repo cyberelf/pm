@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from reports_app.db import create_project, init_db, connect
 from reports_app.markdown import render_markdown
 from reports_app.materials import store_manual_material, store_material, update_manual_material
+from reports_app.pdf_export import build_report_print_html, pdf_filename
 from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, provider_command, transient_provider_error
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
@@ -395,6 +396,18 @@ class CoreTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
         self.assertNotIn("<script>", html)
         self.assertIn("<strong>ok</strong>", html)
+
+    def test_pdf_export_html_and_filename(self):
+        html = build_report_print_html(
+            {"name": "项目 A"},
+            {"week_key": "2026-W27", "content_md": "# 周报\n\n<script>alert(1)</script>\n\n- 完成"},
+        )
+        self.assertIn("项目 A", html)
+        self.assertIn("2026-W27", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn("<script>alert", html)
+        self.assertIn("window.print()", html)
+        self.assertEqual(pdf_filename("项目 A", "2026-W27"), "A-2026-W27-weekly-report.pdf")
 
     def test_risk_rules_and_no_report_promotion_model(self):
         save_plan(

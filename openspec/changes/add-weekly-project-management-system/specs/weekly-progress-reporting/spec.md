@@ -97,3 +97,7 @@ The system SHALL store weekly reports in Markdown format by default and render t
 #### Scenario: Sanitize Markdown rendering
 - **WHEN** a report contains raw HTML or unsafe content
 - **THEN** the system renders the report without executing unsafe content
+
+#### Scenario: Export weekly report as PDF
+- **WHEN** a user chooses to export a current or historical weekly report as PDF
+- **THEN** the system opens a print-optimized report view that can be saved as a PDF by the browser

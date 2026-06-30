@@ -61,6 +61,7 @@
 - [x] 7.4 Display generation status, last generated time, and failed regeneration diagnostics in the report UI
 - [x] 7.5 Display a generation history panel with trigger type, run timestamp, provider, status, failure reason, and input snapshot identity or covered time range
 - [x] 7.6 Add a manual generate/regenerate action for the current project-week report
+- [x] 7.7 Add PDF export through a print-optimized weekly report view for current and historical reports
 
 ## 8. Progress and Risk Tracking
 
@@ -80,6 +81,6 @@
 - [x] 9.3 Add tests for current-week report overwrite, generation history visibility, hidden old report bodies by default, and preservation on failed regeneration
 - [x] 9.4 Add tests for CLI provider timeout, missing output file, temporary file handoff, and failure states
 - [x] 9.5 Add tests for Markdown sanitization
-- [x] 9.6 Add tests for progress status, deterministic risk warning rules, source/generation diagnostic separation, no promotion action for generated report risk forecasts, and separation of generated report risk forecasts from system warnings
+- [x] 9.6 Add tests for PDF export HTML sanitization, progress status, deterministic risk warning rules, source/generation diagnostic separation, no promotion action for generated report risk forecasts, and separation of generated report risk forecasts from system warnings
 - [x] 9.7 Run OpenSpec validation and the project test suite before marking the change complete
 - [x] 9.8 Verify local runtime setup documentation covers required CLIs, local workspace storage, and the remote deployment non-goal

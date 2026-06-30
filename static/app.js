@@ -368,7 +368,7 @@ function renderReport(ws) {
   const history = (ws.report_history || []).filter((report) => !report.is_current_week);
   $("tab-report").innerHTML = `
     <div class="panel">
-      <div class="panel-head"><h2>当前周报</h2><span>Latest successful Markdown</span><button class="primary generate-action" onclick="generateReport()">Regenerate</button></div>
+      <div class="panel-head"><h2>当前周报</h2><span>Latest successful Markdown</span><button class="primary generate-action" onclick="generateReport()">Regenerate</button>${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
       ${jobNotice}
       ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>No report generated yet.</p>"}
     </div>
@@ -388,10 +388,14 @@ function renderReport(ws) {
 function renderHistoryReport(report) {
   return `
     <details class="history-report">
-      <summary><strong>${escapeHtml(report.week_key)}</strong><span>${escapeHtml(formatChinaTime(report.updated_at))}</span><span class="status">read-only</span></summary>
+      <summary><strong>${escapeHtml(report.week_key)}</strong><span>${escapeHtml(formatChinaTime(report.updated_at))}</span><span class="status">read-only</span><button onclick="event.preventDefault(); exportReportPdf('${escapeAttr(report.week_key)}')">导出 PDF</button></summary>
       <article class="report">${report.content_html}</article>
     </details>
   `;
+}
+
+function exportReportPdf(weekKey) {
+  window.open(`/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}/print`, "_blank", "noopener");
 }
 
 function renderRisks(ws) {
