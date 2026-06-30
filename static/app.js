@@ -368,7 +368,10 @@ function renderReport(ws) {
   const history = (ws.report_history || []).filter((report) => !report.is_current_week);
   $("tab-report").innerHTML = `
     <div class="panel">
-      <div class="panel-head"><h2>当前周报</h2><span>Latest successful Markdown</span><button class="primary generate-action" onclick="generateReport()">Regenerate</button>${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
+      <div class="panel-head">
+        <div class="panel-title"><h2>当前周报</h2><span>Latest successful Markdown</span></div>
+        <div class="panel-actions"><button class="primary generate-action" onclick="generateReport()">Regenerate</button>${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
+      </div>
       ${jobNotice}
       ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>No report generated yet.</p>"}
     </div>

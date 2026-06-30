@@ -223,11 +223,25 @@ p { color: var(--ink-muted); line-height: 1.5; }
   border-bottom: 1px solid var(--hairline);
   padding-bottom: 10px;
 }
+.panel-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .panel-head span {
   color: var(--ink-tertiary);
   font-size: 12px;
 }
-.panel-head button { margin-left: auto; }
+.panel-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .form-grid .wide { grid-column: 1 / -1; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
