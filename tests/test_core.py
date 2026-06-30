@@ -396,6 +396,11 @@ class CoreTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
         self.assertNotIn("<script>", html)
         self.assertIn("<strong>ok</strong>", html)
+        nested = render_markdown("- parent\n  - child\n\n---\n\n> quote\n\n| A | B |\n| - | - |\n| 1 | 2 |")
+        self.assertIn("<ul>", nested)
+        self.assertIn("<hr", nested)
+        self.assertIn("<blockquote>", nested)
+        self.assertIn("<table>", nested)
 
     def test_pdf_export_html_and_filename(self):
         html = build_report_pdf_html(

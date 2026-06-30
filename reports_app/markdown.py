@@ -1,13 +1,49 @@
 import html
 import re
 
+try:
+    from markdown_it import MarkdownIt
+except ImportError:
+    MarkdownIt = None
+
+try:
+    import markdown as markdown_lib
+except ImportError:
+    markdown_lib = None
+
+MARKDOWN_EXTENSIONS = ["extra", "sane_lists", "nl2br"]
+MARKDOWN_IT = (
+    MarkdownIt("gfm-like", {"html": False, "linkify": True}).enable("table")
+    if MarkdownIt
+    else None
+)
+
 
 def render_markdown(md: str) -> str:
-    """Small sanitized Markdown renderer for the local MVP.
+    """Render Markdown while escaping raw HTML before conversion.
 
-    Raw HTML is escaped before Markdown expansion, so generated reports cannot
-    execute scripts through the report view.
+    The preferred path uses markdown-it-py for tables, nested lists,
+    blockquotes, fenced code, and horizontal rules. Raw HTML is escaped before
+    Markdown expansion, so generated reports cannot execute scripts.
     """
+    safe_md = md or ""
+    if MARKDOWN_IT:
+        return MARKDOWN_IT.render(safe_md)
+    safe_md = escape_raw_html(safe_md)
+    if markdown_lib:
+        return markdown_lib.markdown(
+            safe_md,
+            extensions=MARKDOWN_EXTENSIONS,
+            output_format="html5",
+        )
+    return fallback_render_markdown(safe_md)
+
+
+def escape_raw_html(md: str) -> str:
+    return re.sub(r"</?[A-Za-z][^>\n]*>", lambda match: html.escape(match.group(0)), md)
+
+
+def fallback_render_markdown(md: str) -> str:
     escaped_lines = [html.escape(line.rstrip()) for line in (md or "").splitlines()]
     out = []
     in_ul = False
@@ -64,4 +100,3 @@ def inline(value: str) -> str:
     value = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", value)
     value = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", value)
     return value
-

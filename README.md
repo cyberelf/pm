@@ -4,6 +4,12 @@ Local personal project management workspace for weekly plans, updates, source ma
 
 ## Run
 
+Install Python dependencies:
+
+```bash
+python3 -m pip install --user -r requirements.txt
+```
+
 ```bash
 python3 run.py
 ```
@@ -34,6 +40,7 @@ The first release is local-only: the backend must run on the same machine as the
 - Report generation supports `codex` and `claude`.
 - Codex default command uses `codex exec`.
 - Claude default command uses `claude --print`.
+- Markdown report rendering uses `markdown-it-py` with a Python-Markdown fallback.
 - Report agents retrieve project information through the read-only platform CLI `scripts/report_context.py`; they are instructed not to read SQLite, uploaded files, application files, GitHub, or `gh` directly.
 - Set `REPORTS_CODEX_CMD` or `REPORTS_CLAUDE_CMD` to override provider commands.
 - Set `REPORTS_FAKE_PROVIDER=1` only for local tests or dry runs that generate a deterministic report without calling an agent CLI. Normal service startup uses real provider execution.

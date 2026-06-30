@@ -23,6 +23,7 @@ CHROME_CANDIDATES = (
     "microsoft-edge",
 )
 PDF_CACHE_DIR = DATA_DIR / "pdf_cache"
+PDF_RENDER_VERSION = "markdown-it-v1"
 
 
 def find_chrome():
@@ -52,7 +53,7 @@ def report_pdf_bytes(project_id, project, report):
 
 def cached_pdf_path(project_id, report):
     PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    identity = f"{project_id}:{report['id']}:{report['week_key']}:{report['updated_at']}:{report['latest_job_id']}"
+    identity = f"{PDF_RENDER_VERSION}:{project_id}:{report['id']}:{report['week_key']}:{report['updated_at']}:{report['latest_job_id']}"
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
     safe_week = re.sub(r"[^A-Za-z0-9._-]+", "-", report["week_key"]).strip("-") or "week"
     return PDF_CACHE_DIR / f"project-{project_id}-{safe_week}-{digest}.pdf"
@@ -183,8 +184,38 @@ def build_report_pdf_html(project, report):
       h2 {{ font-size: 16pt; margin: 22px 0 8px; }}
       h3 {{ font-size: 13.5pt; margin: 18px 0 6px; }}
       p {{ margin: 8px 0; }}
+      hr {{
+        border: 0;
+        border-top: 1px solid #d8dee6;
+        margin: 18px 0;
+      }}
       ul {{ margin: 8px 0 8px 20px; padding: 0; }}
+      ol {{ margin: 8px 0 8px 22px; padding: 0; }}
       li {{ margin: 4px 0; }}
+      li > ul, li > ol {{ margin-top: 4px; margin-bottom: 4px; }}
+      blockquote {{
+        margin: 12px 0;
+        padding: 6px 12px;
+        border-left: 4px solid #8aa2b5;
+        background: #f6f8fa;
+        color: #4b5563;
+      }}
+      table {{
+        width: 100%;
+        border-collapse: collapse;
+        margin: 14px 0;
+        font-size: 10.8pt;
+      }}
+      th, td {{
+        border: 1px solid #d8dee6;
+        padding: 6px 8px;
+        text-align: left;
+        vertical-align: top;
+      }}
+      th {{
+        background: #eef2f6;
+        font-weight: 650;
+      }}
       code {{
         font-family: Menlo, Consolas, monospace;
         font-size: 10.5pt;

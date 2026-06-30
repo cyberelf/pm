@@ -1,0 +1,2 @@
+Markdown>=3.7,<4
+markdown-it-py[linkify]>=3,<4
