@@ -398,7 +398,7 @@ function renderHistoryReport(report) {
 }
 
 function exportReportPdf(weekKey) {
-  window.open(`/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}/print`, "_blank", "noopener");
+  window.location.href = `/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}/pdf`;
 }
 
 function renderRisks(ws) {

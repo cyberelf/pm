@@ -1,10 +1,142 @@
+import hashlib
 import html
+import os
 import re
+import shutil
+import signal
+import subprocess
+import tempfile
+import time
+from pathlib import Path
 
+from .config import DATA_DIR
 from .markdown import render_markdown
 
 
-def build_report_print_html(project, report):
+CHROME_CANDIDATES = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "google-chrome",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
+)
+PDF_CACHE_DIR = DATA_DIR / "pdf_cache"
+
+
+def find_chrome():
+    for candidate in CHROME_CANDIDATES:
+        path = Path(candidate)
+        if path.exists():
+            return str(path)
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def report_pdf_bytes(project_id, project, report):
+    path = cached_pdf_path(project_id, report)
+    if path.exists() and path.stat().st_size > 0:
+        return path.read_bytes()
+    chrome = find_chrome()
+    if not chrome:
+        raise RuntimeError("Chrome or Chromium is required for server-side PDF export")
+    html_text = build_report_pdf_html(project, report)
+    pdf = render_pdf_with_chrome(chrome, html_text)
+    PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pdf)
+    return pdf
+
+
+def cached_pdf_path(project_id, report):
+    PDF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    identity = f"{project_id}:{report['id']}:{report['week_key']}:{report['updated_at']}:{report['latest_job_id']}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    safe_week = re.sub(r"[^A-Za-z0-9._-]+", "-", report["week_key"]).strip("-") or "week"
+    return PDF_CACHE_DIR / f"project-{project_id}-{safe_week}-{digest}.pdf"
+
+
+def render_pdf_with_chrome(chrome, html_text, timeout=30):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        html_path = tmp_path / "report.html"
+        pdf_path = tmp_path / "report.pdf"
+        profile_path = tmp_path / "chrome-profile"
+        html_path.write_text(html_text, encoding="utf-8")
+        command = [
+            chrome,
+            "--headless=new",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--disable-component-update",
+            "--disable-dev-shm-usage",
+            "--remote-debugging-port=0",
+            f"--user-data-dir={profile_path}",
+            f"--print-to-pdf={pdf_path}",
+            f"file://{html_path}",
+        ]
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            wait_for_pdf(pdf_path, process, timeout)
+            return pdf_path.read_bytes()
+        finally:
+            stop_process_group(process)
+
+
+def wait_for_pdf(pdf_path, process, timeout):
+    deadline = time.monotonic() + timeout
+    last_size = -1
+    stable_since = None
+    while time.monotonic() < deadline:
+        if pdf_path.exists():
+            size = pdf_path.stat().st_size
+            if size > 0 and size == last_size:
+                stable_since = stable_since or time.monotonic()
+                if time.monotonic() - stable_since >= 0.6:
+                    return
+            elif size > 0:
+                last_size = size
+                stable_since = time.monotonic()
+        if process.poll() is not None:
+            break
+        time.sleep(0.2)
+    if pdf_path.exists() and pdf_path.stat().st_size > 0:
+        return
+    stdout, stderr = process.communicate(timeout=1)
+    detail = (stderr or stdout or "unknown PDF export failure").strip()
+    raise RuntimeError(detail)
+
+
+def stop_process_group(process):
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+
+
+def build_report_pdf_html(project, report):
     title = f"{project['name']} {report['week_key']} 周报"
     rendered = render_markdown(report["content_md"])
     return f"""<!doctype html>
@@ -71,41 +203,14 @@ def build_report_print_html(project, report):
       .report {{
         max-width: 100%;
       }}
-      .print-actions {{
-        position: sticky;
-        top: 0;
-        margin: -8px -8px 18px;
-        padding: 10px 8px;
-        background: #ffffff;
-        border-bottom: 1px solid #d8dee6;
-      }}
-      .print-actions button {{
-        border: 1px solid #b8c2cc;
-        border-radius: 6px;
-        background: #1f2933;
-        color: #ffffff;
-        padding: 8px 12px;
-        cursor: pointer;
-      }}
-      @media print {{
-        .print-actions {{
-          display: none;
-        }}
-      }}
     </style>
   </head>
   <body>
-    <div class="print-actions">
-      <button onclick="window.print()">导出 PDF</button>
-    </div>
     <header>
       <h1>{html.escape(project["name"])}</h1>
       <p>{html.escape(report["week_key"])} · Weekly Report</p>
     </header>
     <main class="report">{rendered}</main>
-    <script>
-      window.addEventListener("load", () => setTimeout(() => window.print(), 250));
-    </script>
   </body>
 </html>
 """

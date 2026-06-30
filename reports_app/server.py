@@ -14,7 +14,7 @@ from .db import connect, create_project, init_db, row_to_dict
 from .github import check_repo, refresh_repo
 from .markdown import render_markdown
 from .materials import material_is_editable, store_manual_material, store_material, update_manual_material
-from .pdf_export import build_report_print_html
+from .pdf_export import pdf_filename, report_pdf_bytes
 from .reports import changed_since_last_success, generate_report
 from .risks import evaluate_risks, progress_status
 from .timeutil import current_week_key, iso_now
@@ -138,8 +138,8 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 4 and parts[3] == "workspace" and method == "GET":
                     self.json(workspace(conn, project_id))
                     return
-                if len(parts) == 6 and parts[3] == "reports" and parts[5] == "print" and method == "GET":
-                    self.report_print(conn, project_id, parts[4])
+                if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
+                    self.report_pdf(conn, project_id, parts[4])
                     return
                 if len(parts) == 4 and parts[3] == "settings" and method == "PUT":
                     update_settings(conn, project_id, self.body_json())
@@ -261,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def report_print(self, conn, project_id, week_key):
+    def report_pdf(self, conn, project_id, week_key):
         project = dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
         report = conn.execute(
             """
@@ -274,8 +274,9 @@ class Handler(BaseHTTPRequestHandler):
         if not report:
             self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
             return
-        html = build_report_print_html(project, dict(report)).encode("utf-8")
-        self.bytes_response(html, "text/html; charset=utf-8")
+        report_dict = dict(report)
+        pdf = report_pdf_bytes(project_id, project, report_dict)
+        self.bytes_response(pdf, "application/pdf", pdf_filename(project["name"], week_key))
 
     def error(self, status, message):
         self.json({"error": message}, status)

@@ -100,4 +100,4 @@ The system SHALL store weekly reports in Markdown format by default and render t
 
 #### Scenario: Export weekly report as PDF
 - **WHEN** a user chooses to export a current or historical weekly report as PDF
-- **THEN** the system opens a print-optimized report view that can be saved as a PDF by the browser
+- **THEN** the system generates or reuses a cached PDF for that report and returns it as a downloadable file

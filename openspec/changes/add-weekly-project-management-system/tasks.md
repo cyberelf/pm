@@ -61,7 +61,7 @@
 - [x] 7.4 Display generation status, last generated time, and failed regeneration diagnostics in the report UI
 - [x] 7.5 Display a generation history panel with trigger type, run timestamp, provider, status, failure reason, and input snapshot identity or covered time range
 - [x] 7.6 Add a manual generate/regenerate action for the current project-week report
-- [x] 7.7 Add PDF export through a print-optimized weekly report view for current and historical reports
+- [x] 7.7 Add server-side cached PDF export for current and historical weekly reports
 
 ## 8. Progress and Risk Tracking
 
