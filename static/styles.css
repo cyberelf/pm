@@ -195,6 +195,8 @@ p { color: var(--ink-muted); line-height: 1.5; }
 }
 .empty p { margin-top: 8px; color: var(--ink-subtle); }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr); gap: 14px; }
+.sources-grid { align-items: start; }
+.sources-grid > .panel { align-self: start; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .status-strip {
   display: grid;

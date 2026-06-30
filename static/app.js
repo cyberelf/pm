@@ -279,7 +279,7 @@ function renderUpdates(ws) {
 
 function renderSources(ws) {
   $("tab-sources").innerHTML = `
-    <div class="grid-2">
+    <div class="grid-2 sources-grid">
       <div class="panel">
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
         <input id="material-file" type="file" accept=".md,.markdown,.txt,.pdf">
