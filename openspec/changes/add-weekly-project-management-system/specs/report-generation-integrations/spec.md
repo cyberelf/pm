@@ -30,7 +30,11 @@ The system SHALL assemble a report context snapshot before invoking a report pro
 
 #### Scenario: Build report context
 - **WHEN** a report generation job starts
-- **THEN** the system includes project metadata, current plan baseline, weekly planned outcomes, manual weekly updates, current-week newly uploaded or manually entered material summaries, current-week Git commits for connected repositories, GitHub activity summaries, prior current-week report content if any, the project system prompt, and the effective report template in the context snapshot
+- **THEN** the system includes project metadata, current plan baseline, weekly planned outcomes, manual weekly updates, current-week newly uploaded or manually entered material summaries, current-week Git commits for the selected tracked branches of connected repositories, GitHub activity summaries, prior current-week report content if any, the project system prompt, and the effective report template in the context snapshot
+
+#### Scenario: Build report context for all tracked branches
+- **WHEN** a connected repository is configured with the All branch option and report generation starts
+- **THEN** the system resolves the current remote branch list and includes current-week commits reachable from every available remote branch
 
 #### Scenario: Include material extraction status
 - **WHEN** a report generation job starts and a project material has not produced extractable text

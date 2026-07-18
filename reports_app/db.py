@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS github_repos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     repo TEXT NOT NULL,
+    tracked_branches_json TEXT NOT NULL DEFAULT '["main"]',
     status TEXT NOT NULL,
     status_message TEXT NOT NULL DEFAULT '',
     last_checked_at TEXT,
@@ -174,6 +175,8 @@ def migrate_schema(conn):
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(github_repos)")}
     if "notes" not in columns:
         conn.execute("ALTER TABLE github_repos ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+    if "tracked_branches_json" not in columns:
+        conn.execute("ALTER TABLE github_repos ADD COLUMN tracked_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'")
     conn.execute(
         """
         DELETE FROM github_repos

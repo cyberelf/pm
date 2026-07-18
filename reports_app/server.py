@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import DB_PATH, STATIC_DIR, WORKSPACE_USER
 from .db import connect, create_project, init_db, row_to_dict
-from .github import check_repo, refresh_repo
+from .github import check_repo, list_branches, refresh_repo
 from .markdown import render_markdown
 from .materials import material_is_editable, store_manual_material, store_material, update_manual_material
 from .pdf_export import pdf_filename, report_pdf_bytes
@@ -23,6 +23,7 @@ from .validation import (
     ValidationError,
     require_project_name,
     validate_provider,
+    validate_branches,
     validate_repo,
     validate_schedule_item,
     validate_timezone,
@@ -174,6 +175,9 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     self.json(workspace(conn, project_id))
                     return
+                if len(parts) == 6 and parts[3] == "repos" and parts[5] == "branches" and method == "GET":
+                    self.json(repo_branches(conn, project_id, int(parts[4])))
+                    return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "refresh" and method == "POST":
                     refresh_repo(conn, int(parts[4]))
                     evaluate_risks(conn, project_id)
@@ -312,7 +316,7 @@ def workspace(conn, project_id):
         "week_key": week_key,
         "schedules": [dict(row) for row in conn.execute("SELECT * FROM update_schedules WHERE project_id = ? ORDER BY weekday, local_time", (project_id,))],
         "materials": material_rows(conn, project_id, project["timezone"]),
-        "repos": [dict(row) for row in conn.execute("SELECT * FROM github_repos WHERE project_id = ? ORDER BY id", (project_id,))],
+        "repos": repo_rows(conn, project_id),
         "plan": plan_dict(conn, project_id),
         "outcomes": [dict(row) for row in conn.execute("SELECT * FROM weekly_outcomes WHERE project_id = ? AND week_key = ? ORDER BY id", (project_id, week_key))],
         "weekly_update": row_to_dict(conn.execute("SELECT * FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)).fetchone()),
@@ -463,28 +467,37 @@ def update_settings(conn, project_id, payload):
 def add_repo(conn, project_id, payload):
     repo = validate_repo(payload.get("repo"))
     notes = payload.get("notes") or ""
+    requested_branches = validate_branches(payload.get("branches") or [])
     existing = conn.execute(
         "SELECT id FROM github_repos WHERE project_id = ? AND repo = ?",
         (project_id, repo),
     ).fetchone()
     if existing:
+        updates = ["notes = ?", "updated_at = ?"]
+        values = [notes, iso_now()]
+        if requested_branches:
+            updates.insert(1, "tracked_branches_json = ?")
+            values.insert(1, json.dumps(requested_branches))
+        values.append(existing["id"])
         conn.execute(
-            "UPDATE github_repos SET notes = ?, updated_at = ? WHERE id = ?",
-            (notes, iso_now(), existing["id"]),
+            f"UPDATE github_repos SET {', '.join(updates)} WHERE id = ?",
+            values,
         )
         return existing["id"]
     result = check_repo(repo)
+    branches = requested_branches or [result.get("default_branch") or "main"]
     now = iso_now()
     cur = conn.execute(
         """
         INSERT INTO github_repos
-        (project_id, repo, notes, status, status_message, last_checked_at, last_activity_at, activity_summary, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (project_id, repo, notes, tracked_branches_json, status, status_message, last_checked_at, last_activity_at, activity_summary, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
             repo,
             notes,
+            json.dumps(branches),
             result["status"],
             result["status_message"],
             now,
@@ -499,10 +512,36 @@ def add_repo(conn, project_id, payload):
 
 def update_repo_notes(conn, project_id, repo_id, payload):
     now = iso_now()
+    branches = validate_branches(payload.get("branches") or [])
+    if not branches:
+        row = conn.execute(
+            "SELECT tracked_branches_json FROM github_repos WHERE id = ? AND project_id = ?",
+            (repo_id, project_id),
+        ).fetchone()
+        branches = json.loads(row["tracked_branches_json"] or '["main"]') if row else ["main"]
     conn.execute(
-        "UPDATE github_repos SET notes = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-        (payload.get("notes") or "", now, repo_id, project_id),
+        "UPDATE github_repos SET notes = ?, tracked_branches_json = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+        (payload.get("notes") or "", json.dumps(branches), now, repo_id, project_id),
     )
+
+
+def repo_rows(conn, project_id):
+    rows = []
+    for row in conn.execute("SELECT * FROM github_repos WHERE project_id = ? ORDER BY id", (project_id,)):
+        item = dict(row)
+        item["tracked_branches"] = json.loads(item.pop("tracked_branches_json") or '["main"]')
+        rows.append(item)
+    return rows
+
+
+def repo_branches(conn, project_id, repo_id):
+    row = conn.execute(
+        "SELECT repo FROM github_repos WHERE id = ? AND project_id = ?",
+        (repo_id, project_id),
+    ).fetchone()
+    if not row:
+        raise ValidationError("repository not found")
+    return list_branches(row["repo"])
 
 
 def save_plan(conn, project_id, payload):

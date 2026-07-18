@@ -1,8 +1,10 @@
 const CHINA_TIMEZONE = "Asia/Shanghai";
+const TRACK_ALL_BRANCHES = "*";
 const state = {
   projects: [],
   projectId: Number(localStorage.getItem("currentProjectId")) || null,
   workspace: null,
+  branchOptions: {},
   tab: "overview",
   busy: false,
 };
@@ -150,10 +152,60 @@ function renderSettings(ws) {
     <div class="panel">
       <div class="panel-head"><h2>GitHub</h2><span>本周 commits 会进入生成上下文</span></div>
       <div class="row"><input id="repo-input" placeholder="owner/repo"><input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界"><button type="button" onclick="addRepo()">Add Repo</button></div>
-      <table class="table"><thead><tr><th>Repo</th><th>补充说明</th><th>Status</th><th>Action</th></tr></thead><tbody>${ws.repos.map(r => `<tr><td>${escapeHtml(r.repo)}</td><td><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td><td><span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}</td><td><button type="button" onclick="saveRepoNotes(${r.id})">Save Note</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button></td></tr>`).join("") || "<tr><td colspan='4'>No repositories.</td></tr>"}</tbody></table>
+      <table class="table"><thead><tr><th>Repo</th><th>跟踪分支</th><th>补充说明</th><th>Status</th><th>Action</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>No repositories.</td></tr>"}</tbody></table>
     </div>
   `;
   $("settings-form").onsubmit = saveSettings;
+}
+
+function renderRepoRow(r) {
+  return `
+    <tr>
+      <td>${escapeHtml(r.repo)}</td>
+      <td>${renderBranchPicker(r)}</td>
+      <td><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
+      <td><span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}</td>
+      <td><button type="button" onclick="saveRepoNotes(${r.id})">Save</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button></td>
+    </tr>
+  `;
+}
+
+function renderBranchPicker(repo) {
+  const selected = repo.tracked_branches && repo.tracked_branches.length ? repo.tracked_branches : ["main"];
+  const options = branchOptionsFor(repo);
+  const summary = selected.includes(TRACK_ALL_BRANCHES) ? "All" : selected.join(", ");
+  return `
+    <details class="branch-picker" id="branch-picker-${repo.id}">
+      <summary>${escapeHtml(summary)}</summary>
+      <div class="branch-menu">
+        <div class="branch-actions"><button type="button" onclick="loadRepoBranches(${repo.id})">Load Branches</button></div>
+        <div class="branch-options">
+          ${options.map(branch => `
+            <label class="branch-option">
+              <input type="checkbox" value="${escapeAttr(branch)}" ${selected.includes(branch) ? "checked" : ""} onchange="toggleAllBranches(${repo.id}, this)">
+              <span>${branch === TRACK_ALL_BRANCHES ? "All" : escapeHtml(branch)}</span>
+            </label>
+          `).join("")}
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function branchOptionsFor(repo) {
+  const selected = repo.tracked_branches && repo.tracked_branches.length ? repo.tracked_branches : ["main"];
+  const loaded = state.branchOptions[repo.id] || [];
+  return [TRACK_ALL_BRANCHES, ...selected, ...loaded].filter((branch, index, all) => branch && all.indexOf(branch) === index);
+}
+
+function toggleAllBranches(id, changed) {
+  const picker = $(`branch-picker-${id}`);
+  if (!picker || !changed.checked) return;
+  picker.querySelectorAll("input[type='checkbox']").forEach(input => {
+    if (input !== changed && (changed.value === TRACK_ALL_BRANCHES || input.value === TRACK_ALL_BRANCHES)) {
+      input.checked = false;
+    }
+  });
 }
 
 function renderSchedules(schedules, timezone) {
@@ -348,8 +400,10 @@ async function addRepo() {
 }
 
 async function saveRepoNotes(id) {
-  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify({ notes: $(`repo-notes-${id}`).value }) });
-  toast("Repository note saved");
+  const branches = selectedRepoBranches(id);
+  if (!branches.length) return toast("Choose at least one branch");
+  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify({ notes: $(`repo-notes-${id}`).value, branches }) });
+  toast("Repository saved");
   await loadWorkspace();
 }
 
@@ -357,6 +411,26 @@ async function refreshRepo(id) {
   await api(`/api/projects/${state.projectId}/repos/${id}/refresh`, { method: "POST", body: "{}" });
   toast("Repository refreshed");
   await loadWorkspace();
+}
+
+async function loadRepoBranches(id) {
+  const data = await withBusy("正在读取分支", "正在通过本地 gh 获取仓库分支列表...", async () => (
+    api(`/api/projects/${state.projectId}/repos/${id}/branches`)
+  ));
+  if (data.status !== "ok") {
+    toast(data.status_message || "Failed to load branches");
+    return;
+  }
+  state.branchOptions[id] = data.branches || [];
+  renderSettings(state.workspace);
+  const picker = $(`branch-picker-${id}`);
+  if (picker) picker.open = true;
+}
+
+function selectedRepoBranches(id) {
+  const picker = $(`branch-picker-${id}`);
+  if (!picker) return [];
+  return Array.from(picker.querySelectorAll("input[type='checkbox']:checked")).map(input => input.value);
 }
 
 function renderReport(ws) {

@@ -2,12 +2,13 @@ import re
 import shutil
 from pathlib import Path
 
-from .config import SUPPORTED_MATERIAL_EXTENSIONS, SUPPORTED_PROVIDERS
+from .config import SUPPORTED_MATERIAL_EXTENSIONS, SUPPORTED_PROVIDERS, TRACK_ALL_BRANCHES
 from .timeutil import get_zone
 
 
 REPO_RE = re.compile(r"^(?:https://github\.com/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+BRANCH_RE = re.compile(r"^[^\s~^:?*\[\\\]\x00-\x1f\x7f]+(?:/[^\s~^:?*\[\\\]\x00-\x1f\x7f]+)*$")
 
 
 class ValidationError(ValueError):
@@ -45,6 +46,21 @@ def validate_repo(repo):
     return value.replace("https://github.com/", "").rstrip("/")
 
 
+def validate_branches(branches):
+    result = []
+    for branch in branches or []:
+        value = str(branch or "").strip()
+        if not value:
+            continue
+        if value != TRACK_ALL_BRANCHES and (
+            len(value) > 200 or not BRANCH_RE.match(value) or value.endswith(".") or ".." in value
+        ):
+            raise ValidationError("invalid branch name")
+        if value not in result:
+            result.append(value)
+    return [TRACK_ALL_BRANCHES] if TRACK_ALL_BRANCHES in result else result
+
+
 def validate_material_filename(filename):
     ext = Path(filename or "").suffix.lower()
     if ext not in SUPPORTED_MATERIAL_EXTENSIONS:
@@ -56,4 +72,3 @@ def gh_status():
     if not shutil.which("gh"):
         return "missing", "local GitHub CLI (`gh`) is not installed"
     return "available", "local GitHub CLI is available"
-

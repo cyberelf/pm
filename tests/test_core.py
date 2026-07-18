@@ -10,6 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from reports_app.db import create_project, init_db, connect
+from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import store_manual_material, store_material, update_manual_material
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
@@ -17,7 +18,7 @@ from reports_app.reports import assemble_context, build_claude_evidence_prompt, 
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key
-from reports_app.validation import ValidationError, validate_material_filename, validate_schedule_item
+from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
 
 
 class CoreTest(unittest.TestCase):
@@ -50,6 +51,10 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_material_filename("notes.docx")
         self.assertEqual(validate_material_filename("notes.md"), ".md")
+        self.assertEqual(validate_branches(["main", "release/1.0", "main", ""]), ["main", "release/1.0"])
+        self.assertEqual(validate_branches(["main", "*", "develop"]), ["*"])
+        with self.assertRaises(ValidationError):
+            validate_branches(["bad branch"])
 
     def test_project_settings_and_schedule(self):
         update_settings(
@@ -158,8 +163,8 @@ class CoreTest(unittest.TestCase):
         self.conn.execute(
             """
             INSERT INTO github_repos
-            (project_id, repo, status, status_message, activity_summary, created_at, updated_at)
-            VALUES (?, 'owner/repo', 'connected', 'ok', 'summary', '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
+            (project_id, repo, tracked_branches_json, status, status_message, activity_summary, created_at, updated_at)
+            VALUES (?, 'owner/repo', '["main", "release"]', 'connected', 'ok', 'summary', '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
             """,
             (self.project_id,),
         )
@@ -171,6 +176,8 @@ class CoreTest(unittest.TestCase):
                 "commits": [{"sha": "abc", "message": "ship", "author": "A", "date": "2026-06-27T00:00:00Z", "url": ""}],
             }
             context, _hash = assemble_context(self.conn, self.project_id)
+        commits.assert_called_once()
+        self.assertEqual(commits.call_args.args[3], ["main", "release"])
         material_names = {item["filename"] for item in context["new_materials_this_week"]}
         self.assertIn("week.md", material_names)
         self.assertIn("manual", material_names)
@@ -178,6 +185,7 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(manual["source_type"], "manual")
         self.assertEqual(manual["excerpt"], "manual context")
         self.assertEqual(context["git_commits_this_week"][0]["commits"][0]["message"], "ship")
+        self.assertEqual(context["github_activity"][0]["tracked_branches"], ["main", "release"])
 
     def test_agent_prompt_uses_platform_cli_instead_of_inline_context(self):
         store_manual_material(self.conn, self.project_id, {"title": "manual", "content": "sentinel manual context"})
@@ -253,17 +261,114 @@ class CoreTest(unittest.TestCase):
                 "status_message": "ok",
                 "activity_summary": "summary",
                 "last_activity_at": "2026-06-27T00:00:00Z",
+                "default_branch": "main",
             }
             first = add_repo(self.conn, self.project_id, {"repo": "owner/repo", "notes": "first note"})
-            second = add_repo(self.conn, self.project_id, {"repo": "owner/repo", "notes": "reporting name"})
+            second = add_repo(self.conn, self.project_id, {"repo": "owner/repo", "notes": "reporting name", "branches": ["main", "develop"]})
         self.assertEqual(first, second)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM github_repos").fetchone()["n"], 1)
+        row = self.conn.execute("SELECT tracked_branches_json FROM github_repos WHERE id = ?", (first,)).fetchone()
+        self.assertEqual(json.loads(row["tracked_branches_json"]), ["main", "develop"])
         update_repo_notes(self.conn, self.project_id, first, {"notes": "repo purpose"})
         with mock.patch("reports_app.reports.weekly_commits") as commits:
             commits.return_value = {"repo": "owner/repo", "status": "ok", "status_message": "0 commits", "commits": []}
             context, _hash = assemble_context(self.conn, self.project_id)
         self.assertEqual(context["github_activity"][0]["notes"], "repo purpose")
         self.assertEqual(context["git_commits_this_week"][0]["notes"], "repo purpose")
+        update_repo_notes(self.conn, self.project_id, first, {"notes": "all branches", "branches": ["*"]})
+        row = self.conn.execute("SELECT tracked_branches_json FROM github_repos WHERE id = ?", (first,)).fetchone()
+        self.assertEqual(json.loads(row["tracked_branches_json"]), ["*"])
+
+    def test_weekly_commits_reads_selected_branches_and_deduplicates(self):
+        def fake_run(cmd, **kwargs):
+            endpoint = cmd[-1]
+            if "sha=main" in endpoint:
+                stdout = json.dumps([
+                    {
+                        "sha": "abc1234567890",
+                        "html_url": "https://example.test/a",
+                        "commit": {"message": "shared", "author": {"name": "A", "date": "2026-06-30T00:00:00Z"}},
+                    }
+                ])
+            elif "sha=develop" in endpoint:
+                stdout = json.dumps([
+                    {
+                        "sha": "abc1234567890",
+                        "html_url": "https://example.test/a",
+                        "commit": {"message": "shared", "author": {"name": "A", "date": "2026-06-30T00:00:00Z"}},
+                    },
+                    {
+                        "sha": "def1234567890",
+                        "html_url": "https://example.test/b",
+                        "commit": {"message": "develop only", "author": {"name": "B", "date": "2026-07-01T00:00:00Z"}},
+                    },
+                ])
+            else:
+                stdout = "[]"
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
+        end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
+        with mock.patch("reports_app.github.shutil.which", return_value="/usr/bin/gh"), mock.patch("reports_app.github.subprocess.run", side_effect=fake_run) as run:
+            result = weekly_commits("owner/repo", start, end, ["main", "develop"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["branches"], ["main", "develop"])
+        self.assertEqual(len(result["commits"]), 2)
+        shared = next(item for item in result["commits"] if item["sha"] == "abc123456789")
+        self.assertEqual(shared["branches"], ["main", "develop"])
+        self.assertEqual(run.call_count, 2)
+
+    def test_list_branches_loads_all_paginated_remote_branches(self):
+        first_page = [{"name": f"feature/{index}"} for index in range(100)]
+        second_page = [{"name": "release/next"}]
+        completed = subprocess.CompletedProcess(
+            ["gh", "api"],
+            0,
+            stdout=json.dumps([first_page, second_page]),
+            stderr="",
+        )
+        with mock.patch("reports_app.github.shutil.which", return_value="/usr/bin/gh"), mock.patch(
+            "reports_app.github.subprocess.run", return_value=completed
+        ) as run:
+            result = list_branches("owner/repo")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["branches"]), 101)
+        self.assertEqual(result["branches"][-1], "release/next")
+        command = run.call_args.args[0]
+        self.assertIn("--paginate", command)
+        self.assertIn("--slurp", command)
+        self.assertIn("repos/owner/repo/branches?per_page=100", command)
+
+    def test_weekly_commits_resolves_all_remote_branches_at_collection_time(self):
+        def fake_run(cmd, **kwargs):
+            branch = "main" if "sha=main" in cmd[-1] else "develop"
+            item = {
+                "sha": f"{branch}-sha",
+                "html_url": f"https://example.test/{branch}",
+                "commit": {
+                    "message": f"{branch} change",
+                    "author": {"name": "A", "date": "2026-07-01T00:00:00Z"},
+                },
+            }
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([[item], []]), stderr="")
+
+        start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
+        end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
+        branch_result = {"status": "ok", "status_message": "2 branches", "branches": ["main", "develop"]}
+        with mock.patch("reports_app.github.shutil.which", return_value="/usr/bin/gh"), mock.patch(
+            "reports_app.github.list_branches", return_value=branch_result
+        ) as branches, mock.patch("reports_app.github.subprocess.run", side_effect=fake_run) as run:
+            result = weekly_commits("owner/repo", start, end, ["*"])
+
+        branches.assert_called_once_with("owner/repo", timeout=30)
+        self.assertEqual(result["branches"], ["*"])
+        self.assertEqual(result["resolved_branches"], ["main", "develop"])
+        self.assertEqual(len(result["commits"]), 2)
+        self.assertEqual(run.call_count, 2)
+        for call in run.call_args_list:
+            self.assertIn("--paginate", call.args[0])
+            self.assertIn("--slurp", call.args[0])
 
     def test_fake_provider_flag_requires_truthy_value(self):
         os.environ["REPORTS_FAKE_PROVIDER"] = "0"

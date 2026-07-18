@@ -97,6 +97,7 @@ def overview(conn, project, week_key):
             {
                 "repo": row["repo"],
                 "notes": row["notes"],
+                "tracked_branches": row["tracked_branches"],
                 "status": row["status"],
                 "last_activity_at": row["last_activity_at"],
             }
@@ -208,17 +209,19 @@ def material(conn, project, material_id):
 
 
 def repos(conn, project_id):
-    return [
-        dict(row)
-        for row in conn.execute(
-            """
-            SELECT id, repo, notes, status, status_message, last_checked_at,
-                   last_activity_at, activity_summary, created_at, updated_at
-            FROM github_repos WHERE project_id = ? ORDER BY id
-            """,
-            (project_id,),
-        )
-    ]
+    result = []
+    for row in conn.execute(
+        """
+        SELECT id, repo, notes, tracked_branches_json, status, status_message, last_checked_at,
+               last_activity_at, activity_summary, created_at, updated_at
+        FROM github_repos WHERE project_id = ? ORDER BY id
+        """,
+        (project_id,),
+    ):
+        item = dict(row)
+        item["tracked_branches"] = json.loads(item.pop("tracked_branches_json") or '["main"]')
+        result.append(item)
+    return result
 
 
 def commits(conn, project, week_key, repo_name=""):
@@ -229,7 +232,7 @@ def commits(conn, project, week_key, repo_name=""):
             continue
         if repo_name and row["repo"] != repo_name:
             continue
-        item = weekly_commits(row["repo"], start, end)
+        item = weekly_commits(row["repo"], start, end, row["tracked_branches"])
         item["notes"] = row["notes"]
         result.append(item)
     if repo_name and not result:

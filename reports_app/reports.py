@@ -41,7 +41,11 @@ def assemble_context(conn, project_id, week_key=None):
         (project_id,),
     ).fetchall()
     repos = conn.execute(
-        "SELECT repo, notes, status, status_message, last_checked_at, last_activity_at, activity_summary FROM github_repos WHERE project_id = ? ORDER BY id",
+        """
+        SELECT repo, notes, tracked_branches_json, status, status_message,
+               last_checked_at, last_activity_at, activity_summary
+        FROM github_repos WHERE project_id = ? ORDER BY id
+        """,
         (project_id,),
     ).fetchall()
     previous = conn.execute(
@@ -101,7 +105,7 @@ def assemble_context(conn, project_id, week_key=None):
             for row in materials
             if parse_iso(row["created_at"]) and week_key_for(parse_iso(row["created_at"]), project["timezone"]) == week_key
         ],
-        "github_activity": [dict(row) for row in repos],
+        "github_activity": [repo_activity_context(row) for row in repos],
         "git_commits_this_week": [
             repo_commit_context(row, week_start, week_end)
             for row in repos
@@ -133,9 +137,16 @@ def input_summary(context):
 
 
 def repo_commit_context(repo_row, week_start, week_end):
-    result = weekly_commits(repo_row["repo"], week_start, week_end)
+    branches = json.loads(repo_row["tracked_branches_json"] or '["main"]')
+    result = weekly_commits(repo_row["repo"], week_start, week_end, branches)
     result["notes"] = repo_row["notes"]
     return result
+
+
+def repo_activity_context(repo_row):
+    item = dict(repo_row)
+    item["tracked_branches"] = json.loads(item.pop("tracked_branches_json") or '["main"]')
+    return item
 
 
 def latest_success(conn, project_id, week_key):

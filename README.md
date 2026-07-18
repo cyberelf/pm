@@ -69,7 +69,7 @@ python3 scripts/report_context.py --project-id <id> --week-key <YYYY-Www> commit
 The most important current-week evidence is:
 
 - `new_materials_this_week`: project materials uploaded or manually entered during the current ISO project week in `Asia/Shanghai`.
-- `git_commits_this_week`: commits from connected GitHub repositories during the current ISO project week.
+- `git_commits_this_week`: commits from each connected GitHub repository's configured tracked branches during the current ISO project week.
 
 The provider prompt explicitly asks the model to use these as primary evidence and to say when no new materials or commits exist.
 

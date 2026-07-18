@@ -287,6 +287,61 @@ p { color: var(--ink-muted); line-height: 1.5; }
   padding: 7px 9px;
   font-size: 12px;
 }
+.branch-picker {
+  position: relative;
+  width: min(260px, 100%);
+}
+.branch-picker summary {
+  min-height: 34px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #090a0c;
+  color: var(--ink-muted);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.branch-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(320px, calc(100vw - 48px));
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  background: #090a0c;
+  padding: 8px;
+  box-shadow: var(--shadow);
+}
+.branch-actions { margin-bottom: 8px; }
+.branch-actions button { width: 100%; }
+.branch-options {
+  display: grid;
+  gap: 4px;
+}
+.branch-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--ink-muted);
+}
+.branch-option:hover { background: var(--panel-2); }
+.branch-option input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+.branch-option span {
+  overflow-wrap: anywhere;
+}
 .manual-material-form {
   display: grid;
   gap: 10px;

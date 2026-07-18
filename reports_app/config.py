@@ -12,6 +12,7 @@ SUPPORTED_PROVIDERS = {"codex", "claude"}
 SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".pdf"}
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 DEFAULT_TIMEZONE = "Asia/Shanghai"
+TRACK_ALL_BRANCHES = "*"
 
 DEFAULT_REPORT_TEMPLATE = """# Weekly Report
 

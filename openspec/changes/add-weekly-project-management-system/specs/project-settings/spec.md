@@ -84,11 +84,23 @@ The system SHALL allow a user to add project context through manual fields, uplo
 - **THEN** the system keeps the original file metadata and marks the material extraction status as failed
 
 ### Requirement: GitHub repository association
-The system SHALL allow a project to be associated with one or more GitHub repositories accessed through the local authenticated GitHub CLI (`gh`).
+The system SHALL allow a project to be associated with one or more GitHub repositories accessed through the local authenticated GitHub CLI (`gh`), with each repository configured for one or more tracked branches.
 
 #### Scenario: Add GitHub repository link
 - **WHEN** a user adds a valid GitHub repository association and local `gh` can access the repository
 - **THEN** the system stores the association and records it as an activity source for the project
+
+#### Scenario: Configure tracked repository branches
+- **WHEN** a user selects one or more tracked branches for a repository association
+- **THEN** the system stores those branches and uses them for future Git commit collection
+
+#### Scenario: Track all repository branches
+- **WHEN** a user selects the All branch option for a repository association
+- **THEN** the system stores the dynamic all-branches selection and includes newly available remote branches in future Git commit collection
+
+#### Scenario: Load available repository branches
+- **WHEN** a user requests the branch list for a repository association
+- **THEN** the system loads all remote branches available through the local authenticated GitHub CLI, including results beyond the first API page
 
 #### Scenario: Detect invalid GitHub repository link
 - **WHEN** a user adds an invalid or inaccessible GitHub repository association
