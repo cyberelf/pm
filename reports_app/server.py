@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .config import DB_PATH, STATIC_DIR, WORKSPACE_USER
+from .config import DB_PATH, STATIC_DIR, UPLOAD_DIR, WORKSPACE_USER
 from .db import connect, create_project, init_db, row_to_dict
 from .github import check_repo, list_branches, refresh_repo
 from .markdown import render_markdown
@@ -129,7 +129,11 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in path.split("/") if p]
         with connect(self.server.db_path) as conn:
             if path == "/api/state" and method == "GET":
-                projects = [dict(row) for row in conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")]
+                projects = []
+                for row in conn.execute("SELECT * FROM projects ORDER BY updated_at DESC"):
+                    project = dict(row)
+                    project["progress_status"] = progress_status(conn, project["id"])
+                    projects.append(project)
                 self.json({"projects": projects, "workspace_user": WORKSPACE_USER})
                 return
             if path == "/api/projects" and method == "POST":
@@ -152,6 +156,9 @@ class Handler(BaseHTTPRequestHandler):
                         self.error(HTTPStatus.NOT_FOUND, "material not found")
                         return
                     self.json(material)
+                    return
+                if len(parts) == 6 and parts[3] == "materials" and parts[5] == "content" and method == "GET":
+                    self.material_content(conn, project_id, int(parts[4]))
                     return
                 if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
                     self.report_pdf(conn, project_id, parts[4])
@@ -304,6 +311,26 @@ class Handler(BaseHTTPRequestHandler):
         report_dict = dict(report)
         pdf = report_pdf_bytes(project_id, project, report_dict)
         self.bytes_response(pdf, "application/pdf", pdf_filename(project["name"], week_key))
+
+    def material_content(self, conn, project_id, material_id):
+        row = conn.execute(
+            "SELECT filename, content_type, storage_path, source_type FROM materials WHERE id = ? AND project_id = ?",
+            (material_id, project_id),
+        ).fetchone()
+        if not row or row["source_type"] != "upload" or Path(row["filename"]).suffix.lower() != ".pdf":
+            self.error(HTTPStatus.NOT_FOUND, "PDF material not found")
+            return
+        path = Path(row["storage_path"] or "").resolve()
+        upload_root = UPLOAD_DIR.resolve()
+        try:
+            path.relative_to(upload_root)
+        except ValueError:
+            self.error(HTTPStatus.NOT_FOUND, "PDF material not found")
+            return
+        if not path.is_file():
+            self.error(HTTPStatus.NOT_FOUND, "PDF material not found")
+            return
+        self.bytes_response(path.read_bytes(), "application/pdf")
 
     def error(self, status, message):
         self.json({"error": message}, status)
@@ -466,6 +493,14 @@ def material_detail(conn, project_id, material_id):
         return None
     item = dict(row)
     item["content"] = item.pop("extracted_text") or ""
+    suffix = Path(item["filename"]).suffix.lower()
+    if suffix == ".pdf" and item["source_type"] == "upload":
+        item["preview_kind"] = "pdf"
+    elif item["source_type"] == "manual" or suffix in {".md", ".markdown"}:
+        item["preview_kind"] = "markdown"
+        item["content_html"] = render_markdown(item["content"])
+    else:
+        item["preview_kind"] = "text"
     return item
 
 

@@ -9,6 +9,19 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is required for frontend behavior tests")
 class FrontendTest(unittest.TestCase):
+    def test_workspace_navigation_and_material_controls_match_current_ui(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        html = (ROOT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertLess(html.index('data-tab="risks"'), html.index('data-tab="settings"'))
+        self.assertNotIn("中国标准时间 · 本地个人项目管理", html)
+        self.assertIn('id="project-status-dot"', html)
+        self.assertIn('return project.progress_status || project.status || "unknown";', source)
+        self.assertIn('data-source-tab="files"', source)
+        self.assertIn('data-source-tab="manual"', source)
+        self.assertIn('id="material-dropzone"', source)
+        self.assertIn('dropzone.addEventListener("drop"', source)
+        self.assertIn("setupMaterialDropzone();", source)
+
     def test_responsive_layout_contains_wide_content_overflow(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
@@ -34,7 +47,12 @@ class FrontendTest(unittest.TestCase):
         self.assertGreaterEqual(source.count("previewMaterial(${m.id})"), 3)
         self.assertIn("async function previewMaterial(id)", source)
         self.assertIn("/materials/${id}`", source)
-        self.assertIn('$("material-preview-content").textContent = material.content', source)
+        self.assertIn('material.preview_kind === "pdf"', source)
+        self.assertIn('material.preview_kind === "markdown"', source)
+        self.assertIn("material.content_html", source)
+        self.assertIn("/materials/${id}/content`", source)
+        self.assertIn('id="material-preview-pdf"', html)
+        self.assertIn('id="material-preview-markdown"', html)
         self.assertIn('$("close-material-preview").onclick', source)
 
     def test_generate_report_renders_returned_workspace_without_second_request(self):
@@ -71,6 +89,12 @@ globalThis.fetch = async (path, options) => {
 """
         assertions = r"""
 (async () => {
+  const extractedSummary = reportSummary({
+    content_md: "# Weekly Report\n\n## 本周总结\n完成核心流程，并修复预览问题。\n\n## 下周计划\n继续验证。",
+  });
+  if (extractedSummary !== "完成核心流程，并修复预览问题。") {
+    throw new Error(`unexpected report summary: ${extractedSummary}`);
+  }
   let renderedWorkspace = null;
   render = () => { renderedWorkspace = state.workspace; };
   state.projectId = 1;

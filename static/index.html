@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=5" />
+    <link rel="stylesheet" href="/styles.css?v=8" />
   </head>
   <body>
     <div class="app-shell">
@@ -24,8 +24,11 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <h1 id="project-title">周报工作台</h1>
-            <p id="project-meta">中国标准时间 · 本地个人项目管理</p>
+            <div class="project-heading">
+              <h1 id="project-title">周报工作台</h1>
+              <span id="project-status-dot" class="status-dot is-neutral" role="img" aria-label="项目状态" title="项目状态"></span>
+            </div>
+            <p id="project-meta">本地个人项目管理</p>
           </div>
           <div class="actions">
             <button id="schedule-check">检查计划</button>
@@ -35,12 +38,12 @@
 
         <nav class="tabs" aria-label="Workspace views">
           <button data-tab="overview" class="active">总览</button>
-          <button data-tab="settings">设置</button>
           <button data-tab="plan">计划</button>
           <button data-tab="updates">本周进展</button>
           <button data-tab="sources">资料源</button>
           <button data-tab="report">周报</button>
           <button data-tab="risks">风险</button>
+          <button data-tab="settings">设置</button>
         </nav>
 
         <section id="empty-state" class="empty">
@@ -50,21 +53,29 @@
 
         <section id="workspace" class="workspace hidden">
           <div id="tab-overview" class="tab-panel"></div>
-          <div id="tab-settings" class="tab-panel hidden"></div>
           <div id="tab-plan" class="tab-panel hidden"></div>
           <div id="tab-updates" class="tab-panel hidden"></div>
           <div id="tab-sources" class="tab-panel hidden"></div>
           <div id="tab-report" class="tab-panel hidden"></div>
           <div id="tab-risks" class="tab-panel hidden"></div>
+          <div id="tab-settings" class="tab-panel hidden"></div>
         </section>
       </main>
 
       <footer class="app-footer">
-        <div class="footer-brand">
-          <span class="footer-mark">WR</span>
-          <strong>周报工作台</strong>
+        <div class="footer-inner">
+          <div class="footer-brand">
+            <span class="footer-mark">WR</span>
+            <div>
+              <strong>周报工作台</strong>
+              <p>Personal project reporting workspace</p>
+            </div>
+          </div>
+          <div class="footer-meta" aria-label="Workspace properties">
+            <span>本地运行</span>
+            <span>单用户</span>
+          </div>
         </div>
-        <p>Local-first weekly project reporting · Asia/Shanghai</p>
       </footer>
     </div>
 
@@ -101,7 +112,11 @@
           </div>
           <button id="close-material-preview" type="button" aria-label="关闭资料预览">关闭</button>
         </div>
-        <pre id="material-preview-content" class="preview-content"></pre>
+        <div class="preview-body">
+          <article id="material-preview-markdown" class="report preview-markdown hidden"></article>
+          <iframe id="material-preview-pdf" class="preview-pdf hidden" title="PDF 资料预览"></iframe>
+          <pre id="material-preview-content" class="preview-content hidden"></pre>
+        </div>
       </div>
     </dialog>
 
@@ -113,6 +128,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=5"></script>
+    <script src="/app.js?v=8"></script>
   </body>
 </html>

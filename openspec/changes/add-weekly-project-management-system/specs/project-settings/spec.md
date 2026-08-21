@@ -87,6 +87,10 @@ The system SHALL allow a user to add project context through manual fields, uplo
 - **WHEN** a user chooses Preview for an uploaded Markdown, plain text, or PDF material
 - **THEN** the system loads the material detail on demand and displays its extracted text in a read-only modal
 
+#### Scenario: Render material preview by type
+- **WHEN** a user previews a Markdown, plain-text, or PDF material
+- **THEN** the system renders sanitized Markdown, preformatted plain text, or the original PDF inline in the shared read-only preview modal according to the material type
+
 #### Scenario: Add current-week manual material
 - **WHEN** a user saves manually entered material content for a project
 - **THEN** the system stores the title, content, creation time, and update time as a project material source

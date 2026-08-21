@@ -6,6 +6,7 @@ const state = {
   workspace: null,
   branchOptions: {},
   tab: "overview",
+  sourceTab: "files",
   busy: false,
 };
 
@@ -75,9 +76,9 @@ function updateWorkspace(workspace) {
 
 function renderProjects() {
   $("project-list").innerHTML = state.projects.map(p => `
-    <button class="project-item ${p.id === state.projectId ? "active" : ""}" data-project="${p.id}">
+    <button class="project-item ${p.id === state.projectId ? "active" : ""}" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
       <strong>${escapeHtml(p.name)}</strong>
-      <span>${escapeHtml(p.status)} · ${timezoneLabel(p.timezone)}</span>
+      ${statusDot(projectDisplayStatus(p), "project-item-status")}
     </button>
   `).join("");
   document.querySelectorAll("[data-project]").forEach(btn => {
@@ -96,7 +97,12 @@ function render() {
   $("workspace").classList.toggle("hidden", !ws);
   if (!ws) return;
   $("project-title").textContent = ws.project.name;
-  $("project-meta").textContent = `${ws.week_key} · ${timezoneLabel(ws.project.timezone)} · ${ws.progress_status}`;
+  $("project-meta").textContent = ws.week_key;
+  const projectStatusDot = $("project-status-dot");
+  projectStatusDot.className = `status-dot ${statusTone(ws.progress_status)}`;
+  projectStatusDot.title = ws.progress_status;
+  projectStatusDot.setAttribute("aria-label", `项目状态：${ws.progress_status}`);
+  renderProjects();
   renderOverview(ws);
   renderSettings(ws);
   renderPlan(ws);
@@ -121,8 +127,8 @@ function ensureTableScrollContainers() {
 function renderOverview(ws) {
   $("tab-overview").innerHTML = `
     <div class="status-strip">
-      <div class="metric"><span>项目周</span><strong>${ws.week_key}</strong><small>${timezoneLabel(ws.project.timezone)}</small></div>
-      <div class="metric"><span>进度状态</span><strong>${escapeHtml(ws.progress_status)}</strong><small>deterministic rules</small></div>
+      <div class="metric"><span>项目周</span><strong>${ws.week_key}</strong><small>当前项目周</small></div>
+      <div class="metric"><span>进度状态</span><strong>${escapeHtml(ws.progress_status)}</strong><small>确定性规则计算</small></div>
       <div class="metric"><span>活跃风险</span><strong>${ws.risks.filter(r => r.status === "active").length}</strong><small>visible warnings</small></div>
       <div class="metric"><span>资料源</span><strong>${ws.materials.length + ws.repos.length}</strong><small>materials + repos</small></div>
     </div>
@@ -134,7 +140,13 @@ function renderOverview(ws) {
       </div>
       <div class="panel">
         <div class="panel-head"><h2>当前周报</h2><span>Canonical report</span></div>
-        <p>${ws.report ? `Generated ${escapeHtml(formatChinaTime(ws.report.updated_at))}` : "No report generated yet."}</p>
+        ${ws.report ? `
+          <div class="overview-report-summary">
+            <span>周报摘要</span>
+            <p>${escapeHtml(reportSummary(ws.report))}</p>
+          </div>
+          <p class="report-updated">更新于 ${escapeHtml(formatChinaTime(ws.report.updated_at))}</p>
+        ` : "<p>当前项目周还没有生成周报。</p>"}
         <div class="row"><button class="primary generate-action" onclick="generateReport()">Generate</button><button onclick="switchTab('report')">Open Report</button></div>
       </div>
     </div>
@@ -145,7 +157,7 @@ function renderSettings(ws) {
   const p = ws.project;
   $("tab-settings").innerHTML = `
     <form id="settings-form" class="panel form-grid">
-      <div class="panel-head wide"><h2>项目设置</h2><span>Local runtime · China time</span></div>
+      <div class="panel-head wide"><h2>项目设置</h2><span>项目与报告配置</span></div>
       ${input("name", "Name", p.name)}
       ${input("status", "Status", p.status)}
       ${input("start_date", "Start date", p.start_date, "date")}
@@ -328,7 +340,7 @@ function renderUpdates(ws) {
   const u = ws.weekly_update || {};
   $("tab-updates").innerHTML = `
     <form id="update-form" class="panel form-grid">
-      <div class="panel-head wide"><h2>本周进展</h2><span>${escapeHtml(ws.week_key)} · ${timezoneLabel(ws.project.timezone)}</span></div>
+      <div class="panel-head wide"><h2>本周进展</h2><span>${escapeHtml(ws.week_key)}</span></div>
       ${textarea("completed", "Completed", u.completed || "", "wide")}
       ${textarea("in_progress", "In Progress", u.in_progress || "", "wide")}
       ${textarea("blockers", "Blockers", u.blockers || "", "wide")}
@@ -347,16 +359,27 @@ function renderUpdates(ws) {
 
 function renderSources(ws) {
   $("tab-sources").innerHTML = `
-    <div class="grid-2 sources-grid">
-      <div class="panel">
+    <div class="source-tabs" role="tablist" aria-label="资料类型">
+      <button type="button" data-source-tab="files" role="tab" onclick="switchSourceTab('files')">文件资料</button>
+      <button type="button" data-source-tab="manual" role="tab" onclick="switchSourceTab('manual')">手工资料</button>
+    </div>
+    <section id="source-files" class="source-view" role="tabpanel">
+      <div class="panel source-panel">
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
-        <div class="upload-controls">
-          <input id="material-file" type="file" accept=".md,.markdown,.txt,.pdf" multiple>
-          <button onclick="uploadMaterial()">Upload selected</button>
+        <label id="material-dropzone" class="upload-dropzone" for="material-file" role="button" tabindex="0">
+          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.pdf" multiple>
+          <span class="upload-icon" aria-hidden="true">↑</span>
+          <strong>拖入文件，或点击选择</strong>
+          <span id="material-selection">支持 Markdown、纯文本和 PDF，可多选</span>
+        </label>
+        <div class="upload-actions">
+          <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
         </div>
         <table class="table material-table"><thead><tr><th>File</th><th>Extraction</th><th>Summary</th><th>Updated</th><th>Action</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map(renderUploadedMaterialRow).join("") || "<tr><td colspan='5'>No uploaded materials.</td></tr>"}</tbody></table>
       </div>
-      <div class="panel">
+    </section>
+    <section id="source-manual" class="source-view hidden" role="tabpanel">
+      <div class="panel source-panel">
         <div class="panel-head"><h2>手工资料</h2><span>仅本周录入的资料可以修改</span></div>
         <div class="manual-material-form">
           <input id="manual-material-title" placeholder="资料标题">
@@ -365,8 +388,61 @@ function renderSources(ws) {
         </div>
         <table class="table"><thead><tr><th>Title</th><th>Content</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map(renderManualMaterialRow).join("") || "<tr><td colspan='5'>No manual materials.</td></tr>"}</tbody></table>
       </div>
-    </div>
+    </section>
   `;
+  switchSourceTab(state.sourceTab);
+  setupMaterialDropzone();
+}
+
+function switchSourceTab(tab) {
+  state.sourceTab = tab;
+  document.querySelectorAll("[data-source-tab]").forEach((button) => {
+    const active = button.dataset.sourceTab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  ["files", "manual"].forEach((name) => {
+    const view = $(`source-${name}`);
+    if (view) view.classList.toggle("hidden", name !== tab);
+  });
+}
+
+function setupMaterialDropzone() {
+  const dropzone = $("material-dropzone");
+  const input = $("material-file");
+  if (!dropzone || !input) return;
+  const stopDrag = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  ["dragenter", "dragover"].forEach((name) => dropzone.addEventListener(name, (event) => {
+    stopDrag(event);
+    dropzone.classList.add("is-dragging");
+  }));
+  ["dragleave", "drop"].forEach((name) => dropzone.addEventListener(name, (event) => {
+    stopDrag(event);
+    dropzone.classList.remove("is-dragging");
+  }));
+  dropzone.addEventListener("drop", (event) => {
+    if (!event.dataTransfer || !event.dataTransfer.files.length) return;
+    input.files = event.dataTransfer.files;
+    updateMaterialSelection();
+  });
+  dropzone.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    input.click();
+  });
+  input.addEventListener("change", updateMaterialSelection);
+}
+
+function updateMaterialSelection() {
+  const files = Array.from($("material-file")?.files || []);
+  const label = $("material-selection");
+  if (!label) return;
+  label.textContent = files.length
+    ? `已选择 ${files.length} 个文件：${files.map((file) => file.name).join("、")}`
+    : "支持 Markdown、纯文本和 PDF，可多选";
 }
 
 function renderUploadedMaterialRow(m) {
@@ -393,17 +469,41 @@ async function previewMaterial(id) {
   const dialog = $("material-preview-dialog");
   $("material-preview-title").textContent = "正在加载资料…";
   $("material-preview-meta").textContent = "";
-  $("material-preview-content").textContent = "";
+  resetMaterialPreview();
   dialog.showModal();
   try {
     const material = await api(`/api/projects/${state.projectId}/materials/${id}`);
     $("material-preview-title").textContent = material.filename;
     $("material-preview-meta").textContent = `${material.source_type === "manual" ? "手工资料" : material.content_type} · ${formatBytes(material.size_bytes)} · ${material.extraction_status}`;
-    $("material-preview-content").textContent = material.content || "暂无可预览的文本内容";
+    if (material.preview_kind === "pdf") {
+      const frame = $("material-preview-pdf");
+      frame.src = `/api/projects/${state.projectId}/materials/${id}/content`;
+      frame.classList.remove("hidden");
+    } else if (material.preview_kind === "markdown") {
+      const markdown = $("material-preview-markdown");
+      markdown.innerHTML = material.content_html || "<p>暂无可预览的内容</p>";
+      markdown.classList.remove("hidden");
+    } else {
+      const text = $("material-preview-content");
+      text.textContent = material.content || "暂无可预览的文本内容";
+      text.classList.remove("hidden");
+    }
   } catch (error) {
     $("material-preview-title").textContent = "资料预览失败";
-    $("material-preview-content").textContent = error.message;
+    const text = $("material-preview-content");
+    text.textContent = error.message;
+    text.classList.remove("hidden");
   }
+}
+
+function resetMaterialPreview() {
+  const text = $("material-preview-content");
+  const markdown = $("material-preview-markdown");
+  const pdf = $("material-preview-pdf");
+  text.textContent = "";
+  markdown.innerHTML = "";
+  pdf.removeAttribute("src");
+  [text, markdown, pdf].forEach((element) => element.classList.add("hidden"));
 }
 
 async function uploadMaterial() {
@@ -622,6 +722,53 @@ function fileToBase64(file) {
 }
 function timezoneLabel(value) {
   return (value || CHINA_TIMEZONE) === CHINA_TIMEZONE ? "中国标准时间 (Asia/Shanghai)" : escapeHtml(value);
+}
+
+function projectDisplayStatus(project) {
+  if (project.id === state.projectId && state.workspace?.project?.id === project.id) {
+    return state.workspace.progress_status;
+  }
+  return project.progress_status || project.status || "unknown";
+}
+
+function statusTone(value) {
+  const status = String(value || "").toLowerCase().replaceAll("_", "-").replaceAll(" ", "-");
+  if (["on-track", "complete", "active", "success", "connected"].includes(status)) return "is-success";
+  if (["at-risk", "medium", "inaccessible", "unauthenticated"].includes(status)) return "is-warning";
+  if (["blocked", "failed", "high"].includes(status)) return "is-error";
+  return "is-neutral";
+}
+
+function statusDot(value, extraClass = "", toneOverride = "") {
+  return `<span class="status-dot ${toneOverride || statusTone(value)} ${extraClass}" role="img" title="${escapeAttr(value)}" aria-label="状态：${escapeAttr(value)}"></span>`;
+}
+
+function reportSummary(report) {
+  const markdown = String(report?.content_md || "").trim();
+  if (!markdown) return "暂无可用的周报摘要。";
+  const section = markdown.match(
+    /(?:^|\n)#{1,6}\s*(?:本周总结|本周摘要|周报摘要|this week's summary|this week summary|summary)[^\n]*\n([\s\S]*?)(?=\n#{1,6}\s|$)/i
+  );
+  const source = section ? section[1] : markdown;
+  const cleaned = source
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#{1,6}\s/.test(line) && !/^\s*\|?\s*:?-{3,}/.test(line))
+    .map((line) => line
+      .replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)/, "")
+      .replace(/\|/g, " ")
+      .replace(/[*_~`]/g, "")
+      .replace(/<[^>]+>/g, "")
+      .trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "暂无可用的周报摘要。";
+  const characters = Array.from(cleaned);
+  return characters.length > 280 ? `${characters.slice(0, 280).join("")}…` : cleaned;
 }
 function formatChinaTime(value) {
   if (!value) return "";

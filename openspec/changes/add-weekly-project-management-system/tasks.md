@@ -95,3 +95,4 @@
 - [x] 10.6 Hide failed uploaded-file records from the normal material list while retaining diagnostics
 - [x] 10.7 Add a scoped material-detail API for uploaded and manually entered content
 - [x] 10.8 Add and verify a shared read-only material preview modal
+- [x] 10.9 Render Markdown, plain-text, and original PDF materials by type in the shared read-only preview modal

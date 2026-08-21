@@ -215,12 +215,34 @@ class CoreTest(unittest.TestCase):
         manual_id = store_manual_material(
             self.conn, self.project_id, {"title": "Manual preview", "content": "complete manual content"}
         )
+        pdf_buffer = io.BytesIO()
+        pdf_writer = PdfWriter()
+        pdf_writer.add_blank_page(width=200, height=200)
+        pdf_writer.write(pdf_buffer)
+        pdf_id = store_material(
+            self.conn,
+            self.project_id,
+            {
+                "filename": "preview.pdf",
+                "content_type": "application/pdf",
+                "content_base64": base64.b64encode(pdf_buffer.getvalue()).decode(),
+            },
+        )
+        pdf_path = Path(self.conn.execute("SELECT storage_path FROM materials WHERE id = ?", (pdf_id,)).fetchone()["storage_path"])
         self.conn.commit()
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.db_path = self.db_path
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/state")
+            response = client.getresponse()
+            state_payload = json.loads(response.read())
+            client.close()
+            state_project = next(project for project in state_payload["projects"] if project["id"] == self.project_id)
+            self.assertEqual(state_project["progress_status"], progress_status(self.conn, self.project_id))
+
             payload = json.dumps({
                 "files": [
                     {"filename": "one.txt", "content_base64": base64.b64encode(b"first body").decode()},
@@ -245,6 +267,24 @@ class CoreTest(unittest.TestCase):
             self.assertEqual([row["filename"] for row in rows], ["one.txt", "two.md"])
             self.assertEqual([row["summary_status"] for row in rows], ["generated", "generated"])
 
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", f"/api/projects/{self.project_id}/materials/{result['ids'][1]}")
+            response = client.getresponse()
+            markdown_detail = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(markdown_detail["preview_kind"], "markdown")
+            self.assertIn("<p>second body</p>", markdown_detail["content_html"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", f"/api/projects/{self.project_id}/materials/{pdf_id}/content")
+            response = client.getresponse()
+            pdf_content = response.read()
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "application/pdf")
+            self.assertTrue(pdf_content.startswith(b"%PDF"))
+
             for material_id, expected_content in (
                 (result["ids"][0], "first body"),
                 (manual_id, "complete manual content"),
@@ -267,6 +307,7 @@ class CoreTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+            pdf_path.unlink(missing_ok=True)
 
     def test_manual_material_can_be_updated_only_in_current_week(self):
         material_id = store_manual_material(
