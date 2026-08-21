@@ -63,6 +63,30 @@ The system SHALL allow a user to add project context through manual fields, uplo
 - **WHEN** a user uploads a Markdown, plain text, or PDF project material file
 - **THEN** the system stores the file, records its metadata, and makes it available for report context extraction
 
+#### Scenario: Upload multiple project materials
+- **WHEN** a user selects multiple supported project material files in one upload action
+- **THEN** the system stores and processes every selected file in the same request
+
+#### Scenario: Extract PDF project material
+- **WHEN** a user uploads a PDF containing extractable text
+- **THEN** the system extracts that text locally and marks the material extraction as successful
+
+#### Scenario: Generate uploaded material summaries
+- **WHEN** one or more files are uploaded
+- **THEN** the system asks the project's configured AI provider to generate a separate summary for every file using its original filename and leading extracted text
+
+#### Scenario: Preserve upload when summary generation fails
+- **WHEN** AI summary generation fails after supported files are stored
+- **THEN** the system keeps every uploaded file, records the summary failure, and supplies an editable fallback summary
+
+#### Scenario: Edit uploaded material summary
+- **WHEN** a user edits and saves an uploaded file's summary
+- **THEN** the system stores the edited summary and marks it as manually maintained
+
+#### Scenario: Preview uploaded material content
+- **WHEN** a user chooses Preview for an uploaded Markdown, plain text, or PDF material
+- **THEN** the system loads the material detail on demand and displays its extracted text in a read-only modal
+
 #### Scenario: Add current-week manual material
 - **WHEN** a user saves manually entered material content for a project
 - **THEN** the system stores the title, content, creation time, and update time as a project material source
@@ -70,6 +94,10 @@ The system SHALL allow a user to add project context through manual fields, uplo
 #### Scenario: Edit current-week manual material
 - **WHEN** a user edits manually entered material created in the current project week
 - **THEN** the system updates the material content and update time
+
+#### Scenario: Preview manual material content
+- **WHEN** a user chooses Preview for a manually entered material
+- **THEN** the system loads and displays its complete content in the same read-only material preview modal
 
 #### Scenario: Lock previous-week manual material
 - **WHEN** a user attempts to edit manually entered material created before the current project week
@@ -82,6 +110,10 @@ The system SHALL allow a user to add project context through manual fields, uplo
 #### Scenario: Record material extraction failure
 - **WHEN** text extraction fails for a stored project material
 - **THEN** the system keeps the original file metadata and marks the material extraction status as failed
+
+#### Scenario: Hide failed upload from the material list
+- **WHEN** an uploaded file fails text extraction
+- **THEN** the system excludes that file record from the normal material list and source count while retaining its operational diagnostic
 
 ### Requirement: GitHub repository association
 The system SHALL allow a project to be associated with one or more GitHub repositories accessed through the local authenticated GitHub CLI (`gh`), with each repository configured for one or more tracked branches.

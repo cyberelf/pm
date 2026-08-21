@@ -9,7 +9,7 @@ Individual knowledge workers need a consistent way to track weekly project work 
 - Add weekly progress update support with multiple configured update times per week.
 - Add manual immediate report generation so the workspace user can generate or regenerate the current project-week report on demand.
 - Define each project week by the project's timezone using ISO week boundaries from Monday through Sunday.
-- Add document upload for Markdown, plain text, and PDF materials plus manual input sources that can be used as project context for planning and reporting.
+- Add simultaneous multi-file upload for Markdown, plain text, and PDF materials, extract PDF text, and generate an editable AI summary for every uploaded file from its original name and leading text.
 - Add GitHub association through the local authenticated GitHub CLI (`gh`) so repository activity can be considered during report generation.
 - Add automated weekly report generation through configurable CLI providers, including Codex CLI and Claude Code CLI.
 - Add per-project system prompt configuration for weekly report generation.

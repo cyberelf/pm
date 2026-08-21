@@ -1,22 +1,37 @@
 import base64
+import io
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import unittest
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from unittest import mock
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from pypdf import PdfWriter
+from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
 from reports_app.db import create_project, init_db, connect
 from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
-from reports_app.materials import store_manual_material, store_material, update_manual_material
+from reports_app.materials import (
+    build_summary_prompt,
+    parse_summary_output,
+    store_manual_material,
+    store_material,
+    summarize_uploaded_materials,
+    update_manual_material,
+    update_material_summary,
+)
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, provider_command, transient_provider_error
 from reports_app.risks import evaluate_risks, progress_status
-from reports_app.server import add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
+from reports_app.server import Handler, add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key
 from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
 
@@ -111,17 +126,147 @@ class CoreTest(unittest.TestCase):
         self.assertIn("profile=yes", input_summary(context))
         self.assertIn("plan=yes", input_summary(context))
 
-    def test_material_upload_and_extraction_failure(self):
+    def test_material_upload_and_pdf_extraction(self):
         txt = base64.b64encode(b"hello").decode()
         material_id = store_material(self.conn, self.project_id, {"filename": "notes.txt", "content_base64": txt})
         row = self.conn.execute("SELECT source_type, extraction_status, extracted_text FROM materials WHERE id = ?", (material_id,)).fetchone()
         self.assertEqual(row["source_type"], "upload")
         self.assertEqual(row["extraction_status"], "extracted")
         self.assertEqual(row["extracted_text"], "hello")
-        pdf = base64.b64encode(b"%PDF").decode()
-        material_id = store_material(self.conn, self.project_id, {"filename": "brief.pdf", "content_base64": pdf})
-        row = self.conn.execute("SELECT extraction_status FROM materials WHERE id = ?", (material_id,)).fetchone()
-        self.assertEqual(row["extraction_status"], "failed")
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})
+        })
+        contents = StreamObject()
+        contents.set_data(b"BT /F1 12 Tf 72 720 Td (PDF hello) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(contents)
+        output = io.BytesIO()
+        writer.write(output)
+        material_id = store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "项目 简报.pdf", "content_base64": base64.b64encode(output.getvalue()).decode()},
+        )
+        row = self.conn.execute(
+            "SELECT filename, extraction_status, extracted_text FROM materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        self.assertEqual(row["filename"], "项目 简报.pdf")
+        self.assertEqual(row["extraction_status"], "extracted")
+        self.assertIn("PDF hello", row["extracted_text"])
+
+        broken_id = store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "broken.pdf", "content_base64": base64.b64encode(b"%PDF").decode()},
+        )
+        broken = self.conn.execute("SELECT extraction_status FROM materials WHERE id = ?", (broken_id,)).fetchone()
+        self.assertEqual(broken["extraction_status"], "failed")
+
+        data = workspace(self.conn, self.project_id)
+        self.assertNotIn("broken.pdf", {item["filename"] for item in data["materials"]})
+        self.assertIn(
+            "broken.pdf",
+            {item["details"].split(":", 1)[0] for item in data["source_diagnostics"] if item["kind"] == "material"},
+        )
+
+    def test_batch_ai_summaries_and_manual_summary_edit(self):
+        ids = [
+            store_material(
+                self.conn,
+                self.project_id,
+                {"filename": name, "content_base64": base64.b64encode(content.encode()).decode()},
+            )
+            for name, content in (("第一份.txt", "alpha details"), ("second.md", "beta details"))
+        ]
+        summarize_uploaded_materials(self.conn, self.project_id, ids)
+        rows = self.conn.execute(
+            "SELECT id, summary, summary_status FROM materials WHERE id IN (?, ?) ORDER BY id", ids
+        ).fetchall()
+        self.assertEqual([row["summary_status"] for row in rows], ["generated", "generated"])
+        self.assertIn("第一份.txt", rows[0]["summary"])
+        self.assertIn("alpha details", rows[0]["summary"])
+
+        update_material_summary(self.conn, self.project_id, ids[0], {"summary": "手工修订摘要"})
+        edited = self.conn.execute(
+            "SELECT summary, summary_status FROM materials WHERE id = ?", (ids[0],)
+        ).fetchone()
+        self.assertEqual(dict(edited), {"summary": "手工修订摘要", "summary_status": "manual"})
+
+    def test_ai_summary_prompt_and_json_parser_keep_files_separate(self):
+        items = [
+            {"id": 7, "filename": "原始 名称.pdf", "text_start": "正文开头"},
+            {"id": 8, "filename": "notes.txt", "text_start": "leading text"},
+        ]
+        prompt = build_summary_prompt(items)
+        self.assertIn("原始 名称.pdf", prompt)
+        parsed = parse_summary_output(
+            '```json\n[{"id": 7, "summary": "摘要一"}, {"id": 8, "summary": "Summary two"}]\n```',
+            items,
+        )
+        self.assertEqual(parsed, {7: "摘要一", 8: "Summary two"})
+
+    def test_material_api_accepts_multiple_files_in_one_request(self):
+        manual_id = store_manual_material(
+            self.conn, self.project_id, {"title": "Manual preview", "content": "complete manual content"}
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            payload = json.dumps({
+                "files": [
+                    {"filename": "one.txt", "content_base64": base64.b64encode(b"first body").decode()},
+                    {"filename": "two.md", "content_base64": base64.b64encode(b"second body").decode()},
+                ]
+            })
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                f"/api/projects/{self.project_id}/materials",
+                body=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            result = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 201)
+            self.assertEqual(len(result["ids"]), 2)
+            rows = self.conn.execute(
+                "SELECT filename, summary_status FROM materials WHERE id IN (?, ?) ORDER BY id", result["ids"]
+            ).fetchall()
+            self.assertEqual([row["filename"] for row in rows], ["one.txt", "two.md"])
+            self.assertEqual([row["summary_status"] for row in rows], ["generated", "generated"])
+
+            for material_id, expected_content in (
+                (result["ids"][0], "first body"),
+                (manual_id, "complete manual content"),
+            ):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request("GET", f"/api/projects/{self.project_id}/materials/{material_id}")
+                response = client.getresponse()
+                detail = json.loads(response.read())
+                client.close()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(detail["content"], expected_content)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", f"/api/projects/999/materials/{result['ids'][0]}")
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_manual_material_can_be_updated_only_in_current_week(self):
         material_id = store_manual_material(

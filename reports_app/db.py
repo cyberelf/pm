@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS materials (
     extraction_status TEXT NOT NULL,
     extracted_text TEXT NOT NULL DEFAULT '',
     extraction_error TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    summary_status TEXT NOT NULL DEFAULT 'pending',
+    summary_error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -172,6 +175,19 @@ def migrate_schema(conn):
     material_columns = {row["name"] for row in conn.execute("PRAGMA table_info(materials)")}
     if "source_type" not in material_columns:
         conn.execute("ALTER TABLE materials ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'")
+    if "summary" not in material_columns:
+        conn.execute("ALTER TABLE materials ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+    if "summary_status" not in material_columns:
+        conn.execute("ALTER TABLE materials ADD COLUMN summary_status TEXT NOT NULL DEFAULT 'pending'")
+    if "summary_error" not in material_columns:
+        conn.execute("ALTER TABLE materials ADD COLUMN summary_error TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        UPDATE materials
+        SET summary = filename || '：待生成或补充摘要'
+        WHERE source_type = 'upload' AND summary = ''
+        """
+    )
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(github_repos)")}
     if "notes" not in columns:
         conn.execute("ALTER TABLE github_repos ADD COLUMN notes TEXT NOT NULL DEFAULT ''")

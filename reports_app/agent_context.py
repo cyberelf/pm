@@ -170,7 +170,8 @@ def materials(conn, project, week_key, include_excerpt=True):
     for row in conn.execute(
         """
         SELECT id, filename, source_type, content_type, size_bytes, extraction_status,
-               extraction_error, extracted_text, created_at, updated_at
+               extraction_error, extracted_text, summary, summary_status, summary_error,
+               created_at, updated_at
         FROM materials WHERE project_id = ? ORDER BY id DESC
         """,
         (project["id"],),
@@ -184,6 +185,9 @@ def materials(conn, project, week_key, include_excerpt=True):
             "size_bytes": row["size_bytes"],
             "extraction_status": row["extraction_status"],
             "extraction_error": row["extraction_error"],
+            "summary": row["summary"],
+            "summary_status": row["summary_status"],
+            "summary_error": row["summary_error"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "is_current_week": bool(created and week_key_for(created, project["timezone"]) == week_key),
@@ -198,7 +202,8 @@ def material(conn, project, material_id):
     row = conn.execute(
         """
         SELECT id, filename, source_type, content_type, size_bytes, extraction_status,
-               extraction_error, extracted_text, created_at, updated_at
+               extraction_error, extracted_text, summary, summary_status, summary_error,
+               created_at, updated_at
         FROM materials WHERE project_id = ? AND id = ?
         """,
         (project["id"], material_id),

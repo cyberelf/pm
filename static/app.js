@@ -13,6 +13,7 @@ const $ = (id) => document.getElementById(id);
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
+    cache: "no-store",
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
@@ -64,7 +65,11 @@ async function loadState() {
 }
 
 async function loadWorkspace() {
-  state.workspace = await api(`/api/projects/${state.projectId}/workspace`);
+  updateWorkspace(await api(`/api/projects/${state.projectId}/workspace`));
+}
+
+function updateWorkspace(workspace) {
+  state.workspace = workspace;
   render();
 }
 
@@ -99,7 +104,18 @@ function render() {
   renderSources(ws);
   renderReport(ws);
   renderRisks(ws);
+  ensureTableScrollContainers();
   switchTab(state.tab);
+}
+
+function ensureTableScrollContainers() {
+  document.querySelectorAll("table.table").forEach((table) => {
+    if (table.parentElement && table.parentElement.classList.contains("table-scroll")) return;
+    const scroller = document.createElement("div");
+    scroller.className = "table-scroll";
+    table.parentNode.insertBefore(scroller, table);
+    scroller.appendChild(table);
+  });
 }
 
 function renderOverview(ws) {
@@ -334,9 +350,11 @@ function renderSources(ws) {
     <div class="grid-2 sources-grid">
       <div class="panel">
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
-        <input id="material-file" type="file" accept=".md,.markdown,.txt,.pdf">
-        <button onclick="uploadMaterial()">Upload</button>
-        <table class="table"><thead><tr><th>File</th><th>Status</th><th>Created</th><th>Updated</th><th>Message</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map(m => `<tr><td>${escapeHtml(m.filename)}</td><td><span class="status ${m.extraction_status}">${m.extraction_status}</span></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td>${escapeHtml(m.extraction_error || "")}</td></tr>`).join("") || "<tr><td colspan='5'>No uploaded materials.</td></tr>"}</tbody></table>
+        <div class="upload-controls">
+          <input id="material-file" type="file" accept=".md,.markdown,.txt,.pdf" multiple>
+          <button onclick="uploadMaterial()">Upload selected</button>
+        </div>
+        <table class="table material-table"><thead><tr><th>File</th><th>Extraction</th><th>Summary</th><th>Updated</th><th>Action</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map(renderUploadedMaterialRow).join("") || "<tr><td colspan='5'>No uploaded materials.</td></tr>"}</tbody></table>
       </div>
       <div class="panel">
         <div class="panel-head"><h2>手工资料</h2><span>仅本周录入的资料可以修改</span></div>
@@ -351,20 +369,64 @@ function renderSources(ws) {
   `;
 }
 
+function renderUploadedMaterialRow(m) {
+  const extractionMessage = m.extraction_error ? `<div class="material-message">${escapeHtml(m.extraction_error)}</div>` : "";
+  const summaryMessage = m.summary_error ? `<div class="material-message">AI 摘要失败，当前显示回退摘要：${escapeHtml(m.summary_error)}</div>` : "";
+  return `<tr>
+    <td><strong>${escapeHtml(m.filename)}</strong><small>${formatBytes(m.size_bytes)}</small></td>
+    <td><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
+    <td><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
+    <td>${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
+    <td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateMaterialSummary(${m.id})">Save summary</button></div></td>
+  </tr>`;
+}
+
 function renderManualMaterialRow(m) {
   const content = escapeHtml(m.content || "");
   if (m.editable) {
-    return `<tr><td><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><button onclick="updateManualMaterial(${m.id})">Save</button></td></tr>`;
+    return `<tr><td><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateManualMaterial(${m.id})">Save</button></div></td></tr>`;
   }
-  return `<tr><td>${escapeHtml(m.filename)}</td><td><div class="locked-material">${content}</div></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><span class="status">locked</span></td></tr>`;
+  return `<tr><td>${escapeHtml(m.filename)}</td><td><div class="locked-material">${content}</div></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><span class="status">locked</span></div></td></tr>`;
+}
+
+async function previewMaterial(id) {
+  const dialog = $("material-preview-dialog");
+  $("material-preview-title").textContent = "正在加载资料…";
+  $("material-preview-meta").textContent = "";
+  $("material-preview-content").textContent = "";
+  dialog.showModal();
+  try {
+    const material = await api(`/api/projects/${state.projectId}/materials/${id}`);
+    $("material-preview-title").textContent = material.filename;
+    $("material-preview-meta").textContent = `${material.source_type === "manual" ? "手工资料" : material.content_type} · ${formatBytes(material.size_bytes)} · ${material.extraction_status}`;
+    $("material-preview-content").textContent = material.content || "暂无可预览的文本内容";
+  } catch (error) {
+    $("material-preview-title").textContent = "资料预览失败";
+    $("material-preview-content").textContent = error.message;
+  }
 }
 
 async function uploadMaterial() {
-  const file = $("material-file").files[0];
-  if (!file) return toast("Choose a file");
-  const content_base64 = await fileToBase64(file);
-  await api(`/api/projects/${state.projectId}/materials`, { method: "POST", body: JSON.stringify({ filename: file.name, content_type: file.type, content_base64 }) });
-  toast("Material uploaded");
+  const files = Array.from($("material-file").files || []);
+  if (!files.length) return toast("Choose one or more files");
+  await withBusy("正在上传资料", `正在提取 ${files.length} 个文件并生成 AI 摘要…`, async () => {
+    const payloads = await Promise.all(files.map(async (file) => ({
+      filename: file.name,
+      content_type: file.type,
+      content_base64: await fileToBase64(file),
+    })));
+    await api(`/api/projects/${state.projectId}/materials`, { method: "POST", body: JSON.stringify({ files: payloads }) });
+    await loadWorkspace();
+  });
+  toast(`${files.length} 个资料文件已上传`);
+}
+
+async function updateMaterialSummary(id) {
+  await api(`/api/projects/${state.projectId}/materials/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ summary: $(`material-summary-${id}`).value }),
+  });
+  toast("资料摘要已更新");
   await loadWorkspace();
 }
 
@@ -423,6 +485,7 @@ async function loadRepoBranches(id) {
   }
   state.branchOptions[id] = data.branches || [];
   renderSettings(state.workspace);
+  ensureTableScrollContainers();
   const picker = $(`branch-picker-${id}`);
   if (picker) picker.open = true;
 }
@@ -494,8 +557,11 @@ async function generateReport() {
     document.querySelectorAll(".generate-action").forEach((button) => button.classList.add("is-loading"));
     try {
       toast("Generation started");
-      await api(`/api/projects/${state.projectId}/generate`, { method: "POST", body: JSON.stringify({ force: true }) });
-      await loadWorkspace();
+      const workspace = await api(`/api/projects/${state.projectId}/generate`, {
+        method: "POST",
+        body: JSON.stringify({ force: true }),
+      });
+      updateWorkspace(workspace);
       toast("Generation finished");
     } finally {
       document.querySelectorAll(".generate-action").forEach((button) => button.classList.remove("is-loading"));
@@ -540,6 +606,12 @@ function statusOptions(value) {
 function sel(value, expected) { return (value || "planned") === expected ? "selected" : ""; }
 function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[c])); }
 function escapeAttr(value) { return escapeHtml(value); }
+function formatBytes(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -573,6 +645,7 @@ $("new-project").onclick = () => {
   $("project-dialog").showModal();
 };
 $("cancel-project").onclick = () => $("project-dialog").close();
+$("close-material-preview").onclick = () => $("material-preview-dialog").close();
 $("project-form").onsubmit = async (event) => {
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(event.target).entries());

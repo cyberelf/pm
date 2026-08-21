@@ -101,6 +101,10 @@ The first release runs as a local personal web application: the browser provides
 
    Rationale: a personal workspace may still need to mention an external collaborator, vendor, stakeholder, or responsible party in the plan, but those labels must not create system users, roles, membership, or permissions. The alternative was removing owner fields entirely, which would weaken planning expressiveness, or linking owners to users, which would reintroduce a team model that is out of scope.
 
+17. Extract uploaded PDFs locally and summarize a multi-file upload through one configured provider invocation.
+
+   Rationale: local PDF extraction keeps original documents inside the personal workspace, while one bounded prompt containing each original filename and leading extracted text avoids unnecessary provider calls. Summaries are persisted per material and remain manually editable. If generation fails, upload still succeeds with an explicit fallback summary and failure status.
+
 ## Risks / Trade-offs
 
 - CLI provider availability may vary by deployment environment -> Add provider health checks, command path configuration, timeout limits, and clear job failure states.

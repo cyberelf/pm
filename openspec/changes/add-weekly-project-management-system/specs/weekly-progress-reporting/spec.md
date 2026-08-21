@@ -60,6 +60,10 @@ The system SHALL allow the workspace user to manually generate or regenerate the
 - **WHEN** a manually triggered regeneration completes successfully for the current project week
 - **THEN** the system replaces the visible project-week report content with the new Markdown report
 
+#### Scenario: Refresh visible report after manual regeneration
+- **WHEN** a manual generation or regeneration request finishes
+- **THEN** the report UI immediately renders the returned current workspace state without requiring a browser refresh
+
 ### Requirement: Current weekly report overwrite
 The system SHALL keep only the latest successful generated Markdown report as the canonical visible report for a project week.
 

@@ -84,3 +84,14 @@
 - [x] 9.6 Add tests for PDF export HTML sanitization, progress status, deterministic risk warning rules, source/generation diagnostic separation, no promotion action for generated report risk forecasts, and separation of generated report risk forecasts from system warnings
 - [x] 9.7 Run OpenSpec validation and the project test suite before marking the change complete
 - [x] 9.8 Verify local runtime setup documentation covers required CLIs, local workspace storage, and the remote deployment non-goal
+
+## 10. Multi-file PDF Materials and Summaries
+
+- [x] 10.1 Implement local PDF text extraction while preserving original upload filenames
+- [x] 10.2 Implement one-request multi-file upload and explicit upload/summary loading state
+- [x] 10.3 Generate per-file AI summaries from original filenames and leading extracted text with a non-blocking fallback
+- [x] 10.4 Add editable persisted file summaries to the workspace and report context
+- [x] 10.5 Add regression tests and run the required project and OpenSpec validation
+- [x] 10.6 Hide failed uploaded-file records from the normal material list while retaining diagnostics
+- [x] 10.7 Add a scoped material-detail API for uploaded and manually entered content
+- [x] 10.8 Add and verify a shared read-only material preview modal

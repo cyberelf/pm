@@ -34,7 +34,7 @@ def assemble_context(conn, project_id, week_key=None):
     ).fetchone()
     materials = conn.execute(
         """
-        SELECT filename, source_type, extraction_status, extracted_text,
+        SELECT filename, source_type, extraction_status, extracted_text, summary,
                extraction_error, created_at, updated_at
         FROM materials WHERE project_id = ? ORDER BY id DESC
         """,
@@ -86,6 +86,7 @@ def assemble_context(conn, project_id, week_key=None):
                 "source_type": row["source_type"],
                 "extraction_status": row["extraction_status"],
                 "extraction_error": row["extraction_error"],
+                "summary": row["summary"],
                 "excerpt": (row["extracted_text"] or "")[:8000],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -98,6 +99,7 @@ def assemble_context(conn, project_id, week_key=None):
                 "source_type": row["source_type"],
                 "extraction_status": row["extraction_status"],
                 "extraction_error": row["extraction_error"],
+                "summary": row["summary"],
                 "excerpt": (row["extracted_text"] or "")[:8000],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],

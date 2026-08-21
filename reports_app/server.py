@@ -13,7 +13,14 @@ from .config import DB_PATH, STATIC_DIR, WORKSPACE_USER
 from .db import connect, create_project, init_db, row_to_dict
 from .github import check_repo, list_branches, refresh_repo
 from .markdown import render_markdown
-from .materials import material_is_editable, store_manual_material, store_material, update_manual_material
+from .materials import (
+    material_is_editable,
+    store_manual_material,
+    store_material,
+    summarize_uploaded_materials,
+    update_manual_material,
+    update_material_summary,
+)
 from .pdf_export import pdf_filename, report_pdf_bytes
 from .reports import changed_since_last_success, generate_report
 from .risks import evaluate_risks, progress_status
@@ -139,6 +146,13 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 4 and parts[3] == "workspace" and method == "GET":
                     self.json(workspace(conn, project_id))
                     return
+                if len(parts) == 5 and parts[3] == "materials" and method == "GET":
+                    material = material_detail(conn, project_id, int(parts[4]))
+                    if not material:
+                        self.error(HTTPStatus.NOT_FOUND, "material not found")
+                        return
+                    self.json(material)
+                    return
                 if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
                     self.report_pdf(conn, project_id, parts[4])
                     return
@@ -151,14 +165,23 @@ class Handler(BaseHTTPRequestHandler):
                     payload = self.body_json()
                     if payload.get("source_type") == "manual":
                         material_id = store_manual_material(conn, project_id, payload)
+                        material_ids = [material_id]
                     else:
-                        material_id = store_material(conn, project_id, payload)
+                        files = payload.get("files") if "files" in payload else [payload]
+                        if not isinstance(files, list) or not files:
+                            raise ValidationError("at least one material file is required")
+                        material_ids = [store_material(conn, project_id, item) for item in files]
+                        summarize_uploaded_materials(conn, project_id, material_ids)
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json({"id": material_id}, HTTPStatus.CREATED)
+                    self.json({"id": material_ids[0], "ids": material_ids}, HTTPStatus.CREATED)
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "PUT":
-                    update_manual_material(conn, project_id, int(parts[4]), self.body_json())
+                    payload = self.body_json()
+                    if "summary" in payload:
+                        update_material_summary(conn, project_id, int(parts[4]), payload)
+                    else:
+                        update_manual_material(conn, project_id, int(parts[4]), payload)
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     self.json(workspace(conn, project_id))
@@ -410,8 +433,12 @@ def material_rows(conn, project_id, timezone):
     for row in conn.execute(
         """
         SELECT id, filename, source_type, content_type, size_bytes, extraction_status,
-               extraction_error, extracted_text, created_at, updated_at
-        FROM materials WHERE project_id = ? ORDER BY id DESC
+               extraction_error, extracted_text, summary, summary_status, summary_error,
+               created_at, updated_at
+        FROM materials
+        WHERE project_id = ?
+          AND (source_type = 'manual' OR extraction_status != 'failed')
+        ORDER BY id DESC
         """,
         (project_id,),
     ):
@@ -423,6 +450,23 @@ def material_rows(conn, project_id, timezone):
             item.pop("extracted_text", None)
         rows.append(item)
     return rows
+
+
+def material_detail(conn, project_id, material_id):
+    row = conn.execute(
+        """
+        SELECT id, filename, source_type, content_type, size_bytes, extraction_status,
+               extraction_error, extracted_text, summary, summary_status, created_at, updated_at
+        FROM materials
+        WHERE id = ? AND project_id = ?
+        """,
+        (material_id, project_id),
+    ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["content"] = item.pop("extracted_text") or ""
+    return item
 
 
 def update_settings(conn, project_id, payload):
