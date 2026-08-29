@@ -41,6 +41,17 @@ scripts/install_service.sh
 curl --noproxy '*' http://127.0.0.1:8765/api/state
 ```
 
+## Service Management
+
+- Use the macOS LaunchAgent as the normal long-running service. Install or restart it with `scripts/install_service.sh`; the service label is `com.cyberelf.weeklyreports`.
+- Re-run `scripts/install_service.sh` after changing backend Python code, the service environment, the port, or LaunchAgent configuration so the running process uses the new version.
+- Verify the running service with `curl --noproxy '*' http://127.0.0.1:8765/api/state`. When a change adds or modifies an API, verify that endpoint against the running service as well.
+- Inspect `data/server.log` and `data/server.err.log` when startup or API verification fails. Check the loaded service with `launchctl print "gui/$(id -u)/com.cyberelf.weeklyreports"`.
+- Remove the LaunchAgent with `scripts/uninstall_service.sh` when it should no longer run. Reinstall it with `scripts/install_service.sh` rather than editing the generated plist directly.
+- `scripts/start_server.sh` and `scripts/stop_server.sh` are for temporary manual operation. Do not run the manual server and LaunchAgent on the same port; stop or uninstall one mode before starting the other.
+- The default service port is `8765`. Set `PORT` explicitly when installing or manually starting on another port, and use the same port in health checks.
+- Frontend-only changes do not require a service restart, but verify them with a fresh browser load and account for static asset caching before diagnosing stale UI behavior.
+
 ## UI Guidelines
 
 - Follow `DESIGN.md`.

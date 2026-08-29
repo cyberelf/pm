@@ -14,7 +14,10 @@ from .db import connect, create_project, init_db, row_to_dict
 from .github import check_repo, list_branches, refresh_repo
 from .markdown import render_markdown
 from .materials import (
+    delete_material,
     material_is_editable,
+    material_is_unlocked,
+    remove_material_file,
     store_manual_material,
     store_material,
     summarize_uploaded_materials,
@@ -26,6 +29,7 @@ from .reports import changed_since_last_success, generate_report
 from .risks import evaluate_risks, progress_status
 from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
+from .todos import close_todo, create_todo, todo_rows, update_todo
 from .validation import (
     ValidationError,
     require_project_name,
@@ -110,6 +114,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         self.handle_write("PUT")
 
+    def do_DELETE(self):
+        self.handle_write("DELETE")
+
     def handle_write(self, method):
         try:
             parsed = urlparse(self.path)
@@ -144,6 +151,24 @@ class Handler(BaseHTTPRequestHandler):
                 project_id = create_project(conn, payload)
                 conn.commit()
                 self.json({"id": project_id}, HTTPStatus.CREATED)
+                return
+            if path == "/api/todos" and method == "GET":
+                self.json({"todos": todo_rows(conn)})
+                return
+            if path == "/api/todos" and method == "POST":
+                todo_id = create_todo(conn, self.body_json())
+                conn.commit()
+                self.json({"id": todo_id, "todos": todo_rows(conn)}, HTTPStatus.CREATED)
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "PUT":
+                update_todo(conn, int(parts[2]), self.body_json())
+                conn.commit()
+                self.json({"todos": todo_rows(conn)})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "todos"] and parts[3] == "close" and method == "POST":
+                material_id = close_todo(conn, int(parts[2]), self.body_json())
+                conn.commit()
+                self.json({"material_id": material_id, "todos": todo_rows(conn)})
                 return
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects":
                 project_id = int(parts[2])
@@ -191,6 +216,13 @@ class Handler(BaseHTTPRequestHandler):
                         update_manual_material(conn, project_id, int(parts[4]), payload)
                     evaluate_risks(conn, project_id)
                     conn.commit()
+                    self.json(workspace(conn, project_id))
+                    return
+                if len(parts) == 5 and parts[3] == "materials" and method == "DELETE":
+                    storage_path = delete_material(conn, project_id, int(parts[4]))
+                    evaluate_risks(conn, project_id)
+                    conn.commit()
+                    remove_material_file(storage_path)
                     self.json(workspace(conn, project_id))
                     return
                 if len(parts) == 4 and parts[3] == "repos" and method == "POST":
@@ -471,6 +503,7 @@ def material_rows(conn, project_id, timezone):
     ):
         item = dict(row)
         item["editable"] = material_is_editable(row, timezone)
+        item["deletable"] = material_is_unlocked(row, timezone)
         if item["source_type"] == "manual":
             item["content"] = item.pop("extracted_text") or ""
         else:

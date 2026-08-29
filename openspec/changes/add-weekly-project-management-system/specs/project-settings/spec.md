@@ -107,6 +107,14 @@ The system SHALL allow a user to add project context through manual fields, uplo
 - **WHEN** a user attempts to edit manually entered material created before the current project week
 - **THEN** the system rejects the edit and keeps the historical material unchanged
 
+#### Scenario: Delete unlocked project material
+- **WHEN** a user deletes an uploaded or manually entered material created in the current project week
+- **THEN** the system removes the project-scoped material and any locally stored uploaded file
+
+#### Scenario: Reject deletion of locked project material
+- **WHEN** a user attempts to delete a material created before the current project week
+- **THEN** the system rejects the deletion and keeps the historical material unchanged
+
 #### Scenario: Reject unsupported project material
 - **WHEN** a user uploads a file that is not Markdown, plain text, or PDF
 - **THEN** the system rejects the upload and reports that the file type is unsupported

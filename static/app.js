@@ -1,9 +1,24 @@
 const CHINA_TIMEZONE = "Asia/Shanghai";
 const TRACK_ALL_BRANCHES = "*";
+// Font Awesome Free 6.7.2, CC BY 4.0: https://fontawesome.com/license/free
+const FA_ICONS = {
+  gear: {
+    viewBox: "0 0 512 512",
+    path: "M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z",
+  },
+  report: {
+    viewBox: "0 0 384 512",
+    path: "M64 0C28.7 0 0 28.7 0 64V448c0 35.3 28.7 64 64 64H320c35.3 0 64-28.7 64-64V160H256c-17.7 0-32-14.3-32-32V0H64zM256 0V128H384L256 0zM96 224c0-8.8 7.2-16 16-16H272c8.8 0 16 7.2 16 16s-7.2 16-16 16H112c-8.8 0-16-7.2-16-16zm0 64c0-8.8 7.2-16 16-16H272c8.8 0 16 7.2 16 16s-7.2 16-16 16H112c-8.8 0-16-7.2-16-16zm0 64c0-8.8 7.2-16 16-16H208c8.8 0 16 7.2 16 16s-7.2 16-16 16H112c-8.8 0-16-7.2-16-16z",
+  },
+};
 const state = {
   projects: [],
   projectId: Number(localStorage.getItem("currentProjectId")) || null,
   workspace: null,
+  todos: [],
+  todoEditorId: null,
+  pendingReportProjectId: null,
+  mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   branchOptions: {},
   tab: "overview",
   sourceTab: "files",
@@ -63,6 +78,7 @@ async function loadState() {
   }
   renderProjects();
   if (state.projectId) await loadWorkspace();
+  await switchAppMode(state.mode, false);
 }
 
 async function loadWorkspace() {
@@ -74,12 +90,203 @@ function updateWorkspace(workspace) {
   render();
 }
 
+async function loadTodos() {
+  const data = await api("/api/todos");
+  state.todos = data.todos || [];
+  renderTodoBoard();
+}
+
+function updateTodos(data) {
+  state.todos = data.todos || [];
+  renderTodoBoard();
+}
+
+async function switchAppMode(mode, persist = true) {
+  state.mode = mode === "todos" ? "todos" : "reports";
+  if (persist) localStorage.setItem("workspaceMode", state.mode);
+  const showingTodos = state.mode === "todos";
+  document.body.classList.toggle("todo-mode", showingTodos);
+  $("page-current-label").textContent = showingTodos ? "TODO" : "周报";
+  $("page-target-label").textContent = showingTodos ? "周报" : "TODO";
+  $("page-corner").setAttribute("aria-label", `当前页面：${showingTodos ? "TODO" : "周报"}；切换到${showingTodos ? "周报" : "TODO"}`);
+  $("project-sidebar").classList.toggle("hidden", showingTodos);
+  $("report-view").classList.toggle("hidden", showingTodos);
+  $("todo-view").classList.toggle("hidden", !showingTodos);
+  if (showingTodos) {
+    await loadTodos();
+  } else if (state.projectId) {
+    await loadWorkspace();
+  }
+}
+
+function renderTodoBoard() {
+  const board = $("todo-board");
+  if (!board) return;
+  const columns = [
+    { status: "todo", title: "待办" },
+    { status: "doing", title: "进行中" },
+    { status: "closed", title: "已关闭" },
+  ];
+  board.innerHTML = columns.map((column) => {
+    const items = state.todos.filter((todo) => todo.status === column.status);
+    return `
+      <section class="todo-column todo-column-${column.status}">
+        <div class="todo-column-head"><h2>${column.title}</h2><span>${items.length}</span></div>
+        <div class="todo-card-list">
+          ${items.map(renderTodoCard).join("")}
+          ${column.status === "todo" ? renderTodoDraft() : (!items.length ? `<p class="todo-empty">暂无${column.title}事项</p>` : "")}
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
+function renderTodoCard(todo) {
+  if (state.todoEditorId === todo.id) return renderTodoEditor(todo);
+  const openActions = todo.status === "todo"
+    ? `<button onclick="event.stopPropagation(); moveTodo(${todo.id}, 'doing')">开始</button><button class="primary" onclick="event.stopPropagation(); openCloseTodo(${todo.id})">关闭</button>`
+    : todo.status === "doing"
+      ? `<button onclick="event.stopPropagation(); moveTodo(${todo.id}, 'todo')">移回待办</button><button class="primary" onclick="event.stopPropagation(); openCloseTodo(${todo.id})">关闭</button>`
+      : "";
+  const archive = todo.project_id
+    ? `<button onclick="event.stopPropagation(); openTodoMaterial(${todo.project_id}, ${todo.material_id})">查看项目资料</button>`
+    : "";
+  const editable = true;
+  return `
+    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" ${editable ? `onclick="beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter') beginTodoEdit(${todo.id})"` : ""}>
+      <h3>${escapeHtml(todo.title)}</h3>
+      ${todo.description ? `<div class="todo-markdown">${todo.description_html}</div>` : ""}
+      ${todo.status === "closed" ? `
+        <div class="todo-close-reason"><span>关闭原因</span><div class="todo-markdown">${todo.close_reason_html}</div></div>
+        ${todo.project_name ? `<span class="todo-project">${escapeHtml(todo.project_name)}</span>` : ""}
+      ` : ""}
+      <div class="todo-card-meta">更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</div>
+      ${(openActions || archive) ? `<div class="todo-card-actions">${openActions}${archive}</div>` : ""}
+    </article>
+  `;
+}
+
+function renderTodoDraft() {
+  if (state.todoEditorId === "draft") {
+    return renderTodoEditor({ id: "draft", title: "", description: "" });
+  }
+  return `
+    <button class="todo-draft" type="button" onclick="beginTodoEdit('draft')">
+      <strong>＋ 添加 TODO</strong>
+      <span>点击直接编辑 · 支持 Markdown</span>
+    </button>
+  `;
+}
+
+function renderTodoEditor(todo) {
+  const id = todo.id;
+  return `
+    <article class="todo-card todo-card-editor" data-todo-editor="${id}" onfocusout="finishTodoEdit(event, '${id}')" onkeydown="handleTodoEditorKey(event, '${id}')">
+      <input id="todo-editor-title-${id}" class="todo-title-input" maxlength="200" placeholder="TODO 标题" value="${escapeAttr(todo.title || "")}">
+      <textarea id="todo-editor-description-${id}" class="todo-description-input" maxlength="4000" placeholder="补充说明，支持 Markdown">${escapeHtml(todo.description || "")}</textarea>
+      <span class="todo-autosave-hint">离开卡片后自动保存</span>
+    </article>
+  `;
+}
+
+function beginTodoEdit(id) {
+  if (state.todoEditorId === id) return;
+  state.todoEditorId = id;
+  renderTodoBoard();
+  requestAnimationFrame(() => {
+    const title = $(`todo-editor-title-${id}`);
+    if (title) title.focus();
+  });
+}
+
+function handleTodoEditorKey(event, id) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    state.todoEditorId = null;
+    renderTodoBoard();
+  } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    event.currentTarget.querySelector("textarea")?.blur();
+    event.currentTarget.querySelector("input")?.blur();
+  }
+}
+
+function finishTodoEdit(event, id) {
+  const card = event.currentTarget;
+  setTimeout(() => {
+    if (card.contains(document.activeElement)) return;
+    saveTodoEditor(id).catch((error) => toast(error.message));
+  }, 0);
+}
+
+async function saveTodoEditor(rawId) {
+  if (String(state.todoEditorId) !== String(rawId)) return;
+  const title = $(`todo-editor-title-${rawId}`)?.value.trim() || "";
+  const description = $(`todo-editor-description-${rawId}`)?.value || "";
+  if (!title) {
+    if (rawId === "draft") {
+      state.todoEditorId = null;
+      renderTodoBoard();
+      return;
+    }
+    toast("TODO 标题不能为空");
+    $(`todo-editor-title-${rawId}`)?.focus();
+    return;
+  }
+  const path = rawId === "draft" ? "/api/todos" : `/api/todos/${Number(rawId)}`;
+  const method = rawId === "draft" ? "POST" : "PUT";
+  const todo = rawId === "draft" ? null : state.todos.find((item) => item.id === Number(rawId));
+  const payload = { title, description };
+  if (todo) payload.status = todo.status;
+  const data = await api(path, { method, body: JSON.stringify(payload) });
+  state.todoEditorId = null;
+  updateTodos(data);
+  toast(rawId === "draft" ? "TODO 已创建" : "TODO 已自动保存");
+}
+
+async function moveTodo(id, status) {
+  updateTodos(await api(`/api/todos/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ status }),
+  }));
+}
+
+function openCloseTodo(id) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) return;
+  $("close-todo-id").value = String(id);
+  $("close-todo-title").textContent = todo.title;
+  $("close-todo-project").innerHTML = `
+    <option value="">不归属项目</option>
+    ${state.projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("")}
+  `;
+  $("close-todo-form").elements.reason.value = "";
+  $("close-todo-dialog").showModal();
+}
+
+async function openTodoMaterial(projectId, materialId) {
+  state.projectId = Number(projectId);
+  localStorage.setItem("currentProjectId", String(state.projectId));
+  await switchAppMode("reports");
+  switchTab("sources");
+  switchSourceTab("manual");
+  if (materialId) await previewMaterial(Number(materialId));
+}
+
 function renderProjects() {
   $("project-list").innerHTML = state.projects.map(p => `
-    <button class="project-item ${p.id === state.projectId ? "active" : ""}" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
-      <strong>${escapeHtml(p.name)}</strong>
-      ${statusDot(projectDisplayStatus(p), "project-item-status")}
-    </button>
+    <div class="project-row ${p.id === state.projectId ? "active" : ""}">
+      <button class="project-item" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
+        ${statusDot(projectDisplayStatus(p), "project-item-status")}
+        <strong>${escapeHtml(p.name)}</strong>
+      </button>
+      <button class="project-generate" data-project-generate="${p.id}" aria-label="为 ${escapeAttr(p.name)} 生成周报" title="生成周报">
+        ${faIcon("report")}
+      </button>
+      <button class="project-settings ${p.id === state.projectId && state.tab === "settings" ? "active" : ""}" data-project-settings="${p.id}" aria-label="打开 ${escapeAttr(p.name)} 的设置" title="项目设置">
+        ${faIcon("gear")}
+      </button>
+    </div>
   `).join("");
   document.querySelectorAll("[data-project]").forEach(btn => {
     btn.onclick = async () => {
@@ -88,6 +295,21 @@ function renderProjects() {
       await loadWorkspace();
       renderProjects();
     };
+  });
+  document.querySelectorAll("[data-project-settings]").forEach(btn => {
+    btn.onclick = async () => {
+      const projectId = Number(btn.dataset.projectSettings);
+      if (state.projectId !== projectId) {
+        state.projectId = projectId;
+        localStorage.setItem("currentProjectId", String(state.projectId));
+        await loadWorkspace();
+      }
+      switchTab("settings");
+      renderProjects();
+    };
+  });
+  document.querySelectorAll("[data-project-generate]").forEach(btn => {
+    btn.onclick = () => confirmProjectGeneration(Number(btn.dataset.projectGenerate));
   });
 }
 
@@ -147,7 +369,7 @@ function renderOverview(ws) {
           </div>
           <p class="report-updated">更新于 ${escapeHtml(formatChinaTime(ws.report.updated_at))}</p>
         ` : "<p>当前项目周还没有生成周报。</p>"}
-        <div class="row"><button class="primary generate-action" onclick="generateReport()">Generate</button><button onclick="switchTab('report')">Open Report</button></div>
+        <div class="row"><button onclick="switchTab('report')">Open Report</button></div>
       </div>
     </div>
   `;
@@ -453,14 +675,14 @@ function renderUploadedMaterialRow(m) {
     <td><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
     <td><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
     <td>${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
-    <td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateMaterialSummary(${m.id})">Save summary</button></div></td>
+    <td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateMaterialSummary(${m.id})">Save summary</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">Delete</button>` : ""}</div></td>
   </tr>`;
 }
 
 function renderManualMaterialRow(m) {
   const content = escapeHtml(m.content || "");
   if (m.editable) {
-    return `<tr><td><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateManualMaterial(${m.id})">Save</button></div></td></tr>`;
+    return `<tr><td><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateManualMaterial(${m.id})">Save</button><button class="danger" onclick="deleteMaterial(${m.id})">Delete</button></div></td></tr>`;
   }
   return `<tr><td>${escapeHtml(m.filename)}</td><td><div class="locked-material">${content}</div></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><span class="status">locked</span></div></td></tr>`;
 }
@@ -555,6 +777,13 @@ async function updateManualMaterial(id) {
   await loadWorkspace();
 }
 
+async function deleteMaterial(id) {
+  if (!window.confirm("确定删除这条资料？删除后无法恢复。")) return;
+  const workspace = await api(`/api/projects/${state.projectId}/materials/${id}`, { method: "DELETE" });
+  updateWorkspace(workspace);
+  toast("资料已删除");
+}
+
 async function addRepo() {
   await api(`/api/projects/${state.projectId}/repos`, { method: "POST", body: JSON.stringify({ repo: $("repo-input").value, notes: $("repo-notes-input").value }) });
   toast("Repository saved");
@@ -607,7 +836,7 @@ function renderReport(ws) {
     <div class="panel">
       <div class="panel-head">
         <div class="panel-title"><h2>当前周报</h2><span>Latest successful Markdown</span></div>
-        <div class="panel-actions"><button class="primary generate-action" onclick="generateReport()">Regenerate</button>${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
+        <div class="panel-actions">${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
       </div>
       ${jobNotice}
       ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>No report generated yet.</p>"}
@@ -654,38 +883,55 @@ function renderRisks(ws) {
 
 async function generateReport() {
   await withBusy("正在生成周报", "正在收集本周新增资料、GitHub commits，并等待本地 CLI 返回结果...", async () => {
-    document.querySelectorAll(".generate-action").forEach((button) => button.classList.add("is-loading"));
-    try {
-      toast("Generation started");
-      const workspace = await api(`/api/projects/${state.projectId}/generate`, {
-        method: "POST",
-        body: JSON.stringify({ force: true }),
-      });
-      updateWorkspace(workspace);
-      toast("Generation finished");
-    } finally {
-      document.querySelectorAll(".generate-action").forEach((button) => button.classList.remove("is-loading"));
-    }
+    toast("Generation started");
+    const workspace = await api(`/api/projects/${state.projectId}/generate`, {
+      method: "POST",
+      body: JSON.stringify({ force: true }),
+    });
+    updateWorkspace(workspace);
+    toast("Generation finished");
   });
 }
 
-async function scheduleCheck() {
-  await withBusy("正在检查更新时间点", "正在按中国时区判断本周是否需要重新生成...", async () => {
-    await api(`/api/projects/${state.projectId}/schedule-check`, { method: "POST", body: "{}" });
+function confirmProjectGeneration(projectId) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project) return;
+  state.pendingReportProjectId = projectId;
+  $("report-confirm-message").textContent = `项目「${project.name}」将生成或覆盖当前项目周的可见周报。`;
+  $("report-confirm-dialog").showModal();
+}
+
+async function runConfirmedProjectGeneration() {
+  const projectId = state.pendingReportProjectId;
+  state.pendingReportProjectId = null;
+  if (!projectId) return;
+  if (state.projectId !== projectId) {
+    state.projectId = projectId;
+    localStorage.setItem("currentProjectId", String(state.projectId));
     await loadWorkspace();
-    toast("Schedule checked");
-  });
+  }
+  if (state.mode !== "reports") await switchAppMode("reports");
+  switchTab("report");
+  await generateReport();
 }
 
 function switchTab(tab) {
   state.tab = tab;
   document.querySelectorAll(".tabs button").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
+  document.querySelectorAll("[data-project-settings]").forEach(btn => {
+    btn.classList.toggle("active", tab === "settings" && Number(btn.dataset.projectSettings) === state.projectId);
+  });
   document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.add("hidden"));
   const el = $(`tab-${tab}`);
   if (el) el.classList.remove("hidden");
 }
 
 function input(name, label, value, type = "text") { return `<label>${label}<input name="${name}" type="${type}" value="${escapeAttr(value || "")}"></label>`; }
+function faIcon(name) {
+  const icon = FA_ICONS[name];
+  if (!icon) return "";
+  return `<svg class="fa-icon" aria-hidden="true" viewBox="${icon.viewBox}"><path d="${icon.path}"></path></svg>`;
+}
 function timezoneSelect(name, label, value) {
   return `<label>${label}<select name="${name}"><option value="${CHINA_TIMEZONE}" ${(value || CHINA_TIMEZONE) === CHINA_TIMEZONE ? "selected" : ""}>中国标准时间 (Asia/Shanghai)</option></select></label>`;
 }
@@ -803,8 +1049,35 @@ $("project-form").onsubmit = async (event) => {
   await loadState();
   toast("Project created");
 };
-$("generate-report").onclick = generateReport;
-$("schedule-check").onclick = scheduleCheck;
+$("page-corner").onclick = () => switchAppMode(state.mode === "todos" ? "reports" : "todos");
+$("page-corner").onkeydown = (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    switchAppMode(state.mode === "todos" ? "reports" : "todos");
+  }
+};
+$("cancel-report-generation").onclick = () => {
+  state.pendingReportProjectId = null;
+  $("report-confirm-dialog").close();
+};
+$("report-confirm-form").onsubmit = async (event) => {
+  event.preventDefault();
+  $("report-confirm-dialog").close();
+  await runConfirmedProjectGeneration();
+};
+$("report-confirm-dialog").oncancel = () => {
+  state.pendingReportProjectId = null;
+};
+$("cancel-close-todo").onclick = () => $("close-todo-dialog").close();
+$("close-todo-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const payload = Object.fromEntries(new FormData(event.target).entries());
+  const id = Number(payload.todo_id);
+  delete payload.todo_id;
+  updateTodos(await api(`/api/todos/${id}/close`, { method: "POST", body: JSON.stringify(payload) }));
+  $("close-todo-dialog").close();
+  toast(payload.project_id ? "TODO 已关闭并添加到项目资料" : "TODO 已关闭");
+};
 document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => switchTab(btn.dataset.tab));
 
 loadState().catch(err => toast(err.message));

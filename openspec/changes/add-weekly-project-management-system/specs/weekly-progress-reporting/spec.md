@@ -52,6 +52,14 @@ The system SHALL allow the workspace user to manually generate or regenerate the
 - **WHEN** the workspace user triggers manual report generation for a project week
 - **THEN** the system creates a report generation job using the same context snapshot, provider, and project-week identity rules as scheduled generation
 
+#### Scenario: Confirm generation from project row
+- **WHEN** the workspace user activates a project's report-generation icon
+- **THEN** the system presents an application-styled confirmation message box, selects that project if needed after confirmation, and only then creates the manual generation job
+
+#### Scenario: Keep page content free of generation actions
+- **WHEN** the user views the project header, overview, or report page
+- **THEN** manual generation and schedule-check buttons are absent because generation is available from the project row
+
 #### Scenario: Manually force regeneration without changed inputs
 - **WHEN** the workspace user triggers manual report generation and no relevant source input has changed since the last successful report generation
 - **THEN** the system still creates a report generation job for the same project week

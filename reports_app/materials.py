@@ -241,11 +241,47 @@ def update_manual_material(conn, project_id, material_id, payload):
     )
 
 
-def material_is_editable(row, timezone):
-    if row["source_type"] != "manual":
-        return False
+def delete_material(conn, project_id, material_id):
+    row = conn.execute(
+        """
+        SELECT materials.*, projects.timezone
+        FROM materials
+        JOIN projects ON projects.id = materials.project_id
+        WHERE materials.id = ? AND materials.project_id = ?
+        """,
+        (material_id, project_id),
+    ).fetchone()
+    if not row:
+        raise ValidationError("material not found")
+    if not material_is_unlocked(row, row["timezone"]):
+        raise ValidationError("previous-week materials are locked")
+    conn.execute("DELETE FROM materials WHERE id = ? AND project_id = ?", (material_id, project_id))
+    return row["storage_path"] if row["source_type"] == "upload" else ""
+
+
+def remove_material_file(storage_path):
+    if not storage_path:
+        return
+    path = Path(storage_path).resolve()
+    try:
+        path.relative_to(UPLOAD_DIR.resolve())
+    except ValueError:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        # The material record is already gone; leave an inaccessible orphan rather
+        # than turning a successful logical deletion into an API failure.
+        pass
+
+
+def material_is_unlocked(row, timezone):
     created_at = parse_iso(row["created_at"])
     return bool(created_at and week_key_for(created_at, timezone) == current_week_key(timezone))
+
+
+def material_is_editable(row, timezone):
+    return row["source_type"] == "manual" and material_is_unlocked(row, timezone)
 
 
 def safe_manual_title(title):

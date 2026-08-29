@@ -23,6 +23,7 @@ The first release runs as a local personal web application: the browser provides
 - Track progress and generate project risk warnings from deterministic rules over plan status, missing updates, and project gaps.
 - Show source and generation failures as system diagnostics, not project risks.
 - Ask the report provider to include a risk section that can summarize observed risks and forecast likely follow-on risks from the assembled context.
+- Provide a workspace-level TODO board that remains separate from project weekly-report views.
 
 **Non-Goals:**
 
@@ -104,6 +105,30 @@ The first release runs as a local personal web application: the browser provides
 17. Extract uploaded PDFs locally and summarize a multi-file upload through one configured provider invocation.
 
    Rationale: local PDF extraction keeps original documents inside the personal workspace, while one bounded prompt containing each original filename and leading extracted text avoids unnecessary provider calls. Summaries are persisted per material and remain manually editable. If generation fails, upload still succeeds with an explicit fallback summary and failure status.
+
+18. Allow deletion only while a material belongs to the current project week.
+
+   Rationale: current-week inputs are still being curated and may be removed when added by mistake, while previous-week inputs are historical report evidence and must remain locked. The server enforces the project-scoped week check for both uploaded and manually entered materials; deleting an uploaded material also removes its local stored file after the database change commits.
+
+19. Model TODO closure as a dedicated, atomic operation.
+
+   Rationale: every closed TODO must retain a non-empty close reason. The close operation may also select one project; in that case the system creates a Markdown manual material containing the TODO and its close reason in the same database transaction, then records the material association on the TODO. A normal status update cannot bypass these closure requirements.
+
+20. Keep TODO navigation separate from weekly reporting.
+
+   Rationale: TODOs are workspace-level capture items rather than project-week report records. A standalone folded page corner in the top-right alternates between the existing project reporting workspace and a visually distinct dense three-column board. At rest it names the current page; on hover or keyboard focus the corner unfolds downward to reveal the destination page, clearly separating global navigation from contextual actions.
+
+21. Edit TODO cards inline and render their saved descriptions as sanitized Markdown.
+
+   Rationale: board work should stay spatial and immediate. Each card enters an inline title/Markdown editor when clicked and saves automatically when focus leaves the card. Editing a closed card that was archived to a project updates its linked manual material in the same transaction while preserving the close reason. The pending column always ends with a draft card that creates a TODO through the same focus-leave behavior. Read mode uses the existing server-side Markdown sanitizer rather than executing raw HTML in the browser.
+
+22. Place manual report generation on the project row with confirmation.
+
+   Rationale: generation is project-scoped and potentially slow, so its single manual entry point belongs beside each project's settings control. The icon first selects the project when necessary, opens an application-styled confirmation message box, and only starts generation after explicit confirmation. Removing page-level generation and schedule-check buttons keeps the workspace header and report content focused on navigation and results.
+
+23. Render the workspace switch as a borderless paper curl and color-code board columns.
+
+   Rationale: the mode switch should read as a sheet curling from the upper-right corner rather than as a conventional button. Its interactive wrapper remains keyboard accessible but has no visible button box; a soft-shadow triangular paper underside expands on hover/focus and reveals the destination. Pending, in-progress, and closed columns use blue, green, and neutral gray body colors respectively so workflow state is visible before reading labels.
 
 ## Risks / Trade-offs
 

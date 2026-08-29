@@ -5,11 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=8" />
+    <link rel="stylesheet" href="/styles.css?v=14" />
   </head>
   <body>
+    <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
+      <span class="page-corner-current">
+        <small>当前页面</small>
+        <strong id="page-current-label">周报</strong>
+      </span>
+      <span class="page-corner-fold">
+        <small>切换到</small>
+        <strong id="page-target-label">TODO</strong>
+      </span>
+      <span class="page-corner-shadow" aria-hidden="true"></span>
+    </div>
     <div class="app-shell">
-      <aside class="sidebar">
+      <aside id="project-sidebar" class="sidebar">
         <div class="brand">
           <div class="brand-mark">WR</div>
           <div>
@@ -18,65 +29,60 @@
           </div>
         </div>
         <button id="new-project" class="primary full">新建项目</button>
+        <div class="sidebar-label">项目</div>
         <div id="project-list" class="project-list"></div>
       </aside>
 
-      <main class="main">
-        <header class="topbar">
-          <div>
-            <div class="project-heading">
-              <h1 id="project-title">周报工作台</h1>
-              <span id="project-status-dot" class="status-dot is-neutral" role="img" aria-label="项目状态" title="项目状态"></span>
-            </div>
-            <p id="project-meta">本地个人项目管理</p>
-          </div>
-          <div class="actions">
-            <button id="schedule-check">检查计划</button>
-            <button id="generate-report" class="primary generate-action">生成周报</button>
-          </div>
-        </header>
-
-        <nav class="tabs" aria-label="Workspace views">
-          <button data-tab="overview" class="active">总览</button>
-          <button data-tab="plan">计划</button>
-          <button data-tab="updates">本周进展</button>
-          <button data-tab="sources">资料源</button>
-          <button data-tab="report">周报</button>
-          <button data-tab="risks">风险</button>
-          <button data-tab="settings">设置</button>
-        </nav>
-
-        <section id="empty-state" class="empty">
-          <h2>创建项目</h2>
-          <p>从项目设置开始，然后添加计划、资料源、本周进展和自动周报。</p>
-        </section>
-
-        <section id="workspace" class="workspace hidden">
-          <div id="tab-overview" class="tab-panel"></div>
-          <div id="tab-plan" class="tab-panel hidden"></div>
-          <div id="tab-updates" class="tab-panel hidden"></div>
-          <div id="tab-sources" class="tab-panel hidden"></div>
-          <div id="tab-report" class="tab-panel hidden"></div>
-          <div id="tab-risks" class="tab-panel hidden"></div>
-          <div id="tab-settings" class="tab-panel hidden"></div>
-        </section>
-      </main>
-
-      <footer class="app-footer">
-        <div class="footer-inner">
-          <div class="footer-brand">
-            <span class="footer-mark">WR</span>
+      <div class="page-shell">
+        <main id="report-view" class="main">
+          <header class="topbar">
             <div>
-              <strong>周报工作台</strong>
-              <p>Personal project reporting workspace</p>
+              <div class="project-heading">
+                <h1 id="project-title">周报工作台</h1>
+                <span id="project-status-dot" class="status-dot is-neutral" role="img" aria-label="项目状态" title="项目状态"></span>
+                <p id="project-meta">本地个人项目管理</p>
+              </div>
             </div>
-          </div>
-          <div class="footer-meta" aria-label="Workspace properties">
-            <span>本地运行</span>
-            <span>单用户</span>
-          </div>
-        </div>
-      </footer>
+          </header>
+
+          <nav class="tabs" aria-label="Workspace views">
+            <button data-tab="overview" class="active">总览</button>
+            <button data-tab="sources">资料源</button>
+            <button data-tab="report">周报</button>
+            <button data-tab="plan">计划</button>
+            <button data-tab="updates">本周进展</button>
+            <button data-tab="risks">风险</button>
+          </nav>
+
+          <section id="empty-state" class="empty">
+            <h2>创建项目</h2>
+            <p>从项目设置开始，然后添加计划、资料源、本周进展和自动周报。</p>
+          </section>
+
+          <section id="workspace" class="workspace hidden">
+            <div id="tab-overview" class="tab-panel"></div>
+            <div id="tab-plan" class="tab-panel hidden"></div>
+            <div id="tab-updates" class="tab-panel hidden"></div>
+            <div id="tab-sources" class="tab-panel hidden"></div>
+            <div id="tab-report" class="tab-panel hidden"></div>
+            <div id="tab-risks" class="tab-panel hidden"></div>
+            <div id="tab-settings" class="tab-panel hidden"></div>
+          </section>
+        </main>
+
+        <main id="todo-view" class="main hidden">
+          <header class="topbar todo-topbar">
+            <div>
+              <div class="project-heading">
+                <h1>TODO 看板</h1>
+                <p>个人工作队列</p>
+              </div>
+            </div>
+          </header>
+          <section id="todo-board" class="todo-board" aria-label="TODO 看板"></section>
+        </main>
+
+      </div>
     </div>
 
     <dialog id="project-dialog">
@@ -99,6 +105,41 @@
         <div class="modal-actions">
           <button id="cancel-project" type="button" value="cancel">取消</button>
           <button class="primary" value="default">创建</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="close-todo-dialog">
+      <form method="dialog" id="close-todo-form" class="modal-form">
+        <h2>关闭 TODO</h2>
+        <p id="close-todo-title" class="dialog-context"></p>
+        <input id="close-todo-id" name="todo_id" type="hidden" />
+        <label>关闭原因 <textarea name="reason" required maxlength="4000" placeholder="说明为什么可以关闭，以及最终结果"></textarea></label>
+        <label>归属项目（可选）
+          <select id="close-todo-project" name="project_id">
+            <option value="">不归属项目</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button id="cancel-close-todo" type="button">取消</button>
+          <button class="primary" value="default">确认关闭</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="report-confirm-dialog" class="message-dialog">
+      <form method="dialog" id="report-confirm-form" class="modal-form message-box">
+        <div class="message-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6zM14 2v5h5M9 12h6M9 16h6"></path></svg>
+        </div>
+        <div class="message-copy">
+          <h2>生成本周周报？</h2>
+          <p id="report-confirm-message"></p>
+          <span>系统将收集本周新增资料和 GitHub commits，并调用项目配置的本地 CLI。</span>
+        </div>
+        <div class="modal-actions message-actions">
+          <button id="cancel-report-generation" type="button">取消</button>
+          <button class="primary" value="default">确认生成</button>
         </div>
       </form>
     </dialog>
@@ -128,6 +169,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=8"></script>
+    <script src="/app.js?v=14"></script>
   </body>
 </html>

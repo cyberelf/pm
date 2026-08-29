@@ -21,6 +21,8 @@ from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
     build_summary_prompt,
+    delete_material,
+    material_is_unlocked,
     parse_summary_output,
     store_manual_material,
     store_material,
@@ -33,6 +35,7 @@ from reports_app.reports import assemble_context, build_claude_evidence_prompt, 
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key
+from reports_app.todos import close_todo, create_todo, todo_rows, update_todo
 from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
 
 
@@ -90,6 +93,68 @@ class CoreTest(unittest.TestCase):
         row = self.conn.execute("SELECT report_provider FROM projects WHERE id = ?", (self.project_id,)).fetchone()
         self.assertEqual(row["report_provider"], "claude")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM update_schedules").fetchone()["n"], 1)
+
+    def test_todo_open_workflow_requires_valid_title_and_status(self):
+        with self.assertRaises(ValidationError):
+            create_todo(self.conn, {"title": "  "})
+        todo_id = create_todo(self.conn, {"title": "Ship board", "description": "Build the flow"})
+        update_todo(self.conn, todo_id, {"status": "doing"})
+        todo = todo_rows(self.conn)[0]
+        self.assertEqual(todo["status"], "doing")
+        self.assertEqual(todo["description"], "Build the flow")
+        update_todo(self.conn, todo_id, {"status": "doing", "description": "**bold** <script>bad()</script>"})
+        todo = todo_rows(self.conn)[0]
+        self.assertIn("<strong>bold</strong>", todo["description_html"])
+        self.assertNotIn("<script>", todo["description_html"])
+        with self.assertRaises(ValidationError):
+            update_todo(self.conn, todo_id, {"status": "closed"})
+
+    def test_todo_close_requires_reason_and_optionally_archives_project_material(self):
+        todo_id = create_todo(self.conn, {"title": "Finish release", "description": "Validate TODO board"})
+        with self.assertRaises(ValidationError):
+            close_todo(self.conn, todo_id, {"reason": "   ", "project_id": self.project_id})
+        open_row = self.conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
+        self.assertEqual(open_row["status"], "todo")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM materials").fetchone()["n"], 0)
+
+        material_id = close_todo(
+            self.conn,
+            todo_id,
+            {"reason": "Acceptance checks passed", "project_id": self.project_id},
+        )
+        closed = todo_rows(self.conn)[0]
+        self.assertEqual(closed["status"], "closed")
+        self.assertEqual(closed["close_reason"], "Acceptance checks passed")
+        self.assertEqual(closed["project_name"], "Demo")
+        self.assertEqual(closed["material_id"], material_id)
+        material = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+        self.assertEqual(material["source_type"], "manual")
+        self.assertIn("Finish release", material["extracted_text"])
+        self.assertIn("Acceptance checks passed", material["extracted_text"])
+
+        update_todo(
+            self.conn,
+            todo_id,
+            {"status": "closed", "title": "Finish polished release", "description": "**Verified** board"},
+        )
+        material = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+        self.assertIn("Finish polished release", material["extracted_text"])
+        self.assertIn("**Verified** board", material["extracted_text"])
+        self.assertIn("Acceptance checks passed", material["extracted_text"])
+        with self.assertRaises(ValidationError):
+            update_todo(self.conn, todo_id, {"status": "doing"})
+
+        with self.assertRaises(ValidationError):
+            close_todo(self.conn, todo_id, {"reason": "again", "project_id": self.project_id})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM materials").fetchone()["n"], 1)
+
+    def test_todo_close_without_project_does_not_create_material(self):
+        todo_id = create_todo(self.conn, {"title": "Personal reminder"})
+        self.assertIsNone(close_todo(self.conn, todo_id, {"reason": "No longer needed"}))
+        row = self.conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
+        self.assertEqual(row["status"], "closed")
+        self.assertIsNone(row["project_id"])
+        self.assertIsNone(row["material_id"])
 
     def test_report_context_includes_project_profile_and_plan(self):
         update_settings(
@@ -341,6 +406,65 @@ class CoreTest(unittest.TestCase):
                 material_id,
                 {"title": "Locked", "content": "locked content"},
             )
+
+    def test_material_delete_allows_current_week_and_rejects_locked_history(self):
+        current_id = store_material(
+            self.conn,
+            self.project_id,
+            {
+                "filename": "delete-me.txt",
+                "content_base64": base64.b64encode(b"temporary current-week material").decode(),
+            },
+        )
+        current_row = self.conn.execute("SELECT * FROM materials WHERE id = ?", (current_id,)).fetchone()
+        current_path = Path(current_row["storage_path"])
+        project_timezone = self.conn.execute(
+            "SELECT timezone FROM projects WHERE id = ?", (self.project_id,)
+        ).fetchone()["timezone"]
+        self.assertTrue(material_is_unlocked(current_row, project_timezone))
+
+        locked_id = store_manual_material(
+            self.conn,
+            self.project_id,
+            {"title": "Historical note", "content": "must remain"},
+        )
+        self.conn.execute(
+            "UPDATE materials SET created_at = '2026-06-01T00:00:00+00:00' WHERE id = ?",
+            (locked_id,),
+        )
+        self.conn.commit()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("DELETE", f"/api/projects/{self.project_id}/materials/{current_id}")
+            response = client.getresponse()
+            deleted_workspace = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertNotIn(current_id, {item["id"] for item in deleted_workspace["materials"]})
+            self.assertIsNone(self.conn.execute("SELECT id FROM materials WHERE id = ?", (current_id,)).fetchone())
+            self.assertFalse(current_path.exists())
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("DELETE", f"/api/projects/{self.project_id}/materials/{locked_id}")
+            response = client.getresponse()
+            error = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 400)
+            self.assertIn("locked", error["error"])
+            self.assertIsNotNone(self.conn.execute("SELECT id FROM materials WHERE id = ?", (locked_id,)).fetchone())
+
+            with self.assertRaises(ValidationError):
+                delete_material(self.conn, self.project_id + 999, locked_id)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            current_path.unlink(missing_ok=True)
 
     def test_report_context_includes_current_week_materials_and_commits(self):
         txt = base64.b64encode(b"weekly context").decode()

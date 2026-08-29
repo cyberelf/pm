@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: Cal.com-design-analysis
-description: A clean, calendar-software-first interface anchored on white canvas with black primary CTAs and custom Cal Sans display typography. The system reads as friendly modern SaaS — generous whitespace, soft-rounded cards (~12px), product UI fragments shown directly inside cards, and a dark navy footer that visually closes long-scroll pages. Brand voltage comes from the Cal Sans display headline (a custom geometric face) and from product UI artifacts shown in-card rather than from accent colors.
+description: A clean, calendar-software-first interface anchored on white canvas with black primary CTAs and compact Cal Sans display typography. The application uses a persistent project sidebar, dense operational content, soft-rounded cards (~12px), and no decorative page footer. Interface icons come from locally embedded Font Awesome Free SVG definitions.
 
 colors:
   primary: "#111111"
@@ -264,11 +264,6 @@ components:
     typography: "{typography.display-sm}"
     rounded: "{rounded.lg}"
     padding: 48px
-  footer:
-    backgroundColor: "{colors.surface-dark}"
-    textColor: "{colors.on-dark-soft}"
-    typography: "{typography.body-sm}"
-    padding: 64px
 ---
 
 ## Overview
@@ -279,7 +274,7 @@ Type voice splits cleanly into two roles: **Cal Sans** (the brand's custom geome
 
 Component voltage comes from **product UI fragments shown directly inside cards** — calendar widgets, scheduling forms, automation diagrams, integration tiles. Cal.com doesn't paint marketing illustrations of the product; it shows the actual product chrome at small scale embedded in the marketing flow.
 
-The footer flips to `{colors.surface-dark}` (#101010) — a deep near-black that visually closes every long-scroll page. The footer is the only dark surface in the system; everything above stays white-with-light-gray-cards.
+The reporting workspace is an application shell, not a marketing page. It ends with the working content area and does not add a decorative footer beneath operational screens.
 
 **Key Characteristics:**
 - White canvas with black primary CTA (`{colors.primary}` — #111111). Buttons are `{rounded.md}` (8px) with confident weight-600 labels. Standard friendly-SaaS button.
@@ -288,7 +283,7 @@ The footer flips to `{colors.surface-dark}` (#101010) — a deep near-black that
 - Product UI fragments embedded directly in cards — Cal.com shows real schedule pickers, calendar widgets, integration grids inside its marketing cards. Brand voltage from real product chrome at small scale.
 - Nav-pill-group (`{component.nav-pill-group}`) — a small pill-radius wrapper around grouped nav segments (e.g., the sub-nav switcher between product views). The pill wrapper is one of the system's signature interactive components.
 - Avatars are circular (`{rounded.full}`), 36px diameter, used in testimonial rows and team-listing surfaces.
-- Footer is dark navy (`{colors.surface-dark}` — #101010) with light text (`{colors.on-dark-soft}` — #a1a1aa). The dark footer closes every page even though the body above is white.
+- The persistent project sidebar is the main piece of application chrome. The content column remains visually quiet and has no page footer.
 - Spacing rhythm is `{spacing.section}` (96px) between major bands — tight enough to feel modern-SaaS but generous enough to breathe.
 - Border radius is hierarchical: `{rounded.md}` (8px) for buttons + inputs, `{rounded.lg}` (12px) for content cards, `{rounded.xl}` (16px) for the hero app-mockup container, `{rounded.pill}` for nav-pill-group + badges, `{rounded.full}` for avatars + icon buttons.
 
@@ -304,18 +299,18 @@ The footer flips to `{colors.surface-dark}` (#101010) — a deep near-black that
 - **Surface Soft** (`{colors.surface-soft}` — #f8f9fa): Nav-pill-group background, very-soft section dividers.
 - **Surface Card** (`{colors.surface-card}` — #f5f5f5): Feature cards, testimonial cards, badge pills, default avatar fills.
 - **Surface Strong** (`{colors.surface-strong}` — #e5e7eb): Hairline border alternative; disabled button background.
-- **Surface Dark** (`{colors.surface-dark}` — #101010): The footer background — the only dark surface on every page. Also used for the featured pricing tier card.
-- **Surface Dark Elevated** (`{colors.surface-dark-elevated}` — #1a1a1a): Used for nested cards inside the dark footer or featured pricing card.
+- **Surface Dark** (`{colors.surface-dark}` — #101010): Reserved for overlays and intentionally inverted special surfaces; it is not used as a persistent page footer.
+- **Surface Dark Elevated** (`{colors.surface-dark-elevated}` — #1a1a1a): Used only for nested elements inside an intentionally inverted surface.
 - **Hairline** (`{colors.hairline}` — #e5e7eb): The 1px border tone on light surfaces. Used on input borders, table dividers, content card outlines (sometimes).
 - **Hairline Soft** (`{colors.hairline-soft}` — #f3f4f6): A barely-visible divider used between sections that share the white canvas.
 
 ### Text
 - **Ink** (`{colors.ink}` — #111111): All headlines and primary text.
 - **Body** (`{colors.body}` — #374151): Default running-text color.
-- **Muted** (`{colors.muted}` — #6b7280): Secondary text — sub-headings, breadcrumbs, footer body.
+- **Muted** (`{colors.muted}` — #6b7280): Secondary text — sub-headings, week labels, and breadcrumbs.
 - **Muted Soft** (`{colors.muted-soft}` — #898989): Tertiary text — captions, fine-print, copyright lines.
-- **On Primary / On Dark** (`{colors.on-primary}` / `{colors.on-dark}` — #ffffff): Text on primary buttons and dark footer.
-- **On Dark Soft** (`{colors.on-dark-soft}` — #a1a1aa): Footer body text — slightly muted white for the link rows.
+- **On Primary / On Dark** (`{colors.on-primary}` / `{colors.on-dark}` — #ffffff): Text on primary buttons and intentionally inverted surfaces.
+- **On Dark Soft** (`{colors.on-dark-soft}` — #a1a1aa): Secondary text on intentionally inverted surfaces.
 
 ### Semantic
 - **Success** (`{colors.success}` — #10b981): Confirmation states, success badges in product UI.
@@ -343,7 +338,7 @@ The split is functional:
 | `{typography.title-md}` | 18px | 600 | 1.4 | 0 | Feature card titles, intro paragraphs |
 | `{typography.title-sm}` | 16px | 600 | 1.4 | 0 | Small card titles, list labels |
 | `{typography.body-md}` | 16px | 400 | 1.5 | 0 | Default running-text |
-| `{typography.body-sm}` | 14px | 400 | 1.5 | 0 | Footer body, fine-print |
+| `{typography.body-sm}` | 14px | 400 | 1.5 | 0 | Secondary application copy and fine-print |
 | `{typography.caption}` | 13px | 500 | 1.4 | 0 | Badge labels, captions |
 | `{typography.code}` | 14px | 400 | 1.5 | 0 | Code snippets, API examples — JetBrains Mono |
 | `{typography.button}` | 14px | 600 | 1.0 | 0 | Standard button labels |
@@ -353,6 +348,8 @@ The split is functional:
 Cal Sans is the brand voice — every display headline uses it. Inter handles the supporting type. The boundary is strict: never put body copy in Cal Sans, never put a display headline in Inter. Cal Sans without negative letter-spacing reads as off-brand — the -0.5 to -2px tracking is part of the voice.
 
 Display weight stays at 600 across all sizes — never 700, never 500. The middle weight is what makes Cal Sans feel modern and confident without becoming bombastic.
+
+The reporting workspace uses a compact application-title treatment instead of the larger marketing display scale: project titles are 28px on desktop and 24px on mobile. The current project week sits on the same line to the right in muted 14px UI text; the pair may wrap together on narrow screens.
 
 ### Note on Font Substitutes
 If Cal Sans is unavailable, **Inter** at weight 600 with -0.04em letter-spacing is a usable approximation. The geometric character of Cal Sans differs from Inter's humanist forms, but the substitution preserves the weight + tracking signature. **Manrope** at weight 700 is another close alternative.
@@ -364,14 +361,14 @@ If Cal Sans is unavailable, **Inter** at weight 600 with -0.04em letter-spacing 
 - **Tokens:** `{spacing.xxs}` 4px · `{spacing.xs}` 8px · `{spacing.sm}` 12px · `{spacing.md}` 16px · `{spacing.lg}` 24px · `{spacing.xl}` 32px · `{spacing.xxl}` 48px · `{spacing.section}` 96px.
 - **Section padding:** `{spacing.section}` (96px) — the universal vertical rhythm between editorial bands.
 - **Card internal padding:** `{spacing.xl}` (32px) for feature cards and pricing tier cards; `{spacing.lg}` (24px) for testimonial and product-mockup cards.
-- **Gutters:** `{spacing.lg}` (24px) between cards in 3-up grids; `{spacing.md}` (16px) inside footer columns.
+- **Gutters:** `{spacing.lg}` (24px) between cards in 3-up grids; `{spacing.md}` (16px) between compact controls.
 
 ### Grid & Container
 - **Max content width:** ~1200px centered on marketing pages.
 - **Editorial body:** Single 12-column grid; hero band often uses 7/5 split (h1 left, app mockup card right).
 - **Feature card grids:** 3-up at desktop, 2-up at tablet, 1-up at mobile.
 - **Pricing grid:** 4-up at desktop, 2-up at tablet, 1-up at mobile.
-- **Footer:** 4-column link list at desktop, wrapping to 2-up at tablet, 1-up at mobile.
+- **Application shell:** Persistent project sidebar on desktop, compact horizontal project switcher below 768px, and no page footer.
 
 ### Whitespace Philosophy
 Cal.com uses generous but not excessive whitespace — section padding sits at 96px (modern-SaaS standard), and card internal padding stays at 32px. The rhythm is calibrated for fast scanning: every band has a single h1 + h2 + supporting cards, never densely packed lists. The result reads as confident-not-shouting.
@@ -408,6 +405,14 @@ The elevation philosophy is **soft and modern** — small drop shadows on elevat
 
 ### Photography Geometry
 Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI fragments inside marketing cards retain their native chrome (which often has its own internal radii — e.g., calendar grid cells, button rows). Hero illustration zones use 16:9 or 4:3 ratios with `{rounded.xl}` corners.
+
+## Iconography
+
+- Use Font Awesome Free as the default source for interface icons. Choose the semantically closest solid or regular icon before considering a custom drawing.
+- Embed only the selected SVG definition locally; do not load icon fonts, kits, or CDN assets at runtime. Preserve the Font Awesome name, version, license attribution, `viewBox`, and path data next to the local definition.
+- Render UI icons at 16–18px with `currentColor` so active, muted, and disabled states follow the surrounding control.
+- Icon-only buttons require a visible tooltip and a specific accessible label. The SVG itself is decorative and uses `aria-hidden="true"`.
+- Do not substitute emoji, Unicode symbols, or improvised SVG paths when Font Awesome contains a suitable icon.
 
 ## Components
 
@@ -465,11 +470,9 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 **`category-tab`** + **`category-tab-active`** — Used inside the nav-pill-group. Inactive: transparent background, `{colors.muted}` text. Active: `{colors.canvas}` background, `{colors.ink}` text, subtle drop shadow inside the pill-group wrapper. Padding 8px × 14px, rounded `{rounded.md}`.
 
-### CTA / Footer
+### CTA
 
-**`cta-band-light`** — A pre-footer "Smarter, simpler scheduling" CTA card. Background `{colors.surface-card}`, rounded `{rounded.lg}`, padding `{spacing.xxl}` (48px). Carries an h2 in `{typography.display-sm}`, a sub-line, and a `{component.button-primary}` centered.
-
-**`footer`** — Dark navy footer that closes every page. Background `{colors.surface-dark}` (#101010), text `{colors.on-dark-soft}`. 4-column link list at desktop covering Product / Solutions / Company / Resources. Vertical padding 64px. The Cal.com wordmark sits at the top-left in `{colors.on-dark}`. The footer is the only dark surface on every page — the deliberate inversion visually closes the page.
+**`cta-band-light`** — A light CTA card. Background `{colors.surface-card}`, rounded `{rounded.lg}`, padding `{spacing.xxl}` (48px). Carries an h2 in `{typography.display-sm}`, a sub-line, and a `{component.button-primary}` centered.
 
 ## Do's and Don'ts
 
@@ -481,14 +484,15 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 - Embed real product UI fragments inside marketing cards. Don't paint marketing illustrations of the product when you can show the product itself.
 - Keep avatar circles at 36px, perfect circles, sometimes with pastel fills. Avatars are the only place where badge pastels appear.
 - Use `{component.nav-pill-group}` for grouped sub-nav segments. The pill-in-pill treatment is signature.
-- End every page with the dark footer. The light-to-dark transition is part of the editorial rhythm.
+- Use a locally embedded Font Awesome Free SVG for interface actions such as project settings.
+- Let operational pages end with their content area; do not append a decorative footer.
 
 ### Don't
 - Don't use accent colors (`{colors.brand-accent}`, badge pastels) on primary CTAs. The system is monochrome at the action layer.
 - Don't bold display weight beyond 600. Cal Sans at 700 reads as bombastic.
 - Don't use rounded radius beyond `{rounded.xl}` (16px) on cards. Larger radii read as consumer-app, not professional booking software.
-- Don't put dark surface cards anywhere except the footer and the featured pricing tier. The dark surface is a deliberate, scarce signal.
-- Don't repeat the same surface mode in two consecutive bands. Cal.com's pacing alternates white → light-gray → white → product-mockup-card → white → dark-footer.
+- Don't introduce persistent dark page chrome. Dark surfaces remain a deliberate, scarce signal.
+- Don't draw one-off interface icons when Font Awesome Free contains a suitable semantic match.
 - Don't add hover state styling beyond what the system already encodes — primary darkens on press; nothing else changes.
 
 ## Responsive Behavior
@@ -497,7 +501,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 | Name | Width | Key Changes |
 |---|---|---|
-| Mobile | < 768px | Hamburger nav; hero h1 64→32px; hero-app-mockup-card stacks below content; feature grids 1-up; pricing 1-up; footer 4 cols → 1 |
+| Mobile | < 768px | Project switcher becomes horizontal; application title 28→24px; title metadata may wrap; content grids become 1-up |
 | Tablet | 768–1024px | Top nav stays horizontal but tightens; nav-pill-group wraps; feature cards 2-up; pricing 2-up |
 | Desktop | 1024–1440px | Full top-nav with all menu items; 3-up feature cards; 4-up pricing tiers |
 | Wide | > 1440px | Same as desktop with more outer breathing room; max content width caps at 1200px |
@@ -528,8 +532,9 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 3. Use `{token.refs}` everywhere — never inline hex.
 4. Never document hover. Default and Active/Pressed states only.
 5. Display headlines stay Cal Sans 600 with negative letter-spacing. Body stays Inter 400. The trinity does not blur.
-6. The dark footer is the only dark surface on most pages. Don't add other dark cards casually.
-7. When in doubt about emphasis: bigger Cal Sans before bolder Cal Sans.
+6. Use Font Awesome Free for new interface icons and keep selected SVG definitions local.
+7. Operational application pages do not use a decorative footer.
+8. When in doubt about emphasis: bigger Cal Sans before bolder Cal Sans.
 
 ## Known Gaps
 

@@ -16,6 +16,8 @@ Individual knowledge workers need a consistent way to track weekly project work 
 - Add a default Markdown weekly report template and allow each project to configure its own report template.
 - Render weekly reports in Markdown by default and support one canonical report per project week; multiple configured update times are refresh checkpoints that overwrite the current week's visible report after successful regeneration.
 - Add progress tracking and risk warning views based on deterministic rules over plans, weekly updates, and detected project gaps; source and generation failures are shown as diagnostics instead of project risks.
+- Add a visually distinct Trello-style personal TODO board with Markdown cards, inline auto-save editing, a persistent draft card, and an animated folded-page-corner switch from the weekly report workspace, while retaining mandatory close reasons and optional project-material archiving.
+- Consolidate manual weekly report generation into a confirmed icon action on each project row instead of page-level action buttons.
 - Include a risk section in generated weekly reports where the CLI provider can summarize observed risks and forecast likely follow-on risks from available context.
 - Scope the first release to a personal single-user workspace where each project has one owner and no team membership or role-based collaboration.
 - Scope the first release to a local web application where the backend and required CLIs run on the same machine as the workspace data.
@@ -31,6 +33,7 @@ Individual knowledge workers need a consistent way to track weekly project work 
 - `weekly-progress-reporting`: Weekly progress capture, scheduled update points, report regeneration rules, Markdown storage, and page rendering.
 - `report-generation-integrations`: CLI-based report generation using Codex or Claude Code with project-specific prompts and gathered context.
 - `progress-risk-tracking`: Progress status tracking and risk warning behavior derived from plans, updates, reports, and missing or delayed activity.
+- `todo-management`: Workspace-level TODO capture, board status transitions, close reasons, and optional project-material archiving.
 
 ### Modified Capabilities
 
@@ -44,5 +47,6 @@ Individual knowledge workers need a consistent way to track weekly project work 
 - Requires local GitHub CLI (`gh`) integration for repository metadata and activity detection.
 - Requires CLI execution integration for Codex and Claude Code report generation.
 - Requires Markdown rendering in the project report UI.
+- Requires TODO persistence and a separate board view in the local workspace UI.
 - Does not require organization, team, role, or project sharing APIs in the first release.
 - Does not require remote server deployment support in the first release.

@@ -153,6 +153,19 @@ CREATE TABLE IF NOT EXISTS risk_warnings (
     updated_at TEXT NOT NULL,
     UNIQUE(project_id, week_key, rule, source_ref)
 );
+
+CREATE TABLE IF NOT EXISTS todos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'todo',
+    close_reason TEXT NOT NULL DEFAULT '',
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    material_id INTEGER REFERENCES materials(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
 """
 
 

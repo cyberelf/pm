@@ -96,3 +96,22 @@
 - [x] 10.7 Add a scoped material-detail API for uploaded and manually entered content
 - [x] 10.8 Add and verify a shared read-only material preview modal
 - [x] 10.9 Render Markdown, plain-text, and original PDF materials by type in the shared read-only preview modal
+- [x] 10.10 Add project-scoped deletion for current-week unlocked materials and local uploaded-file cleanup
+- [x] 10.11 Add delete controls and regression tests for unlocked and locked material behavior
+
+## 11. Personal TODO Board
+
+- [x] 11.1 Add TODO persistence and validation for open status transitions and mandatory close reasons
+- [x] 11.2 Add TODO APIs with atomic optional project-material archiving on closure
+- [x] 11.3 Add a separate responsive Trello-style board and top-right TODO/weekly-report switch
+- [x] 11.4 Add backend and frontend regression tests and run required verification
+- [x] 11.5 Return sanitized Markdown rendering for TODO card content and preserve raw source for editing
+- [x] 11.6 Replace action-row mode buttons with a standalone book-page workspace switch and distinct TODO surface
+- [x] 11.7 Keep all three board columns visible and add draft/existing-card inline auto-save editing
+- [x] 11.8 Add regressions, restart the local LaunchAgent, and verify the live TODO route and page assets
+- [x] 11.9 Move manual report generation to a confirmed project-row icon and remove page-level generation and schedule-check actions
+- [x] 11.10 Replace the book control with an accessible animated folded corner that shows current and destination pages
+- [x] 11.11 Update regressions, restart the local service, and verify live assets and routes
+- [x] 11.12 Replace native report-generation confirmation with an application-styled message box
+- [x] 11.13 Restyle the workspace switch as a borderless soft-shadow paper curl and apply blue/green/gray board column themes
+- [x] 11.14 Update regressions, restart the local service, and verify live assets and routes
