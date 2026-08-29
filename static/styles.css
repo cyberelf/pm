@@ -130,6 +130,7 @@ strong { color: var(--ink); }
 .page-shell { min-width: 0; min-height: 100vh; display: flex; flex-direction: column; }
 .todo-mode .app-shell { grid-template-columns: minmax(0, 1fr); }
 .page-corner {
+  --fold-size: 36px;
   position: fixed;
   top: 0;
   right: 0;
@@ -138,68 +139,96 @@ strong { color: var(--ink); }
   height: 162px;
   cursor: pointer;
   outline: none;
-  overflow: hidden;
 }
 .page-corner-current {
   position: absolute;
-  top: 10px;
-  right: 18px;
+  top: 44px;
+  right: 42px;
   z-index: 3;
   display: grid;
   justify-items: end;
   gap: 1px;
   color: var(--ink);
   text-align: right;
-  transition: opacity 140ms ease, transform 240ms ease;
+  transition: opacity 140ms ease;
 }
 .page-corner-fold {
   position: absolute;
-  top: 0;
-  right: 0;
+  inset: 0;
   z-index: 2;
-  width: 44px;
-  height: 44px;
   display: grid;
   align-content: start;
   justify-items: end;
   gap: 2px;
-  clip-path: polygon(0 0, 100% 0, 100% 100%);
-  border-bottom-left-radius: 58% 18%;
-  padding: 18px 15px;
-  background: linear-gradient(225deg, #cbd5e1 0%, #f8fafc 48%, #e5e7eb 100%);
-  color: #334155;
-  filter: drop-shadow(-7px 8px 8px rgba(15, 23, 42, 0.22));
+  padding: 44px 42px 0 88px;
+  color: #1e293b;
   text-align: right;
-  transition: width 320ms cubic-bezier(.2,.8,.2,1), height 320ms cubic-bezier(.2,.8,.2,1), filter 220ms ease;
 }
-.page-corner:hover .page-corner-fold,
-.page-corner:focus-visible .page-corner-fold { width: 178px; height: 150px; filter: drop-shadow(-12px 13px 12px rgba(15, 23, 42, 0.3)); }
+.page-corner-fold::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(225deg, #7d90a6 0%, #a8b7c8 30%, #d5dfe9 62%, #f8fafc 88%);
+  clip-path: polygon(
+    calc(188px - var(--fold-size)) 0,
+    188px var(--fold-size),
+    calc(188px - var(--fold-size)) var(--fold-size)
+  );
+  filter: drop-shadow(-6px 7px 9px rgba(15, 23, 42, 0.28));
+  transition: clip-path 360ms cubic-bezier(.25, .9, .3, 1);
+}
+.page-corner:hover,
+.page-corner:focus-visible,
+.page-corner.turning {
+  --fold-size: 104px;
+}
 .page-corner:hover .page-corner-current,
-.page-corner:focus-visible .page-corner-current { opacity: 0; transform: translate(-12px, 8px); }
+.page-corner:focus-visible .page-corner-current,
+.page-corner.turning .page-corner-current { opacity: 0; }
 .page-corner small { color: inherit; font-size: 9px; font-weight: 700; letter-spacing: 0.12em; opacity: 0.58; }
 .page-corner strong { color: inherit; font-size: 17px; }
 .page-corner-fold small,
-.page-corner-fold strong { opacity: 0; transform: translateY(-4px); transition: opacity 120ms ease 90ms, transform 180ms ease 90ms; }
+.page-corner-fold strong { opacity: 0; transition: opacity 120ms ease 90ms; }
 .page-corner:hover .page-corner-fold small,
 .page-corner:hover .page-corner-fold strong,
 .page-corner:focus-visible .page-corner-fold small,
-.page-corner:focus-visible .page-corner-fold strong { opacity: 1; transform: translateY(0); }
-.page-corner-shadow {
+.page-corner:focus-visible .page-corner-fold strong,
+.page-corner.turning .page-corner-fold small,
+.page-corner.turning .page-corner-fold strong { opacity: 1; }
+.page-corner-shadow { position: absolute; inset: 0; z-index: 1; filter: blur(7px); }
+.page-corner-shadow::before {
+  content: "";
   position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 1;
-  width: 48px;
-  height: 48px;
-  clip-path: polygon(0 0, 100% 0, 100% 100%);
-  background: rgba(15, 23, 42, 0.34);
-  filter: blur(7px);
-  transition: width 320ms cubic-bezier(.2,.8,.2,1), height 320ms cubic-bezier(.2,.8,.2,1);
+  inset: 0;
+  background: rgba(15, 23, 42, 0.38);
+  clip-path: polygon(
+    calc(181px - var(--fold-size)) 0,
+    188px calc(var(--fold-size) + 7px),
+    calc(181px - var(--fold-size)) calc(var(--fold-size) + 7px)
+  );
+  transition: clip-path 360ms cubic-bezier(.25, .9, .3, 1);
 }
-.page-corner:hover .page-corner-shadow,
-.page-corner:focus-visible .page-corner-shadow { width: 182px; height: 154px; }
-.page-corner:focus-visible .page-corner-fold { outline: 2px solid #60a5fa; outline-offset: -4px; }
+.page-corner:focus-visible .page-corner-fold strong { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+@keyframes corner-peel {
+  0%, 100% { scale: 1; }
+  55% { scale: 1.025; }
+}
+.page-corner.turning { animation: corner-peel 400ms cubic-bezier(.4, .6, .4, 1) forwards; }
+.page-corner.turning .page-corner-fold small,
+.page-corner.turning .page-corner-fold strong { opacity: 0; transition: opacity 140ms ease; }
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.view-enter { animation: view-enter 280ms cubic-bezier(.2, .8, .2, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .page-corner, .page-corner-current, .page-corner-fold, .page-corner-fold small, .page-corner-fold strong { transition: none; }
+  .page-corner-fold::before, .page-corner-shadow::before { transition: none; }
+  .page-corner.turning, .view-enter { animation: none; }
+}
 .todo-mode .page-corner-current { color: #ffffff; }
+.todo-mode .page-corner-fold { color: #ffffff; text-shadow: 0 1px 2px rgba(15, 23, 42, 0.75); }
 .sidebar {
   position: sticky;
   top: 0;
@@ -762,11 +791,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     overflow-x: auto;
   }
   .project-row { flex: 0 0 auto; width: min(210px, 68vw); }
-  .page-corner { width: 160px; height: 140px; }
-  .page-corner-current { top: 8px; right: 12px; }
-  .page-corner-fold { padding: 15px 12px; }
-  .page-corner:hover .page-corner-fold, .page-corner:focus-visible .page-corner-fold { width: 150px; height: 128px; }
-  .page-corner:hover .page-corner-shadow, .page-corner:focus-visible .page-corner-shadow { width: 154px; height: 132px; }
+  .page-corner { transform: scale(0.85); transform-origin: 100% 0; }
   .topbar { padding: 82px 16px 20px; align-items: flex-start; flex-direction: column; gap: 18px; }
   .actions { width: 100%; justify-content: flex-start; }
   .actions button { flex: 1 1 140px; }

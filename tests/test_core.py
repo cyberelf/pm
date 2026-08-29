@@ -156,6 +156,38 @@ class CoreTest(unittest.TestCase):
         self.assertIsNone(row["project_id"])
         self.assertIsNone(row["material_id"])
 
+    def test_update_closed_todo_rejected_once_archived_material_locks(self):
+        todo_id = create_todo(self.conn, {"title": "Ship board", "description": "original"})
+        material_id = close_todo(self.conn, todo_id, {"reason": "shipped", "project_id": self.project_id})
+
+        update_todo(self.conn, todo_id, {"status": "closed", "description": "fresh details"})
+        material = self.conn.execute(
+            "SELECT extracted_text FROM materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        self.assertIn("fresh details", material["extracted_text"])
+
+        self.conn.execute(
+            "UPDATE materials SET created_at = '2026-06-01T00:00:00+00:00' WHERE id = ?",
+            (material_id,),
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            update_todo(self.conn, todo_id, {"status": "closed", "title": "Locked edit"})
+        self.assertIn("locked", str(ctx.exception))
+        material = self.conn.execute(
+            "SELECT extracted_text FROM materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        self.assertNotIn("Locked edit", material["extracted_text"])
+
+        # Autosave fires even when nothing changed; an unchanged payload must stay allowed.
+        update_todo(
+            self.conn,
+            todo_id,
+            {"status": "closed", "title": "Ship board", "description": "fresh details"},
+        )
+        row = self.conn.execute("SELECT title, description FROM todos WHERE id = ?", (todo_id,)).fetchone()
+        self.assertEqual(row["title"], "Ship board")
+        self.assertEqual(row["description"], "fresh details")
+
     def test_report_context_includes_project_profile_and_plan(self):
         update_settings(
             self.conn,

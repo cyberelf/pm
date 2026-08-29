@@ -112,11 +112,26 @@ async function switchAppMode(mode, persist = true) {
   $("project-sidebar").classList.toggle("hidden", showingTodos);
   $("report-view").classList.toggle("hidden", showingTodos);
   $("todo-view").classList.toggle("hidden", !showingTodos);
+  if (persist) playPageTurn();
   if (showingTodos) {
     await loadTodos();
   } else if (state.projectId) {
     await loadWorkspace();
   }
+}
+
+function playPageTurn() {
+  const corner = $("page-corner");
+  corner.classList.remove("turning");
+  void corner.offsetWidth;
+  corner.classList.add("turning");
+  setTimeout(() => corner.classList.remove("turning"), 430);
+  const entering = document.querySelectorAll(state.mode === "todos" ? "#todo-view" : "#report-view, #project-sidebar");
+  entering.forEach((el) => {
+    el.classList.remove("view-enter");
+    void el.offsetWidth;
+    el.classList.add("view-enter");
+  });
 }
 
 function renderTodoBoard() {

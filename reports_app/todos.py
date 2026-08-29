@@ -1,6 +1,6 @@
 import hashlib
 
-from .materials import store_manual_material
+from .materials import material_is_unlocked, store_manual_material
 from .markdown import render_markdown
 from .timeutil import iso_now
 from .validation import ValidationError
@@ -50,11 +50,18 @@ def update_todo(conn, todo_id, payload):
         raise ValidationError("TODO status must be todo or doing; use close to finish it")
     title = _required_text(payload.get("title", row["title"]), "TODO title is required", 200)
     description = (payload.get("description", row["description"]) or "").strip()[:4000]
+    sync_material = (
+        row["status"] == "closed"
+        and row["material_id"]
+        and (title != row["title"] or description != (row["description"] or ""))
+    )
+    if sync_material:
+        _assert_material_unlocked(conn, row)
     conn.execute(
         "UPDATE todos SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?",
         (title, description, status, iso_now(), todo_id),
     )
-    if row["status"] == "closed" and row["material_id"]:
+    if sync_material:
         content = _material_content({"title": title, "description": description}, row["close_reason"])
         raw = content.encode("utf-8")
         conn.execute(
@@ -109,6 +116,19 @@ def close_todo(conn, todo_id, payload):
         (reason, project_id, material_id, now, now, todo_id),
     )
     return material_id
+
+
+def _assert_material_unlocked(conn, row):
+    material = conn.execute(
+        "SELECT * FROM materials WHERE id = ? AND source_type = 'manual'",
+        (row["material_id"],),
+    ).fetchone()
+    if not material:
+        return
+    project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (row["project_id"],)).fetchone()
+    timezone = project["timezone"] if project else "UTC"
+    if not material_is_unlocked(material, timezone):
+        raise ValidationError("previous-week materials are locked; closed TODO cannot be updated")
 
 
 def _todo(conn, todo_id):
