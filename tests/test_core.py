@@ -109,6 +109,19 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             update_todo(self.conn, todo_id, {"status": "closed"})
 
+    def test_todo_card_links_open_in_new_tab(self):
+        todo_id = create_todo(
+            self.conn,
+            {"title": "Link card", "description": "See [guide](https://example.com/docs) and https://example.com"},
+        )
+        close_todo(self.conn, todo_id, {"reason": "Done via https://example.com/done"})
+        todo = todo_rows(self.conn)[0]
+        for html_field in ("description_html", "close_reason_html"):
+            rendered = todo[html_field]
+            self.assertIn('target="_blank"', rendered)
+            self.assertIn('rel="noopener noreferrer"', rendered)
+            self.assertNotIn('<a href=', rendered)
+
     def test_todo_close_requires_reason_and_optionally_archives_project_material(self):
         todo_id = create_todo(self.conn, {"title": "Finish release", "description": "Validate TODO board"})
         with self.assertRaises(ValidationError):

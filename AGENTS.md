@@ -55,6 +55,6 @@ curl --noproxy '*' http://127.0.0.1:8765/api/state
 ## UI Guidelines
 
 - Follow `DESIGN.md`.
-- Keep the UI dense, dark, and operational.
+- Keep the UI dense and operational. The 周报 workspace is light; the TODO 看板 is the one dark surface; shared components (buttons, inputs, dialogs, badges) follow the 周报 standard on both.
 - Use explicit loading states for long actions.
 - Avoid explanatory marketing copy inside the app.

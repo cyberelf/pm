@@ -1,7 +1,7 @@
 ---
 version: alpha
-name: Cal.com-design-analysis
-description: A clean, calendar-software-first interface anchored on white canvas with black primary CTAs and compact Cal Sans display typography. The application uses a persistent project sidebar, dense operational content, soft-rounded cards (~12px), and no decorative page footer. Interface icons come from locally embedded Font Awesome Free SVG definitions.
+name: reports-workspace-design-system
+description: A two-surface local reporting workspace. The 周报工作台 (weekly report workspace) is the primary light surface — white canvas, black primary CTAs, compact Cal Sans display typography, persistent project sidebar, soft-rounded cards (~12px), no decorative page footer. The TODO 看板 (TODO board) is the one intentionally inverted dark surface — a navy three-column kanban with its own board-* accent token set. Both surfaces share one foundation: the same color tokens, type families, button/input/dialog/toast/badge recipes, and the page-corner fold navigation. The weekly report workspace is the source of truth for everything shared. Interface icons come from locally embedded Font Awesome Free SVG definitions.
 
 colors:
   primary: "#111111"
@@ -30,6 +30,27 @@ colors:
   badge-pink: "#ec4899"
   badge-violet: "#8b5cf6"
   badge-emerald: "#34d399"
+  board-canvas: "#172033"
+  board-column-fill: "rgba(241, 245, 249, 0.12)"
+  board-line: "rgba(255, 255, 255, 0.2)"
+  board-line-soft: "rgba(255, 255, 255, 0.25)"
+  board-line-strong: "rgba(255, 255, 255, 0.38)"
+  board-count-fill: "rgba(255, 255, 255, 0.14)"
+  board-draft-fill: "rgba(15, 23, 42, 0.25)"
+  board-draft-fill-active: "rgba(37, 99, 235, 0.24)"
+  board-todo-fill: "rgba(37, 99, 235, 0.34)"
+  board-todo-line: "rgba(96, 165, 250, 0.75)"
+  board-doing-fill: "rgba(5, 150, 105, 0.32)"
+  board-doing-line: "rgba(52, 211, 153, 0.72)"
+  board-closed-fill: "rgba(100, 116, 139, 0.38)"
+  board-closed-line: "rgba(148, 163, 184, 0.68)"
+  board-accent-blue: "#2563eb"
+  board-accent-blue-line: "#60a5fa"
+  board-accent-blue-soft: "#93c5fd"
+  board-accent-green: "#059669"
+  board-accent-slate: "#64748b"
+  board-on-accent: "#dbeafe"
+  board-muted-on-dark: "#bfdbfe"
 
 typography:
   display-xl:
@@ -264,28 +285,105 @@ components:
     typography: "{typography.display-sm}"
     rounded: "{rounded.lg}"
     padding: 48px
+  page-corner:
+    position: fixed top-right
+    size: 188px x 162px
+    foldSize: 36px (resting) / 104px (hover, focus, turning)
+    typography: "{typography.caption}"
+    textColor: "{colors.ink}" / inverted on the board
+  todo-column:
+    backgroundColor: "{colors.board-column-fill}"
+    borderColor: "{colors.board-line}"
+    textColor: "{colors.on-dark}"
+    rounded: "{rounded.lg}"
+    padding: 12px
+  todo-column-todo:
+    backgroundColor: "{colors.board-todo-fill}"
+    borderColor: "{colors.board-todo-line}"
+  todo-column-doing:
+    backgroundColor: "{colors.board-doing-fill}"
+    borderColor: "{colors.board-doing-line}"
+  todo-column-closed:
+    backgroundColor: "{colors.board-closed-fill}"
+    borderColor: "{colors.board-closed-line}"
+  todo-column-count:
+    backgroundColor: column accent (board-accent-blue / board-accent-green / board-accent-slate)
+    textColor: "{colors.on-dark}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.pill}"
+    padding: 4px 10px
+  todo-card:
+    backgroundColor: "{colors.canvas}"
+    borderColor: "{colors.hairline}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.lg}"
+    padding: 14px
+    shadow: subtle drop shadow
+  todo-card-editable:
+    backgroundColor: "{colors.canvas}"
+    borderColor: "{colors.board-accent-blue-soft}" on hover
+    cursor: text
+  todo-draft:
+    backgroundColor: "{colors.board-draft-fill}"
+    borderColor: "{colors.board-line-strong}" dashed
+    textColor: "{colors.board-on-accent}"
+    rounded: "{rounded.lg}"
+    minHeight: 92px
+  todo-card-editor:
+    backgroundColor: "{colors.canvas}"
+    borderColor: "{colors.board-accent-blue-line}"
+    ring: 2px "{colors.board-accent-blue-line}" at low alpha
 ---
 
 ## Overview
 
-Cal.com's marketing surface is a clean, friendly modern-SaaS interface — white canvas (`{colors.canvas}` — #ffffff) with black primary CTAs (`{colors.primary}` — #111111), custom **Cal Sans** display typography, and `{colors.surface-card}` (#f5f5f5) light-gray cards holding product UI fragments. The system reads as confidently engineered without trying to impress — every band has clear hierarchy, generous whitespace, and a single primary action.
+The token foundation of this system comes from a Cal.com design analysis: a white canvas (`{colors.canvas}` — #ffffff) with black primary CTAs (`{colors.primary}` — #111111), **Cal Sans** display typography over **Inter** body, soft-gray `{colors.surface-card}` cards, and pill-radius segmented navigation. It reads as confidently engineered without trying to impress — clear hierarchy, generous whitespace, a single primary action per zone.
 
-Type voice splits cleanly into two roles: **Cal Sans** (the brand's custom geometric display face — used for h1, h2, h3, and hero headlines) and **Inter** (used for everything else — body, buttons, nav, captions). Cal Sans uses weight 600 with negative letter-spacing (-0.5px to -2px depending on size) — it feels modern, slightly condensed, distinctly Cal.com.
+The application built on that foundation is a **two-surface workspace**, and the surfaces deliberately differ in mood:
 
-Component voltage comes from **product UI fragments shown directly inside cards** — calendar widgets, scheduling forms, automation diagrams, integration tiles. Cal.com doesn't paint marketing illustrations of the product; it shows the actual product chrome at small scale embedded in the marketing flow.
+- **周报工作台 (Weekly Report Workspace)** — the primary, light surface. Persistent project sidebar (`{colors.surface-soft}`), white content canvas, gray `{component.panel}` cards, pill tab navigation. This surface **defines the shared system**: every token default, every shared component recipe, type scale, and interaction pattern is normed here.
+- **TODO 看板 (TODO Board)** — the one intentionally inverted surface. A navy `{colors.board-canvas}` (#172033) floor with three translucent tinted columns (blue 待办 / green 进行中 / slate 已关闭) and white `{component.todo-card}` cards on top. It is a kanban, not a report editor — denser, darker, columnar.
 
-The reporting workspace is an application shell, not a marketing page. It ends with the working content area and does not add a decorative footer beneath operational screens.
+**The consistency contract:** the two surfaces may differ in page floor, column composition, and accent mood, but everything shared — color tokens, font families and weights, button/input/dialog/toast/loading/badge/pill recipes, focus treatment, radius and spacing scales — is identical on both, and the weekly report workspace is the source of truth. The board gets its own `board-*` accent token set for column tints and dark-surface text; those tokens never appear on the light workspace, and shared controls are never restyled per-surface.
+
+Both surfaces are joined by the `{component.page-corner}` page fold — a fixed top-right paper fold that flips between the two views. It is the only page-level ornament in the app.
+
+The app is an operational shell, not a marketing page. Screens end with their working content area and never grow a decorative footer.
 
 **Key Characteristics:**
-- White canvas with black primary CTA (`{colors.primary}` — #111111). Buttons are `{rounded.md}` (8px) with confident weight-600 labels. Standard friendly-SaaS button.
+- White canvas with black primary CTA (`{colors.primary}` — #111111). Buttons are `{rounded.md}` (8px) with confident weight-600 labels — the same button on both surfaces.
 - Custom `Cal Sans` display typeface for headlines (substituted with Inter weight 600 here). Negative letter-spacing on display sizes — geometric, precise, slightly condensed.
-- Light-gray card surfaces (`{colors.surface-card}` — #f5f5f5) for feature cards, testimonials, and pricing tiers (non-featured). The featured pricing tier flips to `{colors.surface-dark}` (the only dark card on light pages).
-- Product UI fragments embedded directly in cards — Cal.com shows real schedule pickers, calendar widgets, integration grids inside its marketing cards. Brand voltage from real product chrome at small scale.
-- Nav-pill-group (`{component.nav-pill-group}`) — a small pill-radius wrapper around grouped nav segments (e.g., the sub-nav switcher between product views). The pill wrapper is one of the system's signature interactive components.
-- Avatars are circular (`{rounded.full}`), 36px diameter, used in testimonial rows and team-listing surfaces.
-- The persistent project sidebar is the main piece of application chrome. The content column remains visually quiet and has no page footer.
-- Spacing rhythm is `{spacing.section}` (96px) between major bands — tight enough to feel modern-SaaS but generous enough to breathe.
-- Border radius is hierarchical: `{rounded.md}` (8px) for buttons + inputs, `{rounded.lg}` (12px) for content cards, `{rounded.xl}` (16px) for the hero app-mockup container, `{rounded.pill}` for nav-pill-group + badges, `{rounded.full}` for avatars + icon buttons.
+- Light-gray card surfaces (`{colors.surface-card}` — #f5f5f5) for panels on the report workspace; white hairline-bordered cards (`{component.todo-card}`) everywhere on the board. Content cards are `{rounded.lg}` (12px) on both surfaces.
+- Nav-pill-group (`{component.nav-pill-group}`) — a small pill-radius wrapper around grouped nav segments (the workspace tab bar and the source switcher). The pill wrapper is one of the system's signature interactive components.
+- The persistent project sidebar is the main piece of application chrome on the report workspace; the board drops it entirely for full-width columns.
+- The board uses a compact type scale (column head 16px, card title 15px, card body 13px, meta 11–12px) — same families and weights, smaller steps. See Typography.
+- Spacing rhythm is `{spacing.section}` (96px) between major bands on editorial pages; the workspace topbar opens with 96px and the board runs dense at 8–16px gaps.
+- Border radius is hierarchical and identical on both surfaces: `{rounded.md}` (8px) for buttons + inputs, `{rounded.lg}` (12px) for content cards and board columns, `{rounded.xl}` (16px) for dialogs and the hero container, `{rounded.pill}` for pill groups + badges.
+
+## Surfaces
+
+### 周报工作台 — light workspace (source of truth)
+- Page floor `{colors.canvas}`; sidebar `{colors.surface-soft}`; content cards `{component.panel}` on `{colors.surface-card}`.
+- Chromatically quiet: ink/body/muted text, black primary actions, semantic status colors only where state exists.
+- Persistent project sidebar (260px desktop, horizontal switcher below 768px), sticky pill tab bar, no footer.
+
+### TODO 看板 — dark board
+- Page floor `{colors.board-canvas}` (#172033); sidebar hidden; board grid up to 1480px.
+- Three columns carry translucent semantic tints: 待办 blue (`{colors.board-todo-fill}` / border `{colors.board-todo-line}`), 进行中 green (`{colors.board-doing-fill}` / `{colors.board-doing-line}`), 已关闭 slate (`{colors.board-closed-fill}` / `{colors.board-closed-line}`). Column heads are `{colors.on-dark}` with an accent count pill.
+- Cards on the board are **exactly the light surface's card language** — `{colors.canvas}` background, `{colors.hairline}` border, `{rounded.lg}`, subtle drop shadow — so shared controls (buttons, inputs) render identically to the report workspace.
+- Dark-surface text tones: `{colors.on-dark}` for headings, `{colors.board-muted-on-dark}` for secondary copy, `{colors.board-on-accent}` for text on translucent fills.
+- The board accent blue (`{colors.board-accent-blue-soft}` / `{colors.board-accent-blue-line}`) drives edit affordances: editable-card hover, draft-button hover, editor ring, and the dark-surface focus outline.
+
+### Shared on every surface
+- Color tokens, font families, the type scale, radius + spacing scales.
+- Buttons (`button-primary`, `button-secondary`, danger), inputs, `text-input` focus treatment, dialogs, toast, loading overlay, badges/status pills.
+- Focus treatment: 2px `{colors.ink}` outline at 2px offset on the light surface; 2px `{colors.board-accent-blue-soft}` outline everywhere on the TODO board, where ink would disappear into the navy floor.
+- The `{component.page-corner}` fold navigation, with labels inverting to `{colors.on-dark}` on the board.
+
+### Rules
+1. The weekly report workspace wins every disagreement about a shared component. If the board needs a different treatment, that treatment becomes a documented board token or component — never an inline override of a shared recipe.
+2. `board-*` accents never leak onto the light workspace; `{colors.brand-accent}` and badge pastels never appear on the board.
+3. No third surface. New pages adopt one of the two existing moods.
 
 ## Colors
 
@@ -316,6 +414,15 @@ The reporting workspace is an application shell, not a marketing page. It ends w
 - **Success** (`{colors.success}` — #10b981): Confirmation states, success badges in product UI.
 - **Warning** (`{colors.warning}` — #f59e0b): Warning callouts.
 - **Error** (`{colors.error}` — #ef4444): Validation errors.
+
+### Board (TODO 看板 only)
+The board carries its own closed accent set. These tokens are scoped to `#todo-view` and never appear on the light workspace:
+- **Board Canvas** (`{colors.board-canvas}` — #172033): The dark navy page floor of the TODO board.
+- **Column Tints** — translucent semantic fills + borders for the three columns: `{colors.board-todo-fill}`/`{colors.board-todo-line}` (blue, 待办), `{colors.board-doing-fill}`/`{colors.board-doing-line}` (green, 进行中), `{colors.board-closed-fill}`/`{colors.board-closed-line}` (slate, 已关闭). `{colors.board-column-fill}` is the neutral fallback; `{colors.board-line}` the neutral border.
+- **Column Accent Solids** — `{colors.board-accent-blue}` (#2563eb), `{colors.board-accent-green}` (#059669), `{colors.board-accent-slate}` (#64748b): count-pill fills.
+- **Edit Accents** — `{colors.board-accent-blue-line}` (#60a5fa) for the editor card ring and `{colors.board-accent-blue-soft}` (#93c5fd) for editable-card / draft hover borders and the dark-surface focus outline.
+- **Translucent Whites** — `{colors.board-line-soft}` / `{colors.board-line-strong}` for dashed placeholder borders, `{colors.board-count-fill}` for the neutral count pill, `{colors.board-draft-fill}` / `{colors.board-draft-fill-active}` for the draft button's resting / active fills.
+- **Text on Dark** — `{colors.on-dark}` for headings, `{colors.board-on-accent}` (#dbeafe) for text on translucent fills, `{colors.board-muted-on-dark}` (#bfdbfe) for secondary copy and empty states.
 
 ## Typography
 
@@ -351,6 +458,16 @@ Display weight stays at 600 across all sizes — never 700, never 500. The middl
 
 The reporting workspace uses a compact application-title treatment instead of the larger marketing display scale: project titles are 28px on desktop and 24px on mobile. The current project week sits on the same line to the right in muted 14px UI text; the pair may wrap together on narrow screens.
 
+### Board Scale (TODO 看板)
+The board keeps the same two families and the same weights but steps the scale down for kanban density — same fonts, smaller sizes:
+- Column heads: 16px / 600 (Cal Sans role) in `{colors.on-dark}`
+- Card titles: 15px / 600 in `{colors.ink}`
+- Card body (markdown): 13px / 400, inline code 12px `{typography.code}`
+- Card meta + hints: 11–12px / 500–600 in `{colors.muted-soft}`
+- Count pills + project tags: 12px / 500 (`{typography.caption}` territory) — matching the light surface's badge metrics
+
+The page h1 on the board follows the workspace title treatment (28px, `{colors.on-dark}`), so both surfaces share one title rhythm at the top of the page.
+
 ### Note on Font Substitutes
 If Cal Sans is unavailable, **Inter** at weight 600 with -0.04em letter-spacing is a usable approximation. The geometric character of Cal Sans differs from Inter's humanist forms, but the substitution preserves the weight + tracking signature. **Manrope** at weight 700 is another close alternative.
 
@@ -369,6 +486,7 @@ If Cal Sans is unavailable, **Inter** at weight 600 with -0.04em letter-spacing 
 - **Feature card grids:** 3-up at desktop, 2-up at tablet, 1-up at mobile.
 - **Pricing grid:** 4-up at desktop, 2-up at tablet, 1-up at mobile.
 - **Application shell:** Persistent project sidebar on desktop, compact horizontal project switcher below 768px, and no page footer.
+- **TODO board:** No sidebar — a single full-viewport floor. Three columns in a grid of `repeat(3, minmax(260px, 1fr))`, 16px gutters, board content capped at 1480px. Below 1024px the board scrolls horizontally instead of collapsing the columns; below 768px columns are `minmax(260px, 84vw)`.
 
 ### Whitespace Philosophy
 Cal.com uses generous but not excessive whitespace — section padding sits at 96px (modern-SaaS standard), and card internal padding stays at 32px. The rhythm is calibrated for fast scanning: every band has a single h1 + h2 + supporting cards, never densely packed lists. The result reads as confident-not-shouting.
@@ -381,6 +499,7 @@ Cal.com uses generous but not excessive whitespace — section padding sits at 9
 | Soft hairline | 1px `{colors.hairline}` border | Inputs, table dividers, occasionally on cards |
 | Card surface | `{colors.surface-card}` background — no shadow | Feature cards, testimonials |
 | Subtle drop shadow | Faint shadow at low alpha | Pricing tier cards, hover-elevated states (the system uses `0 1px 2px rgba(0,0,0,0.05)` and `0 4px 12px rgba(0,0,0,0.08)`) |
+| Board glass panel | Translucent tinted fill + 1px translucent border over `{colors.board-canvas}` | TODO board columns — alpha layering does the elevation work, no shadows |
 | Featured tier | `{colors.surface-dark}` background, no shadow needed | The featured pricing tier inverts to dark surface — color contrast does the elevation work |
 
 The elevation philosophy is **soft and modern** — small drop shadows on elevated cards, color-block contrast for emphasis. No heavy shadows, no neumorphism, no glassmorphism.
@@ -474,6 +593,28 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 **`cta-band-light`** — A light CTA card. Background `{colors.surface-card}`, rounded `{rounded.lg}`, padding `{spacing.xxl}` (48px). Carries an h2 in `{typography.display-sm}`, a sub-line, and a `{component.button-primary}` centered.
 
+### Page Fold Navigation
+
+**`page-corner`** — The signature shared navigation device: a fixed 188 × 162px zone pinned to the top-right corner, acting as a `role="button"` page fold. At rest a 36px paper triangle (blue-gray gradient, component-scoped art constants — not system tokens) covers the corner; the current page label sits beside it in 17px strong + 9px tracked small caps. On hover / keyboard focus / turn, the fold animates to 104px over 360ms (`cubic-bezier(.25, .9, .3, 1)`), the current label fades out, and the target page label fades in on the fold itself. Clicking flips between 周报 and TODO with a 400ms peel animation and a 280ms view-enter fade on the incoming surface. All motion is disabled under `prefers-reduced-motion`.
+
+- On the board, the labels invert to `{colors.on-dark}` with a text shadow for legibility on the fold.
+- The fold is decorative chrome: its SVG-free gradient + clip-path art is fixed; it never carries state beyond the two page labels.
+- The `theme-color` meta follows the surface — white on 周报, `{colors.board-canvas}` on the board.
+
+### TODO Board
+
+**`todo-column`** — One kanban column. Translucent tinted fill + 1px translucent border, rounded `{rounded.lg}`, 12px internal padding, 280px min-height, 12px gap between cards. Variants: `todo-column-todo` (blue), `todo-column-doing` (green), `todo-column-closed` (slate). The tint reads as a colored glass panel over the navy floor.
+
+**`todo-column-count`** — Pill counter in the column head. Accent solid fill per column (`{colors.board-accent-blue}` / `-green` / `-slate`), `{colors.on-dark}` text, `{typography.caption}` metrics (12px / 500), padding 4px × 10px, min-width 26px, centered. Same pill geometry as the light surface's `status` badges.
+
+**`todo-card`** — A white card on the dark board. `{colors.canvas}` background, 1px `{colors.hairline}` border, rounded `{rounded.lg}`, 14px padding, subtle drop shadow, 10px internal gap. Carries a 15px/600 title, optional 13px markdown body (inline code 12px mono on `{colors.surface-soft}`), an 11px muted meta line ("更新于 …"), and standard 40px action buttons (`开始` / `关闭` secondary+primary, or `移回待办` / `关闭`). Closed cards add a `{colors.success}` left-rail close-reason block and a success-soft project tag pill — the same recipe as `status` success badges on the light surface.
+
+**`todo-card-editable`** — An open card in read mode. Cursor text; hover shifts the border to `{colors.board-accent-blue-soft}` with an elevated shadow to signal in-place editing. Keyboard focus shows the 2px board focus outline. Click or Enter swaps it for the editor.
+
+**`todo-draft`** — The "＋ 添加 TODO" affordance pinned at the bottom of the 待办 column. A full-width dashed button (`{colors.board-line-strong}` border, `{colors.board-draft-fill}` fill, min-height 92px) with `{colors.on-dark}` strong label + 11px hint. Hover / active shifts to the blue draft fill (`{colors.board-draft-fill-active}`) with `{colors.board-accent-blue-soft}` border — the dark-surface equivalent of an add-control, never a black primary CTA (which would vanish on navy).
+
+**`todo-card-editor`** — The inline editing state of a card: border shifts to `{colors.board-accent-blue-line}` with a 2px low-alpha ring. Contains a standard 40px `{component.text-input}` for the title (weight 600) and a mono `{typography.code}` textarea for the markdown description, plus an 11px autosave hint. Saves on focus-out; Escape cancels; Cmd/Ctrl+Enter commits.
+
 ## Do's and Don'ts
 
 ### Do
@@ -486,14 +627,22 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 - Use `{component.nav-pill-group}` for grouped sub-nav segments. The pill-in-pill treatment is signature.
 - Use a locally embedded Font Awesome Free SVG for interface actions such as project settings.
 - Let operational pages end with their content area; do not append a decorative footer.
+- Treat the 周报工作台 as the source of truth for shared components: the board reuses the same buttons, inputs, dialogs, toast, loading overlay, and badge recipes on its white cards — identical metrics, no per-surface shrinking.
+- Keep every TODO-board color in the `board-*` token set (`{colors.board-canvas}`, `{colors.board-todo-fill}`, …) and reference tokens in CSS — never re-hardcode a hex or rgba in a component rule.
+- Match badge/pill metrics across surfaces: 12px / 500, padding 4px × 10px, `{rounded.pill}` — count pills, project tags, and status badges all share one geometry.
+- Switch the focus outline by floor: ink on light, `{colors.board-accent-blue-soft}` on the board, so keyboard focus is always visible.
+- Update the `theme-color` meta with the surface (white ↔ `{colors.board-canvas}`).
 
 ### Don't
 - Don't use accent colors (`{colors.brand-accent}`, badge pastels) on primary CTAs. The system is monochrome at the action layer.
 - Don't bold display weight beyond 600. Cal Sans at 700 reads as bombastic.
 - Don't use rounded radius beyond `{rounded.xl}` (16px) on cards. Larger radii read as consumer-app, not professional booking software.
-- Don't introduce persistent dark page chrome. Dark surfaces remain a deliberate, scarce signal.
+- Don't introduce persistent dark page chrome. Dark surfaces remain a deliberate, scarce signal — the TODO board is the one inverted surface; the light workspace never adopts board tints.
 - Don't draw one-off interface icons when Font Awesome Free contains a suitable semantic match.
-- Don't add hover state styling beyond what the system already encodes — primary darkens on press; nothing else changes.
+- Don't restyle shared controls per-surface — no smaller buttons on board cards, no alternate input heights, no bespoke dialog chrome on either page.
+- Don't let `board-*` accents leak onto the light workspace, and don't put `{colors.brand-accent}` or badge pastels on the board.
+- Don't add a third visual theme; new pages adopt the light workspace or board mood wholesale.
+- Don't add hover state styling beyond what the system already encodes — primary darkens on press; nothing else changes. (Board edit affordances — editable-card, draft, fold — are the documented exceptions.)
 
 ## Responsive Behavior
 
@@ -501,10 +650,10 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 | Name | Width | Key Changes |
 |---|---|---|
-| Mobile | < 768px | Project switcher becomes horizontal; application title 28→24px; title metadata may wrap; content grids become 1-up |
-| Tablet | 768–1024px | Top nav stays horizontal but tightens; nav-pill-group wraps; feature cards 2-up; pricing 2-up |
-| Desktop | 1024–1440px | Full top-nav with all menu items; 3-up feature cards; 4-up pricing tiers |
-| Wide | > 1440px | Same as desktop with more outer breathing room; max content width caps at 1200px |
+| Mobile | < 768px | Project switcher becomes horizontal; application title 28→24px; title metadata may wrap; content grids become 1-up; TODO board columns become `minmax(260px, 84vw)` and scroll horizontally; page-corner scales to 85% |
+| Tablet | 768–1024px | Top nav stays horizontal but tightens; nav-pill-group wraps; feature cards 2-up; pricing 2-up; TODO board keeps 3 columns and scrolls horizontally |
+| Desktop | 1024–1440px | Full top-nav with all menu items; 3-up feature cards; 4-up pricing tiers; TODO board 3-up columns at full width |
+| Wide | > 1440px | Same as desktop with more outer breathing room; max content width caps at 1200px (board caps at 1480px) |
 
 ### Touch Targets
 - `{component.button-primary}` at minimum 40 × 40px.
@@ -519,6 +668,8 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 - Pricing tier cards collapse 4 → 2 → 1; featured-tier dark surface stays visually distinct at every breakpoint.
 - Nav-pill-group wraps to multi-row on tablet if the segments don't fit horizontally.
 - Avatar + testimonial card layouts stay grid-aligned at every breakpoint.
+- The TODO board never reflows to fewer columns — kanban columns stay side-by-side and the board scrolls horizontally below 1024px, preserving the three-state scan.
+- The board drops the sidebar entirely (single-column shell); the workspace keeps it until 768px.
 
 ### Image Behavior
 - Product UI fragments inside cards retain native aspect ratios; the cards themselves resize.
@@ -527,21 +678,23 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 ## Iteration Guide
 
-1. Focus on ONE component at a time. Reference its YAML key directly (`{component.feature-card}`, `{component.pricing-tier-card-featured}`).
+1. Focus on ONE component at a time. Reference its YAML key directly (`{component.feature-card}`, `{component.todo-card}`).
 2. Variants of an existing component (`-active`, `-disabled`, `-focused`) live as separate entries in `components:`.
-3. Use `{token.refs}` everywhere — never inline hex.
-4. Never document hover. Default and Active/Pressed states only.
+3. Use `{token.refs}` everywhere — never inline hex. Board colors go through the `board-*` tokens, and CSS rules reference the `--board-*` variables.
+4. Never document hover. Default and Active/Pressed states only. (The board's edit affordances — editable-card, draft, fold — are the documented exceptions.)
 5. Display headlines stay Cal Sans 600 with negative letter-spacing. Body stays Inter 400. The trinity does not blur.
 6. Use Font Awesome Free for new interface icons and keep selected SVG definitions local.
 7. Operational application pages do not use a decorative footer.
 8. When in doubt about emphasis: bigger Cal Sans before bolder Cal Sans.
+9. When a shared component and a surface disagree, the 周报工作台 wins; give the board a named token or component instead of an inline override.
 
 ## Known Gaps
 
 - The dembrandt frequency analyzer captured `Buttons: 0 variants` — Cal.com renders most CTAs as styled `<a>` link elements rather than `<button>` tags, which dembrandt's button selector doesn't capture. Button styles are documented from screenshot ground-truth + standard Cal Sans / Inter baselines.
 - Cal Sans is licensed to Cal.com and not available as a public web font; substitutes are documented in the typography section.
 - The badge pastel set (orange / pink / violet / emerald) is documented from observed avatar fill colors; exact hex values may shift seasonally.
-- Animation and transition timings (calendar slot picker, schedule confirmation, integration grid hover-reveal) are not in scope.
+- The `board-*` accent set is native to this application (tailwind blue/emerald/slate families at translucent alpha), not Cal.com-derived; it is tuned for contrast on `{colors.board-canvas}` and may be re-tuned as one set.
+- Animation and transition timings (calendar slot picker, schedule confirmation, integration grid hover-reveal) are not in scope. The page-fold timings (360ms fold, 400ms peel, 280ms view-enter) are implemented values, not analyzed ones.
 - Form validation states beyond `{component.text-input-focused}` are not extracted — error / success states would need a sign-up or booking flow to confirm.
 - The actual booking widget surface (cal.com/{username}) is the product, not a marketing surface; its spec is out of scope.
 - Avatar photos in testimonial sections sometimes carry pastel circular fills with initials instead of photographs; both treatments coexist on the same page.

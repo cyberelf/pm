@@ -21,10 +21,18 @@ def todo_rows(conn):
             """
         ):
         item = dict(row)
-        item["description_html"] = render_markdown(item["description"])
-        item["close_reason_html"] = render_markdown(item["close_reason"])
+        item["description_html"] = _render_todo_markdown(item["description"])
+        item["close_reason_html"] = _render_todo_markdown(item["close_reason"])
         rows.append(item)
     return rows
+
+
+def _render_todo_markdown(md):
+    """TODO card links open in a new tab; raw HTML is escaped by render_markdown,
+    so every <a> here comes from the renderer itself."""
+    return render_markdown(md).replace(
+        "<a href=", '<a target="_blank" rel="noopener noreferrer" href='
+    )
 
 
 def create_todo(conn, payload):

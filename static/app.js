@@ -106,6 +106,13 @@ async function switchAppMode(mode, persist = true) {
   if (persist) localStorage.setItem("workspaceMode", state.mode);
   const showingTodos = state.mode === "todos";
   document.body.classList.toggle("todo-mode", showingTodos);
+  const themeColor = document.querySelector?.('meta[name="theme-color"]');
+  if (themeColor) {
+    const surface = showingTodos
+      ? getComputedStyle(document.documentElement).getPropertyValue("--board-canvas").trim() || "#172033"
+      : "#ffffff";
+    themeColor.setAttribute("content", surface);
+  }
   $("page-current-label").textContent = showingTodos ? "TODO" : "周报";
   $("page-target-label").textContent = showingTodos ? "周报" : "TODO";
   $("page-corner").setAttribute("aria-label", `当前页面：${showingTodos ? "TODO" : "周报"}；切换到${showingTodos ? "周报" : "TODO"}`);
@@ -168,7 +175,7 @@ function renderTodoCard(todo) {
     : "";
   const editable = true;
   return `
-    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" ${editable ? `onclick="beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter') beginTodoEdit(${todo.id})"` : ""}>
+    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" ${editable ? `onclick="if (!event.target.closest('a')) beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter' && !event.target.closest('a')) beginTodoEdit(${todo.id})"` : ""}>
       <h3>${escapeHtml(todo.title)}</h3>
       ${todo.description ? `<div class="todo-markdown">${todo.description_html}</div>` : ""}
       ${todo.status === "closed" ? `
