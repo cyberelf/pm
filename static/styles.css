@@ -142,8 +142,8 @@ strong { color: var(--ink); }
 }
 .page-corner-current {
   position: absolute;
-  top: 44px;
-  right: 42px;
+  top: 36px;
+  right: 34px;
   z-index: 3;
   display: grid;
   justify-items: end;
@@ -160,7 +160,7 @@ strong { color: var(--ink); }
   align-content: start;
   justify-items: end;
   gap: 2px;
-  padding: 44px 42px 0 88px;
+  padding: 36px 34px 0 88px;
   color: #1e293b;
   text-align: right;
 }
