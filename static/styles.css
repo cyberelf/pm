@@ -448,6 +448,7 @@ strong { color: var(--ink); }
 .todo-project { width: fit-content; border-radius: 9999px; background: var(--success-soft); padding: 4px 10px; color: var(--success-ink); font-size: 12px; font-weight: 500; }
 .todo-card-meta { color: var(--muted-soft); font-size: 11px; }
 .todo-card-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.todo-card-actions button { min-height: 34px; padding: 8px 11px; font-size: 12px; }
 .todo-empty { border: 1px dashed var(--board-line-soft); border-radius: var(--radius-lg); padding: 24px 12px; color: var(--board-muted-on-dark); font-size: 13px; text-align: center; }
 .todo-draft { min-height: 92px; display: grid; align-content: center; gap: 5px; border: 1px dashed var(--board-line-strong); border-radius: var(--radius-lg); background: var(--board-draft-fill); color: var(--board-on-accent); text-align: left; }
 .todo-draft strong { color: var(--on-dark); }

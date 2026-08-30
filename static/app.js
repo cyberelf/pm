@@ -18,6 +18,7 @@ const state = {
   todos: [],
   todoEditorId: null,
   pendingReportProjectId: null,
+  pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   branchOptions: {},
   tab: "overview",
@@ -276,8 +277,18 @@ async function moveTodo(id, status) {
   }));
 }
 
-async function deleteTodo(id) {
-  if (!window.confirm("确定删除这条已关闭的 TODO？删除不影响对应的周报资料。")) return;
+function deleteTodo(id) {
+  const todo = state.todos.find((item) => item.id === id);
+  if (!todo) return;
+  state.pendingDeleteTodoId = id;
+  $("todo-delete-title").textContent = todo.title;
+  $("todo-delete-dialog").showModal();
+}
+
+async function runTodoDelete() {
+  const id = state.pendingDeleteTodoId;
+  state.pendingDeleteTodoId = null;
+  if (!id) return;
   updateTodos(await api(`/api/todos/${id}`, { method: "DELETE" }));
   toast("TODO 已删除");
 }
@@ -1100,6 +1111,18 @@ $("report-confirm-dialog").oncancel = () => {
   state.pendingReportProjectId = null;
 };
 $("cancel-close-todo").onclick = () => $("close-todo-dialog").close();
+$("cancel-todo-delete").onclick = () => {
+  state.pendingDeleteTodoId = null;
+  $("todo-delete-dialog").close();
+};
+$("todo-delete-form").onsubmit = async (event) => {
+  event.preventDefault();
+  $("todo-delete-dialog").close();
+  await runTodoDelete();
+};
+$("todo-delete-dialog").oncancel = () => {
+  state.pendingDeleteTodoId = null;
+};
 $("close-todo-form").onsubmit = async (event) => {
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(event.target).entries());

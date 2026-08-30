@@ -179,6 +179,13 @@ components:
     textColor: "{colors.ink}"
     rounded: "{rounded.full}"
     size: 36px
+  button-compact:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: 12px / 600
+    rounded: "{rounded.md}"
+    padding: 8px 11px
+    height: 34px
   button-text-link:
     backgroundColor: transparent
     textColor: "{colors.ink}"
@@ -549,6 +556,8 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 **`button-icon-circular`** — 36 × 36px circular icon button. Background `{colors.canvas}`, hairline border, ink-color icon. Used for share, "view more", carousel arrows.
 
+**`button-compact`** — The sanctioned small button for dense card rows (TODO card actions). Same chrome as `button-secondary` (canvas fill, hairline border, `{rounded.md}`) at reduced metrics: 34px min-height, 8px × 11px padding, 12px / 600 label. Primary and danger variants keep their fills at compact size. Everything else — inputs, dialogs, toast — stays at standard size; `button-compact` is the only sanctioned reduction.
+
 **`button-text-link`** — Inline text button, no background. Used for "Sign in" in the top nav and inline CTA links inside cards.
 
 **`text-link`** — Inline body links in `{colors.ink}` (the brand keeps inline links monochrome). Underlined on hover (not documented per the no-hover policy, but mentioned for context).
@@ -607,7 +616,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 **`todo-column-count`** — Pill counter in the column head. Accent solid fill per column (`{colors.board-accent-blue}` / `-green` / `-slate`), `{colors.on-dark}` text, `{typography.caption}` metrics (12px / 500), padding 4px × 10px, min-width 26px, centered. Same pill geometry as the light surface's `status` badges.
 
-**`todo-card`** — A white card on the dark board. `{colors.canvas}` background, 1px `{colors.hairline}` border, rounded `{rounded.lg}`, 14px padding, subtle drop shadow, 10px internal gap. Carries a 15px/600 title, optional 13px markdown body (inline code 12px mono on `{colors.surface-soft}`), an 11px muted meta line ("更新于 …"), and standard 40px action buttons (`开始` / `关闭` secondary+primary, or `移回待办` / `关闭`). Closed cards add a `{colors.success}` left-rail close-reason block and a success-soft project tag pill — the same recipe as `status` success badges on the light surface.
+**`todo-card`** — A white card on the dark board. `{colors.canvas}` background, 1px `{colors.hairline}` border, rounded `{rounded.lg}`, 14px padding, subtle drop shadow, 10px internal gap. Carries a 15px/600 title, optional 13px markdown body (inline code 12px mono on `{colors.surface-soft}`), an 11px muted meta line ("更新于 …"), and `{component.button-compact}` action buttons (`开始` / `关闭` secondary+primary, `移回待办`, or `查看项目资料` + danger `删除` on closed cards — destructive actions confirm through the shared `message-dialog`). Closed cards add a `{colors.success}` left-rail close-reason block and a success-soft project tag pill — the same recipe as `status` success badges on the light surface.
 
 **`todo-card-editable`** — An open card in read mode. Cursor text; hover shifts the border to `{colors.board-accent-blue-soft}` with an elevated shadow to signal in-place editing. Keyboard focus shows the 2px board focus outline. Click or Enter swaps it for the editor.
 
@@ -627,7 +636,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 - Use `{component.nav-pill-group}` for grouped sub-nav segments. The pill-in-pill treatment is signature.
 - Use a locally embedded Font Awesome Free SVG for interface actions such as project settings.
 - Let operational pages end with their content area; do not append a decorative footer.
-- Treat the 周报工作台 as the source of truth for shared components: the board reuses the same buttons, inputs, dialogs, toast, loading overlay, and badge recipes on its white cards — identical metrics, no per-surface shrinking.
+- Treat the 周报工作台 as the source of truth for shared components: the board reuses the same buttons, inputs, dialogs, toast, loading overlay, and badge recipes on its white cards. `{component.button-compact}` is the one sanctioned size reduction, for dense card action rows.
 - Keep every TODO-board color in the `board-*` token set (`{colors.board-canvas}`, `{colors.board-todo-fill}`, …) and reference tokens in CSS — never re-hardcode a hex or rgba in a component rule.
 - Match badge/pill metrics across surfaces: 12px / 500, padding 4px × 10px, `{rounded.pill}` — count pills, project tags, and status badges all share one geometry.
 - Switch the focus outline by floor: ink on light, `{colors.board-accent-blue-soft}` on the board, so keyboard focus is always visible.
@@ -639,7 +648,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 - Don't use rounded radius beyond `{rounded.xl}` (16px) on cards. Larger radii read as consumer-app, not professional booking software.
 - Don't introduce persistent dark page chrome. Dark surfaces remain a deliberate, scarce signal — the TODO board is the one inverted surface; the light workspace never adopts board tints.
 - Don't draw one-off interface icons when Font Awesome Free contains a suitable semantic match.
-- Don't restyle shared controls per-surface — no smaller buttons on board cards, no alternate input heights, no bespoke dialog chrome on either page.
+- Don't restyle shared controls per-surface — dense rows use `{component.button-compact}`, never ad-hoc sizes; inputs, dialogs, and overlays keep standard metrics on both pages.
 - Don't let `board-*` accents leak onto the light workspace, and don't put `{colors.brand-accent}` or badge pastels on the board.
 - Don't add a third visual theme; new pages adopt the light workspace or board mood wholesale.
 - Don't add hover state styling beyond what the system already encodes — primary darkens on press; nothing else changes. (Board edit affordances — editable-card, draft, fold — are the documented exceptions.)
