@@ -89,6 +89,15 @@ def update_todo(conn, todo_id, payload):
         )
 
 
+def delete_todo(conn, todo_id):
+    """Delete a closed TODO. The archived weekly-report material
+    (material_id) is intentionally left untouched."""
+    row = _todo(conn, todo_id)
+    if row["status"] != "closed":
+        raise ValidationError("only closed TODO items can be deleted")
+    conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+
+
 def close_todo(conn, todo_id, payload):
     row = _todo(conn, todo_id)
     if row["status"] == "closed":

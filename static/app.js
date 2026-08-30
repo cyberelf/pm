@@ -173,6 +173,9 @@ function renderTodoCard(todo) {
   const archive = todo.project_id
     ? `<button onclick="event.stopPropagation(); openTodoMaterial(${todo.project_id}, ${todo.material_id})">查看项目资料</button>`
     : "";
+  const remove = todo.status === "closed"
+    ? `<button class="danger" onclick="event.stopPropagation(); deleteTodo(${todo.id})">删除</button>`
+    : "";
   const editable = true;
   return `
     <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" ${editable ? `onclick="if (!event.target.closest('a')) beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter' && !event.target.closest('a')) beginTodoEdit(${todo.id})"` : ""}>
@@ -183,7 +186,7 @@ function renderTodoCard(todo) {
         ${todo.project_name ? `<span class="todo-project">${escapeHtml(todo.project_name)}</span>` : ""}
       ` : ""}
       <div class="todo-card-meta">更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</div>
-      ${(openActions || archive) ? `<div class="todo-card-actions">${openActions}${archive}</div>` : ""}
+      ${(openActions || archive || remove) ? `<div class="todo-card-actions">${openActions}${archive}${remove}</div>` : ""}
     </article>
   `;
 }
@@ -271,6 +274,12 @@ async function moveTodo(id, status) {
     method: "PUT",
     body: JSON.stringify({ status }),
   }));
+}
+
+async function deleteTodo(id) {
+  if (!window.confirm("确定删除这条已关闭的 TODO？删除不影响对应的周报资料。")) return;
+  updateTodos(await api(`/api/todos/${id}`, { method: "DELETE" }));
+  toast("TODO 已删除");
 }
 
 function openCloseTodo(id) {

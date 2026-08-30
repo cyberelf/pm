@@ -101,6 +101,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('function saveTodoEditor(rawId)', source)
         self.assertIn('todo.description_html', source)
         self.assertIn('/api/todos/${id}/close', source)
+        self.assertIn('async function deleteTodo(id)', source)
+        self.assertIn('`<button class="danger" onclick="event.stopPropagation(); deleteTodo(${todo.id})">删除</button>`', source)
         self.assertIn('function confirmProjectGeneration(projectId)', source)
         self.assertIn('function runConfirmedProjectGeneration()', source)
         self.assertIn('$("report-confirm-dialog").showModal()', source)

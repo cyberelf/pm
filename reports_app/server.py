@@ -29,7 +29,7 @@ from .reports import changed_since_last_success, generate_report
 from .risks import evaluate_risks, progress_status
 from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
-from .todos import close_todo, create_todo, todo_rows, update_todo
+from .todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from .validation import (
     ValidationError,
     require_project_name,
@@ -169,6 +169,11 @@ class Handler(BaseHTTPRequestHandler):
                 material_id = close_todo(conn, int(parts[2]), self.body_json())
                 conn.commit()
                 self.json({"material_id": material_id, "todos": todo_rows(conn)})
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "DELETE":
+                delete_todo(conn, int(parts[2]))
+                conn.commit()
+                self.json({"todos": todo_rows(conn)})
                 return
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects":
                 project_id = int(parts[2])

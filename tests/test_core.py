@@ -35,7 +35,7 @@ from reports_app.reports import assemble_context, build_claude_evidence_prompt, 
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key
-from reports_app.todos import close_todo, create_todo, todo_rows, update_todo
+from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
 
 
@@ -121,6 +121,25 @@ class CoreTest(unittest.TestCase):
             self.assertIn('target="_blank"', rendered)
             self.assertIn('rel="noopener noreferrer"', rendered)
             self.assertNotIn('<a href=', rendered)
+
+    def test_todo_delete_only_removes_closed_todo_and_keeps_material(self):
+        todo_id = create_todo(self.conn, {"title": "Temporary card", "description": "Delete me"})
+        with self.assertRaises(ValidationError):
+            delete_todo(self.conn, todo_id)
+        material_id = close_todo(
+            self.conn, todo_id, {"reason": "Archived first", "project_id": self.project_id}
+        )
+        material = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+        self.assertIsNotNone(material)
+
+        delete_todo(self.conn, todo_id)
+
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM todos WHERE id = ?", (todo_id,)).fetchone()["n"], 0)
+        kept = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+        self.assertIsNotNone(kept)
+        self.assertEqual(kept["extracted_text"], material["extracted_text"])
+        with self.assertRaises(ValidationError):
+            delete_todo(self.conn, todo_id)
 
     def test_todo_close_requires_reason_and_optionally_archives_project_material(self):
         todo_id = create_todo(self.conn, {"title": "Finish release", "description": "Validate TODO board"})
