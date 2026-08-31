@@ -513,7 +513,7 @@ function renderSchedules(schedules, timezone) {
       <label>Weekday <input name="schedule_weekday" type="number" min="1" max="7" value="${s.weekday}"></label>
       <label>Time <input name="schedule_time" value="${escapeHtml(s.local_time)}"></label>
       ${timezoneSelect("schedule_timezone", "Timezone", s.timezone)}
-      <button type="button" onclick="this.closest('.schedule-row').remove()">Remove</button>
+      <button type="button" class="danger" onclick="this.closest('.schedule-row').remove()">Remove</button>
       <small class="schedule-last-fire">${s.last_checked_at ? `上次触发 ${escapeHtml(formatChinaTime(s.last_checked_at))}` : "尚未触发"}</small>
     </div>
   `;}).join("");

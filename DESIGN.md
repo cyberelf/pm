@@ -418,9 +418,9 @@ The app is an operational shell, not a marketing page. Screens end with their wo
 - **On Dark Soft** (`{colors.on-dark-soft}` — #a1a1aa): Secondary text on intentionally inverted surfaces.
 
 ### Semantic
-- **Success** (`{colors.success}` — #10b981): Confirmation states, success badges in product UI.
+- **Success** (`{colors.success}` — #10b981): Confirmation states, success badges in product UI, and the on-state fill of toggle switches (`{component.switch}`).
 - **Warning** (`{colors.warning}` — #f59e0b): Warning callouts.
-- **Error** (`{colors.error}` — #ef4444): Validation errors.
+- **Error** (`{colors.error}` — #ef4444): Validation errors, plus the danger chrome of delete/remove buttons (`{component.button-danger}`).
 
 ### Board (TODO 看板 only)
 The board carries its own closed accent set. These tokens are scoped to `#todo-view` and never appear on the light workspace:
@@ -560,6 +560,8 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 **`button-text-link`** — Inline text button, no background. Used for "Sign in" in the top nav and inline CTA links inside cards.
 
+**`button-danger`** — Secondary-chrome button reserved for destructive actions (delete material, delete repo, remove schedule row). Same metrics as `button-secondary`; border `{colors.error-border}` (#fecaca), text `{colors.error-ink}` (#b91c1c), active fill `{colors.error-surface}` (#fef2f2). Every delete/remove action uses this variant — no other buttons may carry danger chrome.
+
 **`text-link`** — Inline body links in `{colors.ink}` (the brand keeps inline links monochrome). Underlined on hover (not documented per the no-hover policy, but mentioned for context).
 
 ### Cards & Containers
@@ -585,6 +587,10 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 **`text-input`** — Standard text input. Background `{colors.canvas}`, text `{colors.ink}`, type `{typography.body-md}`, rounded `{rounded.md}` (8px), padding 10px × 14px, height 40px. 1px hairline border in `{colors.hairline}`.
 
 **`text-input-focused`** — Focus state. Border thickens or shifts to `{colors.ink}` for emphasis.
+
+### Switch
+
+**`switch`** — Two-state toggle for enable/disable (GitHub repo sources, update schedules). 36 × 20px pill track with a 16px `{colors.canvas}` knob. Off: `{colors.surface-strong}` (#e5e7eb) track. On: `{colors.success}` (#10b981) track. Track fill and knob travel animate over 150ms. Built on a real checkbox: the invisible input keeps keyboard toggling, and focus shows the standard ink `focus-visible` outline around the track. Disabled rows dim or tint their container but the switch itself stays fully interactive. Inside form rows the switch sits in a 40px-high cell so its center aligns with the standard input line.
 
 ### Tags / Badges
 
