@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .config import DB_PATH
 from .db import connect
-from .github import weekly_commits
+from .git_sources import weekly_commits
 from .markdown import render_markdown
 from .reports import get_effective_template
 from .timeutil import current_week_key, parse_iso, week_bounds, week_key_for
@@ -96,6 +96,8 @@ def overview(conn, project, week_key):
         "repos": [
             {
                 "repo": row["repo"],
+                "git_mode": row["git_mode"],
+                "gitlab_server": row["gitlab_server"],
                 "notes": row["notes"],
                 "tracked_branches": row["tracked_branches"],
                 "status": row["status"],
@@ -217,8 +219,8 @@ def repos(conn, project_id):
     result = []
     for row in conn.execute(
         """
-        SELECT id, repo, notes, tracked_branches_json, status, status_message, last_checked_at,
-               last_activity_at, activity_summary, created_at, updated_at
+        SELECT id, repo, git_mode, gitlab_server, notes, tracked_branches_json, status, status_message,
+               last_checked_at, last_activity_at, activity_summary, created_at, updated_at
         FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id
         """,
         (project_id,),
@@ -237,7 +239,14 @@ def commits(conn, project, week_key, repo_name=""):
             continue
         if repo_name and row["repo"] != repo_name:
             continue
-        item = weekly_commits(row["repo"], start, end, row["tracked_branches"])
+        item = weekly_commits(
+            row["repo"],
+            start,
+            end,
+            row["tracked_branches"],
+            git_mode=row["git_mode"],
+            gitlab_server=row["gitlab_server"],
+        )
         item["notes"] = row["notes"]
         result.append(item)
     if repo_name and not result:
@@ -286,7 +295,7 @@ def available_commands(project_id, week_key):
         f"{base} material --id <material_id>",
         f"{base} repos",
         f"{base} commits",
-        f"{base} commits --repo <owner/name>",
+        f"{base} commits --repo <repo path>",
         f"{base} history",
         f"{base} report --week-key <YYYY-Www>",
         f"{base} template",

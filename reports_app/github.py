@@ -4,7 +4,6 @@ import subprocess
 from urllib.parse import urlencode
 
 from .config import TRACK_ALL_BRANCHES
-from .timeutil import iso_now
 
 
 def check_repo(repo, timeout=20):
@@ -69,30 +68,6 @@ def check_repo(repo, timeout=20):
         "last_activity_at": data.get("pushedAt"),
         "default_branch": default_branch,
     }
-
-
-def refresh_repo(conn, repo_id):
-    repo_row = conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
-    result = check_repo(repo_row["repo"])
-    now = iso_now()
-    conn.execute(
-        """
-        UPDATE github_repos
-        SET status = ?, status_message = ?, activity_summary = ?, last_activity_at = ?,
-            last_checked_at = ?, updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            result["status"],
-            result["status_message"],
-            result["activity_summary"],
-            result["last_activity_at"],
-            now,
-            now,
-            repo_id,
-        ),
-    )
-    return result
 
 
 def list_branches(repo, timeout=30):

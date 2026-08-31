@@ -621,6 +621,7 @@ strong { color: var(--ink); }
 .repo-row-disabled td { opacity: 0.55; }
 .repo-row-disabled td:last-child { opacity: 1; }
 .table-textarea { width: min(360px, 100%); min-height: 64px; padding: 8px 10px; font-size: 12px; }
+.table-input { width: min(320px, 100%); min-height: 32px; padding: 5px 10px; font-size: 12px; }
 .branch-picker { position: relative; width: min(260px, 100%); }
 .branch-picker summary {
   min-height: 40px;

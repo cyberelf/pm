@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT, ROOT_DIR
-from .github import weekly_commits
+from .git_sources import weekly_commits
 from .timeutil import current_week_key, iso_now, parse_iso, week_bounds, week_key_for
 
 
@@ -42,7 +42,7 @@ def assemble_context(conn, project_id, week_key=None):
     ).fetchall()
     repos = conn.execute(
         """
-        SELECT repo, notes, tracked_branches_json, status, status_message,
+        SELECT repo, git_mode, gitlab_server, notes, tracked_branches_json, status, status_message,
                last_checked_at, last_activity_at, activity_summary
         FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id
         """,
@@ -140,7 +140,14 @@ def input_summary(context):
 
 def repo_commit_context(repo_row, week_start, week_end):
     branches = json.loads(repo_row["tracked_branches_json"] or '["main"]')
-    result = weekly_commits(repo_row["repo"], week_start, week_end, branches)
+    result = weekly_commits(
+        repo_row["repo"],
+        week_start,
+        week_end,
+        branches,
+        git_mode=repo_row["git_mode"],
+        gitlab_server=repo_row["gitlab_server"],
+    )
     result["notes"] = repo_row["notes"]
     return result
 
@@ -365,8 +372,8 @@ def build_tool_prompt(context, provider):
         "You are generating a weekly project report. "
         f"{output_instruction} Do not describe your process.\n\n"
         "You MUST get all project/platform information through this read-only platform CLI. "
-        "Do not read application files, uploaded files, SQLite databases, or GitHub directly. "
-        "Do not run `gh`; GitHub activity and commits must come from the platform CLI.\n\n"
+        "Do not read application files, uploaded files, SQLite databases, or git hosting services directly. "
+        "Do not run `gh` or `glab`; repository activity and commits must come from the platform CLI.\n\n"
         f"Platform CLI base command:\n`{tool}`\n\n"
         "Start with:\n"
         f"`{tool} overview`\n\n"
@@ -378,7 +385,7 @@ def build_tool_prompt(context, provider):
         f"- `{tool} material --id <material_id>`\n"
         f"- `{tool} repos`\n"
         f"- `{tool} commits`\n"
-        f"- `{tool} commits --repo <owner/name>`\n"
+        f"- `{tool} commits --repo <repo path>`\n"
         f"- `{tool} history`\n"
         f"- `{tool} report --week-key <YYYY-Www>`\n"
         f"- `{tool} template`\n\n"
@@ -404,7 +411,7 @@ def build_claude_evidence_prompt(context):
         "You are generating a weekly project report. Return Markdown only. Do not describe your process.\n\n"
         "Claude Code CLI tool execution is disabled for this provider path. "
         "The application has retrieved the following bounded evidence through its read-only platform context CLI. "
-        "Use only this evidence. Do not read application files, uploaded files, SQLite databases, or GitHub directly. Do not run `gh`.\n\n"
+        "Use only this evidence. Do not read application files, uploaded files, SQLite databases, or git hosting services directly. Do not run `gh` or `glab`.\n\n"
         "Use project profile and plan to understand description, background, objectives, constraints, milestones, and deliverables. "
         "Evaluate this week's progress against plan and weekly planned outcomes. "
         "Use repository notes to interpret what each repo means in this project. "

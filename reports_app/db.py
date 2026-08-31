@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS github_repos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     repo TEXT NOT NULL,
+    git_mode TEXT NOT NULL DEFAULT 'github',
+    gitlab_server TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
     tracked_branches_json TEXT NOT NULL DEFAULT '["main"]',
     status TEXT NOT NULL,
@@ -213,15 +215,22 @@ def migrate_schema(conn):
         conn.execute("ALTER TABLE github_repos ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
     if "tracked_branches_json" not in columns:
         conn.execute("ALTER TABLE github_repos ADD COLUMN tracked_branches_json TEXT NOT NULL DEFAULT '[\"main\"]'")
+    if "git_mode" not in columns:
+        conn.execute("ALTER TABLE github_repos ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'")
+    if "gitlab_server" not in columns:
+        conn.execute("ALTER TABLE github_repos ADD COLUMN gitlab_server TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         DELETE FROM github_repos
         WHERE id NOT IN (
-            SELECT MIN(id) FROM github_repos GROUP BY project_id, repo
+            SELECT MIN(id) FROM github_repos GROUP BY project_id, git_mode, gitlab_server, repo
         )
         """
     )
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repos_project_repo ON github_repos(project_id, repo)")
+    conn.execute("DROP INDEX IF EXISTS idx_github_repos_project_repo")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repos_project_mode_repo ON github_repos(project_id, git_mode, gitlab_server, repo)"
+    )
 
 
 def row_to_dict(row):

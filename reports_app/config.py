@@ -9,6 +9,11 @@ STATIC_DIR = ROOT_DIR / "static"
 
 WORKSPACE_USER = "local-user"
 SUPPORTED_PROVIDERS = {"codex", "claude"}
+GIT_MODE_GITHUB = "github"
+GIT_MODE_GITLAB = "gitlab"
+SUPPORTED_GIT_MODES = {GIT_MODE_GITHUB, GIT_MODE_GITLAB}
+DEFAULT_GITLAB_SERVER = "https://gitlab.com"
+MAX_GITLAB_PAGES = 5
 SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".pdf"}
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 DEFAULT_TIMEZONE = "Asia/Shanghai"

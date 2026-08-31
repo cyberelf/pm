@@ -17,6 +17,10 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 from reports_app.db import create_project, init_db, connect
+from reports_app import git_sources
+from reports_app.gitlab import check_repo as gitlab_check_repo
+from reports_app.gitlab import list_branches as gitlab_list_branches
+from reports_app.gitlab import weekly_commits as gitlab_weekly_commits
 from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
@@ -36,7 +40,7 @@ from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
-from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
+from reports_app.validation import ValidationError, gitlab_server_from_url, validate_branches, validate_git_mode, validate_gitlab_server, validate_material_filename, validate_repo, validate_schedule_item
 
 
 class CoreTest(unittest.TestCase):
@@ -73,6 +77,24 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(validate_branches(["main", "*", "develop"]), ["*"])
         with self.assertRaises(ValidationError):
             validate_branches(["bad branch"])
+
+    def test_git_mode_and_gitlab_validation(self):
+        self.assertEqual(validate_repo("group/proj", "gitlab"), "group/proj")
+        self.assertEqual(validate_repo("https://gitlab.example.com/group/sub/proj.git/", "gitlab"), "group/sub/proj")
+        self.assertEqual(validate_repo("https://github.com/owner/repo/", "github"), "owner/repo")
+        with self.assertRaises(ValidationError):
+            validate_repo("group", "gitlab")
+        with self.assertRaises(ValidationError):
+            validate_repo("owner/repo", "gitea")
+        self.assertEqual(validate_git_mode(None), "github")
+        self.assertEqual(validate_git_mode("gitlab"), "gitlab")
+        self.assertEqual(validate_gitlab_server("gitlab.example.com/"), "https://gitlab.example.com")
+        self.assertEqual(validate_gitlab_server(""), "")
+        self.assertEqual(validate_gitlab_server("http://10.0.0.2:8080"), "http://10.0.0.2:8080")
+        with self.assertRaises(ValidationError):
+            validate_gitlab_server("ftp://gitlab.example.com")
+        self.assertEqual(gitlab_server_from_url("https://gitlab.example.com:8443/group/proj"), "https://gitlab.example.com:8443")
+        self.assertEqual(gitlab_server_from_url("group/proj"), "")
 
     def test_project_settings_and_schedule(self):
         update_settings(
@@ -743,6 +765,231 @@ class CoreTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_gitlab_check_repo_uses_glab_with_hostname(self):
+        def fake_run(cmd, **kwargs):
+            self.assertEqual(cmd[0], "glab")
+            self.assertEqual(cmd[cmd.index("--hostname") + 1], "gitlab.example.com")
+            if cmd[1] == "auth":
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            endpoint = cmd[2]
+            if "merge_requests" in endpoint:
+                payload = [{"iid": 1}, {"iid": 2}]
+            elif "issues" in endpoint:
+                payload = [{"iid": 1}]
+            elif endpoint.startswith("projects/group%2Fproj"):
+                payload = {
+                    "path_with_namespace": "group/proj",
+                    "description": "infra",
+                    "default_branch": "trunk",
+                    "last_activity_at": "2026-06-30T10:00:00.000+08:00",
+                }
+            else:
+                payload = {}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
+            "reports_app.gitlab.subprocess.run", side_effect=fake_run
+        ) as run:
+            result = gitlab_check_repo("group/proj", server="gitlab.example.com")
+
+        self.assertEqual(result["status"], "connected")
+        self.assertEqual(result["default_branch"], "trunk")
+        self.assertEqual(result["last_activity_at"], "2026-06-30T10:00:00.000+08:00")
+        self.assertIn("Recent merge requests: 2", result["activity_summary"])
+        self.assertIn("Recent issues: 1", result["activity_summary"])
+        self.assertEqual(run.call_count, 4)
+        endpoint = run.call_args_list[1].args[0][2]
+        self.assertTrue(endpoint.startswith("projects/group%2Fproj"))
+
+    def test_gitlab_check_repo_reports_missing_glab_and_bad_auth(self):
+        with mock.patch("reports_app.gitlab.shutil.which", return_value=None):
+            result = gitlab_check_repo("group/proj")
+        self.assertEqual(result["status"], "disconnected")
+        self.assertIn("glab", result["status_message"])
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="not logged in")
+
+        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
+            "reports_app.gitlab.subprocess.run", side_effect=fake_run
+        ):
+            result = gitlab_check_repo("group/proj")
+        self.assertEqual(result["status"], "unauthenticated")
+        self.assertIn("not logged in", result["status_message"])
+
+    def test_gitlab_weekly_commits_reads_selected_branches_and_dedupes(self):
+        shared = {
+            "id": "aaa1112223334445",
+            "title": "shared change",
+            "author_name": "A",
+            "committed_date": "2026-06-30T08:00:00.000+08:00",
+            "web_url": "https://gitlab.example.com/group/proj/-/commit/aaa1112223334445",
+        }
+
+        def fake_run(cmd, **kwargs):
+            endpoint = cmd[2]
+            self.assertIn("projects/group%2Fsub%2Fproj/repository/commits", endpoint)
+            self.assertIn("per_page=100&page=1", endpoint)
+            if "ref_name=main" in endpoint:
+                items = [shared]
+            elif "ref_name=develop" in endpoint:
+                items = [
+                    shared,
+                    {
+                        "id": "bbb2223334445566",
+                        "title": "develop only",
+                        "author_name": "B",
+                        "authored_date": "2026-07-01T00:00:00Z",
+                        "web_url": "https://gitlab.example.com/group/proj/-/commit/bbb2223334445566",
+                    },
+                ]
+            else:
+                items = []
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(items), stderr="")
+
+        start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
+        end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
+        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
+            "reports_app.gitlab.subprocess.run", side_effect=fake_run
+        ) as run:
+            result = gitlab_weekly_commits(
+                "group/sub/proj",
+                start,
+                end,
+                ["main", "develop"],
+                server="https://gitlab.example.com",
+            )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["branches"], ["main", "develop"])
+        self.assertEqual(len(result["commits"]), 2)
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertIn("--hostname", command)
+            self.assertEqual(command[command.index("--hostname") + 1], "gitlab.example.com")
+        self.assertIn("since=2026-06-29T00%3A00%3A00Z", run.call_args_list[0].args[0][2])
+        shared_commit = next(item for item in result["commits"] if item["sha"] == "aaa111222333")
+        self.assertEqual(shared_commit["branches"], ["main", "develop"])
+        self.assertEqual(shared_commit["date"], "2026-06-30T00:00:00Z")
+        self.assertEqual(shared_commit["author"], "A")
+        develop_commit = next(item for item in result["commits"] if item["sha"] == "bbb222333444")
+        self.assertEqual(develop_commit["message"], "develop only")
+
+    def test_gitlab_list_branches_stops_at_short_page(self):
+        def fake_run(cmd, **kwargs):
+            endpoint = cmd[2]
+            self.assertIn("projects/group%2Fproj/repository/branches", endpoint)
+            items = [{"name": f"feature/{index}"} for index in range(100)] if endpoint.endswith("page=1") else [{"name": "release/next"}]
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(items), stderr="")
+
+        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
+            "reports_app.gitlab.subprocess.run", side_effect=fake_run
+        ) as run:
+            result = gitlab_list_branches("group/proj", server="gitlab.example.com")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(result["branches"]), 101)
+        self.assertEqual(result["branches"][-1], "release/next")
+        self.assertEqual(run.call_count, 2)
+
+    def test_git_sources_dispatch_routes_by_mode(self):
+        with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check, mock.patch(
+            "reports_app.git_sources.github_check_repo"
+        ) as gh_check:
+            glab_check.return_value = {"status": "connected"}
+            git_sources.check_repo("group/proj", "gitlab", "https://gitlab.example.com")
+        glab_check.assert_called_once_with("group/proj", server="https://gitlab.example.com", timeout=20)
+        gh_check.assert_not_called()
+
+        with mock.patch("reports_app.git_sources.gitlab_weekly_commits") as glab_commits, mock.patch(
+            "reports_app.git_sources.github_weekly_commits"
+        ) as gh_commits:
+            start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
+            end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
+            git_sources.weekly_commits("owner/repo", start, end, ["main"], git_mode="github")
+        gh_commits.assert_called_once_with("owner/repo", start, end, ["main"], timeout=30)
+        glab_commits.assert_not_called()
+
+    def test_gitlab_repo_mode_is_persisted_and_unique_per_mode(self):
+        connected = {
+            "status": "connected",
+            "status_message": "ok",
+            "activity_summary": "summary",
+            "last_activity_at": "2026-06-27T00:00:00Z",
+            "default_branch": "main",
+        }
+        with mock.patch("reports_app.server.check_repo") as mocked:
+            mocked.return_value = connected
+            gh_id = add_repo(self.conn, self.project_id, {"repo": "group/proj", "notes": "mirror", "git_mode": "github"})
+            gl_id = add_repo(
+                self.conn,
+                self.project_id,
+                {
+                    "repo": "https://gitlab.example.com/group/proj.git",
+                    "notes": "primary",
+                    "git_mode": "gitlab",
+                    "gitlab_server": "gitlab.example.com",
+                },
+            )
+            again = add_repo(
+                self.conn,
+                self.project_id,
+                {"repo": "group/proj", "git_mode": "gitlab", "gitlab_server": "https://gitlab.example.com"},
+            )
+        self.assertNotEqual(gh_id, gl_id)
+        self.assertEqual(gl_id, again)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM github_repos").fetchone()["n"], 2)
+        row = self.conn.execute("SELECT git_mode, gitlab_server, repo FROM github_repos WHERE id = ?", (gl_id,)).fetchone()
+        self.assertEqual(row["git_mode"], "gitlab")
+        self.assertEqual(row["gitlab_server"], "https://gitlab.example.com")
+        self.assertEqual(row["repo"], "group/proj")
+
+        with self.assertRaises(ValidationError):
+            update_repo_notes(
+                self.conn,
+                self.project_id,
+                gh_id,
+                {"git_mode": "gitlab", "gitlab_server": "https://gitlab.example.com"},
+            )
+
+        other_id = None
+        with mock.patch("reports_app.server.check_repo") as mocked:
+            mocked.return_value = connected
+            other_id = add_repo(self.conn, self.project_id, {"repo": "other/proj", "git_mode": "github"})
+            update_repo_notes(
+                self.conn,
+                self.project_id,
+                other_id,
+                {"git_mode": "gitlab", "gitlab_server": "https://gitlab.example.com"},
+            )
+        row = self.conn.execute("SELECT git_mode, gitlab_server, status FROM github_repos WHERE id = ?", (other_id,)).fetchone()
+        self.assertEqual(row["git_mode"], "gitlab")
+        self.assertEqual(row["gitlab_server"], "https://gitlab.example.com")
+        self.assertEqual(row["status"], "connected")
+
+        self.conn.execute("UPDATE github_repos SET status = 'inaccessible' WHERE id = ?", (gl_id,))
+        titles = {
+            item["source_ref"]: item["title"]
+            for item in source_diagnostics(self.conn, self.project_id, "2026-W27")
+        }
+        self.assertEqual(titles[str(gl_id)], "GitLab source unavailable")
+
+    def test_report_context_passes_git_mode_to_weekly_commits(self):
+        self.conn.execute(
+            """
+            INSERT INTO github_repos
+            (project_id, repo, git_mode, gitlab_server, tracked_branches_json, status, status_message, activity_summary, created_at, updated_at)
+            VALUES (?, 'group/proj', 'gitlab', 'https://gitlab.example.com', '["main"]', 'connected', 'ok', 'summary', '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        with mock.patch("reports_app.reports.weekly_commits") as commits:
+            commits.return_value = {"repo": "group/proj", "status": "ok", "status_message": "0 commits", "commits": []}
+            context, _hash = assemble_context(self.conn, self.project_id)
+        self.assertEqual(commits.call_args.kwargs["git_mode"], "gitlab")
+        self.assertEqual(commits.call_args.kwargs["gitlab_server"], "https://gitlab.example.com")
+        self.assertEqual(context["github_activity"][0]["git_mode"], "gitlab")
 
     def test_schedule_enable_disable_and_skipped_run_recording(self):
         weekday = datetime.now(ZoneInfo("Asia/Shanghai")).isoweekday()

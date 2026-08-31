@@ -442,19 +442,38 @@ function renderSettings(ws) {
       <div class="wide row"><button class="primary">Save Settings</button></div>
     </form>
     <div class="panel">
-      <div class="panel-head"><h2>GitHub</h2><span>本周 commits 会进入生成上下文</span></div>
-      <div class="row"><input id="repo-input" placeholder="owner/repo"><input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界"><button type="button" onclick="addRepo()">Add Repo</button></div>
+      <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
+      <div class="row">
+        <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式"><option value="github">GitHub</option><option value="gitlab">GitLab</option></select>
+        <input id="repo-input" placeholder="owner/repo">
+        <input id="repo-server-input" placeholder="GitLab 服务器地址，如 https://gitlab.example.com" class="hidden">
+        <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
+        <button type="button" onclick="addRepo()">Add Repo</button>
+      </div>
       <table class="table"><thead><tr><th>Repo</th><th>跟踪分支</th><th>补充说明</th><th>Status</th><th>Action</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>No repositories.</td></tr>"}</tbody></table>
     </div>
   `;
   $("settings-form").onsubmit = saveSettings;
+  onRepoModeChange();
+}
+
+function onRepoModeChange() {
+  const gitlab = $("repo-mode-input") && $("repo-mode-input").value === "gitlab";
+  if (!$("repo-server-input")) return;
+  $("repo-server-input").classList.toggle("hidden", !gitlab);
+  $("repo-input").placeholder = gitlab ? "group/project 或 group/sub-group/project" : "owner/repo";
 }
 
 function renderRepoRow(r) {
   const enabled = Number(r.enabled) !== 0;
+  const gitlab = r.git_mode === "gitlab";
+  const modeLabel = gitlab ? "GitLab" : "GitHub";
+  const target = gitlab
+    ? `<input id="repo-server-${r.id}" class="table-input" placeholder="https://gitlab.com（自建实例可改）" value="${escapeAttr(r.gitlab_server || "")}">`
+    : "";
   return `
     <tr class="${enabled ? "" : "repo-row-disabled"}">
-      <td>${escapeHtml(r.repo)}</td>
+      <td><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}${target ? `<br>${target}` : ""}</td>
       <td>${renderBranchPicker(r)}</td>
       <td><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
       <td>${enabled
@@ -838,7 +857,10 @@ async function deleteMaterial(id) {
 }
 
 async function addRepo() {
-  await api(`/api/projects/${state.projectId}/repos`, { method: "POST", body: JSON.stringify({ repo: $("repo-input").value, notes: $("repo-notes-input").value }) });
+  const gitMode = $("repo-mode-input").value;
+  const payload = { repo: $("repo-input").value, notes: $("repo-notes-input").value, git_mode: gitMode };
+  if (gitMode === "gitlab") payload.gitlab_server = $("repo-server-input").value;
+  await api(`/api/projects/${state.projectId}/repos`, { method: "POST", body: JSON.stringify(payload) });
   toast("Repository saved");
   await loadWorkspace();
 }
@@ -846,7 +868,10 @@ async function addRepo() {
 async function saveRepoNotes(id) {
   const branches = selectedRepoBranches(id);
   if (!branches.length) return toast("Choose at least one branch");
-  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify({ notes: $(`repo-notes-${id}`).value, branches }) });
+  const repo = (state.workspace.repos || []).find((item) => item.id === id);
+  const payload = { notes: $(`repo-notes-${id}`).value, branches, git_mode: repo && repo.git_mode === "gitlab" ? "gitlab" : "github" };
+  if (payload.git_mode === "gitlab") payload.gitlab_server = $(`repo-server-${id}`).value;
+  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
   toast("Repository saved");
   await loadWorkspace();
 }
@@ -864,14 +889,16 @@ async function toggleRepo(id, enabled) {
 }
 
 async function deleteRepo(id) {
-  if (!window.confirm("确定删除该仓库？仅移除周报关联与配置，不会影响 GitHub 上的仓库。")) return;
+  if (!window.confirm("确定删除该仓库？仅移除周报关联与配置，不会影响 GitHub / GitLab 上的仓库。")) return;
   await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "DELETE" });
   toast("Repository deleted");
   await loadWorkspace();
 }
 
 async function loadRepoBranches(id) {
-  const data = await withBusy("正在读取分支", "正在通过本地 gh 获取仓库分支列表...", async () => (
+  const repo = (state.workspace.repos || []).find((item) => item.id === id);
+  const via = repo && repo.git_mode === "gitlab" ? "glab" : "gh";
+  const data = await withBusy("正在读取分支", `正在通过本地 ${via} 获取仓库分支列表...`, async () => (
     api(`/api/projects/${state.projectId}/repos/${id}/branches`)
   ));
   if (data.status !== "ok") {
