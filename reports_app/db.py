@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS update_schedules (
     weekday INTEGER NOT NULL,
     local_time TEXT NOT NULL,
     timezone TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
     last_checked_at TEXT,
     created_at TEXT NOT NULL
 );
@@ -186,6 +187,9 @@ def init_db(path: Path = DB_PATH):
 
 
 def migrate_schema(conn):
+    schedule_columns = {row["name"] for row in conn.execute("PRAGMA table_info(update_schedules)")}
+    if "enabled" not in schedule_columns:
+        conn.execute("ALTER TABLE update_schedules ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
     material_columns = {row["name"] for row in conn.execute("PRAGMA table_info(materials)")}
     if "source_type" not in material_columns:
         conn.execute("ALTER TABLE materials ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'")

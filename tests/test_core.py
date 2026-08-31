@@ -34,7 +34,7 @@ from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, provider_command, transient_provider_error
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
-from reports_app.timeutil import current_week_key
+from reports_app.timeutil import current_week_key, iso_now
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
 
@@ -743,6 +743,49 @@ class CoreTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_schedule_enable_disable_and_skipped_run_recording(self):
+        weekday = datetime.now(ZoneInfo("Asia/Shanghai")).isoweekday()
+
+        def insert_schedule(enabled):
+            cur = self.conn.execute(
+                "INSERT INTO update_schedules (project_id, weekday, local_time, timezone, enabled, created_at) VALUES (?, ?, '00:00', 'Asia/Shanghai', ?, ?)",
+                (self.project_id, weekday, enabled, iso_now()),
+            )
+            return cur.lastrowid
+
+        disabled_id = insert_schedule(0)
+        evaluate_schedules(self.conn, self.project_id)
+        row = self.conn.execute("SELECT last_checked_at FROM update_schedules WHERE id = ?", (disabled_id,)).fetchone()
+        self.assertIsNone(row["last_checked_at"])
+
+        enabled_id = insert_schedule(1)
+        evaluate_schedules(self.conn, self.project_id)
+        disabled_row = self.conn.execute("SELECT last_checked_at FROM update_schedules WHERE id = ?", (disabled_id,)).fetchone()
+        enabled_row = self.conn.execute("SELECT last_checked_at FROM update_schedules WHERE id = ?", (enabled_id,)).fetchone()
+        self.assertIsNone(disabled_row["last_checked_at"])
+        self.assertIsNotNone(enabled_row["last_checked_at"])
+        jobs = self.conn.execute("SELECT status FROM generation_jobs WHERE project_id = ? ORDER BY id", (self.project_id,)).fetchall()
+        self.assertEqual([job["status"] for job in jobs], ["success"])
+
+        self.conn.execute("UPDATE update_schedules SET last_checked_at = NULL WHERE id = ?", (enabled_id,))
+        evaluate_schedules(self.conn, self.project_id)
+        jobs = self.conn.execute("SELECT status FROM generation_jobs WHERE project_id = ? ORDER BY id", (self.project_id,)).fetchall()
+        self.assertEqual([job["status"] for job in jobs], ["success", "skipped"])
+
+        update_settings(
+            self.conn,
+            self.project_id,
+            {
+                "name": "Demo",
+                "start_date": "2026-06-27",
+                "schedules": [{"weekday": 6, "local_time": "09:00", "timezone": "Asia/Shanghai", "enabled": False}],
+            },
+        )
+        rows = self.conn.execute(
+            "SELECT weekday, local_time, enabled FROM update_schedules WHERE project_id = ?", (self.project_id,)
+        ).fetchall()
+        self.assertEqual([(row["weekday"], row["local_time"], row["enabled"]) for row in rows], [(6, "09:00", 0)])
 
     def test_weekly_commits_reads_selected_branches_and_deduplicates(self):
         def fake_run(cmd, **kwargs):

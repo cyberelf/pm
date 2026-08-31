@@ -1,8 +1,10 @@
 import base64
 import json
 import os
+import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -63,7 +65,7 @@ def scheduler_loop(stop, db_path):
                     evaluate_schedules(conn, row["id"])
                 conn.commit()
         except Exception:
-            pass
+            print(f"scheduler loop error: {traceback.format_exc()}", file=sys.stderr, flush=True)
 
 
 def evaluate_schedules(conn, project_id):
@@ -71,12 +73,32 @@ def evaluate_schedules(conn, project_id):
     week_key = current_week_key(project["timezone"])
     due = False
     for schedule in conn.execute("SELECT * FROM update_schedules WHERE project_id = ?", (project_id,)):
+        if not schedule["enabled"]:
+            continue
         if schedule_due(schedule):
             due = True
             conn.execute("UPDATE update_schedules SET last_checked_at = ? WHERE id = ?", (iso_now(), schedule["id"]))
-    if due and changed_since_last_success(conn, project_id, week_key):
-        generate_report(conn, project_id, "scheduled", force=False)
+            print(f"scheduled trigger fired: project={project_id} schedule={schedule['id']} week={week_key}", flush=True)
+    if due:
+        if changed_since_last_success(conn, project_id, week_key):
+            generate_report(conn, project_id, "scheduled", force=False)
+        else:
+            record_skipped_run(conn, project_id, week_key, project["report_provider"])
+            print(f"scheduled update skipped, no source changes since last success: project={project_id} week={week_key}", flush=True)
     evaluate_risks(conn, project_id)
+
+
+def record_skipped_run(conn, project_id, week_key, provider):
+    now = iso_now()
+    reason = "scheduled trigger fired but no input changed since last successful report"
+    conn.execute(
+        """
+        INSERT INTO generation_jobs
+        (project_id, week_key, trigger_type, provider, status, input_summary, failure_reason, started_at, completed_at)
+        VALUES (?, ?, 'scheduled', ?, 'skipped', ?, ?, ?, ?)
+        """,
+        (project_id, week_key, provider, reason, reason, now, now),
+    )
 
 
 def schedule_due(schedule, now=None):
@@ -583,8 +605,8 @@ def update_settings(conn, project_id, payload):
     conn.execute("DELETE FROM update_schedules WHERE project_id = ?", (project_id,))
     for item in payload.get("schedules") or []:
         conn.execute(
-            "INSERT INTO update_schedules (project_id, weekday, local_time, timezone, created_at) VALUES (?, ?, ?, ?, ?)",
-            (project_id, int(item["weekday"]), item["local_time"], item.get("timezone") or payload.get("timezone"), now),
+            "INSERT INTO update_schedules (project_id, weekday, local_time, timezone, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, int(item["weekday"]), item["local_time"], item.get("timezone") or payload.get("timezone"), 1 if item.get("enabled", True) else 0, now),
         )
 
 

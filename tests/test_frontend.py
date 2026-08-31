@@ -31,6 +31,7 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("setupMaterialDropzone();", source)
         self.assertIn('class="switch"', source)
         self.assertIn("toggleRepo(", source)
+        self.assertIn("data-schedule-enabled", source)
 
     def test_responsive_layout_contains_wide_content_overflow(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

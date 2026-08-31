@@ -545,7 +545,9 @@ strong { color: var(--ink); }
   border-radius: var(--radius-md);
   background: var(--canvas);
 }
-.schedule-row { grid-template-columns: 120px 120px minmax(180px, 1fr) auto; }
+.schedule-row { grid-template-columns: auto 120px 120px minmax(180px, 1fr) auto; align-items: center; }
+.schedule-row-disabled { background: var(--surface-soft); }
+.schedule-last-fire { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
 .outcome-item { grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.8fr) minmax(130px, 0.7fr) minmax(160px, 1fr) auto; }
 #milestones, #deliverables, #outcomes, #schedule-list { min-width: 0; display: grid; gap: 10px; }
 .metric {
@@ -707,6 +709,7 @@ strong { color: var(--ink); }
 .status.medium, .status.at-risk, .status.inaccessible, .status.unauthenticated { background: var(--warning-soft); color: var(--warning-ink); }
 .status.connected, .status.success, .status.complete, .status.on-track { background: var(--success-soft); color: var(--success-ink); }
 .status.disabled { background: var(--surface-strong); color: var(--muted); }
+.status.skipped { background: var(--surface-strong); color: var(--muted); }
 .notice { display: grid; gap: 6px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); padding: 16px; background: var(--canvas); color: var(--body); font-size: 13px; line-height: 1.5; }
 .notice strong { color: var(--ink); font-size: 14px; }
 .notice.danger { border-color: var(--error-border); background: var(--error-surface); }

@@ -504,15 +504,19 @@ function toggleAllBranches(id, changed) {
 }
 
 function renderSchedules(schedules, timezone) {
-  const rows = schedules.length ? schedules : [{ weekday: 5, local_time: "18:00", timezone: CHINA_TIMEZONE }];
-  return rows.map((s, i) => `
-    <div class="row schedule-row">
+  const rows = schedules.length ? schedules : [{ weekday: 5, local_time: "18:00", timezone: CHINA_TIMEZONE, enabled: 1 }];
+  return rows.map((s) => {
+    const enabled = Number(s.enabled) !== 0;
+    return `
+    <div class="row schedule-row${enabled ? "" : " schedule-row-disabled"}">
+      <label class="switch" title="${enabled ? "已启用" : "已停用"}"><input type="checkbox" data-schedule-enabled ${enabled ? "checked" : ""}><span class="switch-slider"></span></label>
       <label>Weekday <input name="schedule_weekday" type="number" min="1" max="7" value="${s.weekday}"></label>
       <label>Time <input name="schedule_time" value="${escapeHtml(s.local_time)}"></label>
       ${timezoneSelect("schedule_timezone", "Timezone", s.timezone)}
       <button type="button" onclick="this.closest('.schedule-row').remove()">Remove</button>
+      <small class="schedule-last-fire">${s.last_checked_at ? `上次触发 ${escapeHtml(formatChinaTime(s.last_checked_at))}` : "尚未触发"}</small>
     </div>
-  `).join("");
+  `;}).join("");
 }
 
 function addSchedule() {
@@ -522,10 +526,14 @@ function addSchedule() {
 async function saveSettings(event) {
   event.preventDefault();
   const fd = new FormData(event.target);
-  const weekdays = fd.getAll("schedule_weekday");
-  const times = fd.getAll("schedule_time");
-  const zones = fd.getAll("schedule_timezone");
-  const schedules = weekdays.map((w, i) => ({ weekday: Number(w), local_time: times[i], timezone: zones[i] })).filter(s => s.local_time);
+  const schedules = Array.from(document.querySelectorAll("#schedule-list .schedule-row"))
+    .map(row => ({
+      enabled: row.querySelector("input[data-schedule-enabled]").checked,
+      weekday: Number(row.querySelector("input[name='schedule_weekday']").value),
+      local_time: row.querySelector("input[name='schedule_time']").value,
+      timezone: row.querySelector("select[name='schedule_timezone']").value,
+    }))
+    .filter(s => s.local_time);
   const payload = Object.fromEntries(fd.entries());
   payload.schedules = schedules;
   await api(`/api/projects/${state.projectId}/settings`, { method: "PUT", body: JSON.stringify(payload) });
