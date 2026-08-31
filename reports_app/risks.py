@@ -40,7 +40,7 @@ def evaluate_risks(conn, project_id):
     ).fetchone()
     materials_changed = conn.execute("SELECT COUNT(*) AS n FROM materials WHERE project_id = ?", (project_id,)).fetchone()["n"]
     repos_active = conn.execute(
-        "SELECT COUNT(*) AS n FROM github_repos WHERE project_id = ? AND status = 'connected'", (project_id,)
+        "SELECT COUNT(*) AS n FROM github_repos WHERE project_id = ? AND enabled = 1 AND status = 'connected'", (project_id,)
     ).fetchone()["n"]
     if not update and materials_changed == 0 and repos_active == 0:
         upsert_warning(conn, project_id, week_key, "missing_update", "medium", "No current-period update or source activity")

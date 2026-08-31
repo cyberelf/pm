@@ -451,13 +451,16 @@ function renderSettings(ws) {
 }
 
 function renderRepoRow(r) {
+  const enabled = Number(r.enabled) !== 0;
   return `
-    <tr>
+    <tr class="${enabled ? "" : "repo-row-disabled"}">
       <td>${escapeHtml(r.repo)}</td>
       <td>${renderBranchPicker(r)}</td>
       <td><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
-      <td><span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}</td>
-      <td><button type="button" onclick="saveRepoNotes(${r.id})">Save</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button></td>
+      <td>${enabled
+        ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
+        : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
+      <td><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="saveRepoNotes(${r.id})">Save</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">Delete</button></div></td>
     </tr>
   `;
 }
@@ -843,6 +846,19 @@ async function saveRepoNotes(id) {
 async function refreshRepo(id) {
   await api(`/api/projects/${state.projectId}/repos/${id}/refresh`, { method: "POST", body: "{}" });
   toast("Repository refreshed");
+  await loadWorkspace();
+}
+
+async function toggleRepo(id, enabled) {
+  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify({ enabled }) });
+  toast(enabled ? "Repository enabled" : "Repository disabled");
+  await loadWorkspace();
+}
+
+async function deleteRepo(id) {
+  if (!window.confirm("确定删除该仓库？仅移除周报关联与配置，不会影响 GitHub 上的仓库。")) return;
+  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "DELETE" });
+  toast("Repository deleted");
   await loadWorkspace();
 }
 

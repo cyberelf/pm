@@ -44,7 +44,7 @@ def assemble_context(conn, project_id, week_key=None):
         """
         SELECT repo, notes, tracked_branches_json, status, status_message,
                last_checked_at, last_activity_at, activity_summary
-        FROM github_repos WHERE project_id = ? ORDER BY id
+        FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id
         """,
         (project_id,),
     ).fetchall()

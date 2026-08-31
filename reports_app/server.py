@@ -242,6 +242,12 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     self.json(workspace(conn, project_id))
                     return
+                if len(parts) == 5 and parts[3] == "repos" and method == "DELETE":
+                    delete_repo(conn, project_id, int(parts[4]))
+                    evaluate_risks(conn, project_id)
+                    conn.commit()
+                    self.json(workspace(conn, project_id))
+                    return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "branches" and method == "GET":
                     self.json(repo_branches(conn, project_id, int(parts[4])))
                     return
@@ -442,7 +448,8 @@ def source_diagnostics(conn, project_id, week_key):
         """
         SELECT id, repo, status, status_message, updated_at
         FROM github_repos
-        WHERE project_id = ? AND status IN ('disconnected', 'unauthenticated', 'inaccessible')
+        WHERE project_id = ? AND enabled = 1
+          AND status IN ('disconnected', 'unauthenticated', 'inaccessible')
         ORDER BY updated_at DESC, id DESC
         """,
         (project_id,),
@@ -590,7 +597,7 @@ def add_repo(conn, project_id, payload):
         (project_id, repo),
     ).fetchone()
     if existing:
-        updates = ["notes = ?", "updated_at = ?"]
+        updates = ["notes = ?", "enabled = 1", "updated_at = ?"]
         values = [notes, iso_now()]
         if requested_branches:
             updates.insert(1, "tracked_branches_json = ?")
@@ -607,8 +614,8 @@ def add_repo(conn, project_id, payload):
     cur = conn.execute(
         """
         INSERT INTO github_repos
-        (project_id, repo, notes, tracked_branches_json, status, status_message, last_checked_at, last_activity_at, activity_summary, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (project_id, repo, enabled, notes, tracked_branches_json, status, status_message, last_checked_at, last_activity_at, activity_summary, created_at, updated_at)
+        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
@@ -628,18 +635,31 @@ def add_repo(conn, project_id, payload):
 
 
 def update_repo_notes(conn, project_id, repo_id, payload):
+    row = conn.execute(
+        "SELECT notes, tracked_branches_json, enabled FROM github_repos WHERE id = ? AND project_id = ?",
+        (repo_id, project_id),
+    ).fetchone()
+    if not row:
+        raise ValidationError("repository not found")
     now = iso_now()
+    notes = payload.get("notes") if "notes" in payload else (row["notes"] or "")
     branches = validate_branches(payload.get("branches") or [])
     if not branches:
-        row = conn.execute(
-            "SELECT tracked_branches_json FROM github_repos WHERE id = ? AND project_id = ?",
-            (repo_id, project_id),
-        ).fetchone()
-        branches = json.loads(row["tracked_branches_json"] or '["main"]') if row else ["main"]
+        branches = json.loads(row["tracked_branches_json"] or '["main"]')
+    enabled = row["enabled"] if "enabled" not in payload else (1 if payload.get("enabled") else 0)
     conn.execute(
-        "UPDATE github_repos SET notes = ?, tracked_branches_json = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-        (payload.get("notes") or "", json.dumps(branches), now, repo_id, project_id),
+        "UPDATE github_repos SET notes = ?, tracked_branches_json = ?, enabled = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+        (notes, json.dumps(branches), enabled, now, repo_id, project_id),
     )
+
+
+def delete_repo(conn, project_id, repo_id):
+    cur = conn.execute(
+        "DELETE FROM github_repos WHERE id = ? AND project_id = ?",
+        (repo_id, project_id),
+    )
+    if cur.rowcount != 1:
+        raise ValidationError("repository not found")
 
 
 def repo_rows(conn, project_id):

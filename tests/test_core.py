@@ -33,7 +33,7 @@ from reports_app.materials import (
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, provider_command, transient_provider_error
 from reports_app.risks import evaluate_risks, progress_status
-from reports_app.server import Handler, add_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, update_repo_notes, update_settings, workspace
+from reports_app.server import Handler, add_repo, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from reports_app.validation import ValidationError, validate_branches, validate_material_filename, validate_schedule_item
@@ -652,6 +652,97 @@ class CoreTest(unittest.TestCase):
         update_repo_notes(self.conn, self.project_id, first, {"notes": "all branches", "branches": ["*"]})
         row = self.conn.execute("SELECT tracked_branches_json FROM github_repos WHERE id = ?", (first,)).fetchone()
         self.assertEqual(json.loads(row["tracked_branches_json"]), ["*"])
+
+    def test_repo_enable_disable_and_delete_control_report_sources(self):
+        with mock.patch("reports_app.server.check_repo") as mocked:
+            mocked.return_value = {
+                "status": "connected",
+                "status_message": "ok",
+                "activity_summary": "summary",
+                "last_activity_at": "2026-06-27T00:00:00Z",
+                "default_branch": "main",
+            }
+            active_id = add_repo(self.conn, self.project_id, {"repo": "owner/active", "notes": "active"})
+            paused_id = add_repo(self.conn, self.project_id, {"repo": "owner/paused", "notes": "paused"})
+
+        update_repo_notes(self.conn, self.project_id, paused_id, {"enabled": False})
+        row = self.conn.execute("SELECT enabled, notes FROM github_repos WHERE id = ?", (paused_id,)).fetchone()
+        self.assertEqual(row["enabled"], 0)
+        self.assertEqual(row["notes"], "paused")
+        update_repo_notes(self.conn, self.project_id, active_id, {})
+        row = self.conn.execute("SELECT enabled, tracked_branches_json FROM github_repos WHERE id = ?", (active_id,)).fetchone()
+        self.assertEqual(row["enabled"], 1)
+        self.assertEqual(json.loads(row["tracked_branches_json"]), ["main"])
+
+        with mock.patch("reports_app.reports.weekly_commits") as commits:
+            commits.return_value = {"repo": "owner/active", "status": "ok", "status_message": "0 commits", "commits": []}
+            context, _hash = assemble_context(self.conn, self.project_id)
+        self.assertEqual([item["repo"] for item in context["github_activity"]], ["owner/active"])
+
+        self.conn.execute("UPDATE github_repos SET status = 'inaccessible' WHERE id = ?", (paused_id,))
+        self.conn.commit()
+        self.assertEqual(
+            [item["source_ref"] for item in source_diagnostics(self.conn, self.project_id, "2026-W27") if item["kind"] == "github"],
+            [],
+        )
+
+        payload = workspace(self.conn, self.project_id)
+        repo_flags = {item["repo"]: item["enabled"] for item in payload["repos"]}
+        self.assertEqual(repo_flags, {"owner/active": 1, "owner/paused": 0})
+
+        add_repo(self.conn, self.project_id, {"repo": "owner/paused", "notes": "paused"})
+        row = self.conn.execute("SELECT enabled FROM github_repos WHERE id = ?", (paused_id,)).fetchone()
+        self.assertEqual(row["enabled"], 1)
+
+        update_repo_notes(self.conn, self.project_id, paused_id, {"enabled": False})
+        update_repo_notes(self.conn, self.project_id, active_id, {"enabled": False})
+        evaluate_risks(self.conn, self.project_id)
+        warning = self.conn.execute(
+            "SELECT status FROM risk_warnings WHERE project_id = ? AND rule = 'missing_update'",
+            (self.project_id,),
+        ).fetchone()
+        self.assertEqual(warning["status"], "active")
+        self.conn.commit()
+        delete_repo(self.conn, self.project_id, paused_id)
+        self.assertIsNone(self.conn.execute("SELECT id FROM github_repos WHERE id = ?", (paused_id,)).fetchone())
+        with self.assertRaises(ValidationError):
+            delete_repo(self.conn, self.project_id, paused_id)
+
+    def test_repo_delete_api_route_removes_repo(self):
+        with mock.patch("reports_app.server.check_repo") as mocked:
+            mocked.return_value = {
+                "status": "connected",
+                "status_message": "ok",
+                "activity_summary": "summary",
+                "last_activity_at": "2026-06-27T00:00:00Z",
+                "default_branch": "main",
+            }
+            repo_id = add_repo(self.conn, self.project_id, {"repo": "owner/route", "notes": "route"})
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("DELETE", f"/api/projects/{self.project_id}/repos/{repo_id}")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual([item["repo"] for item in payload["repos"]], [])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("DELETE", f"/api/projects/{self.project_id}/repos/{repo_id}")
+            response = client.getresponse()
+            error = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 400)
+            self.assertEqual(error["error"], "repository not found")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_weekly_commits_reads_selected_branches_and_deduplicates(self):
         def fake_run(cmd, **kwargs):

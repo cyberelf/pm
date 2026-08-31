@@ -29,6 +29,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('id="material-dropzone"', source)
         self.assertIn('dropzone.addEventListener("drop"', source)
         self.assertIn("setupMaterialDropzone();", source)
+        self.assertIn('class="switch"', source)
+        self.assertIn("toggleRepo(", source)
 
     def test_responsive_layout_contains_wide_content_overflow(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
