@@ -137,7 +137,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('--board-canvas: #172033;', styles)
         self.assertIn('#todo-view { min-height: 100vh; background: var(--board-canvas); }', styles)
         self.assertIn('grid-template-columns: repeat(3, minmax(260px, 1fr));', styles)
-        self.assertIn('grid-template-columns: repeat(3, minmax(260px, 84vw));', styles)
+        self.assertIn('scroll-snap-type: x mandatory;', styles)
+        self.assertIn('.todo-column { flex: 0 0 calc(100% - 16px); margin-inline: 8px; scroll-snap-align: center; }', styles)
         self.assertIn('.todo-mode .app-shell { grid-template-columns: minmax(0, 1fr); }', styles)
 
     def test_todo_inline_editor_creates_and_updates_on_auto_save(self):

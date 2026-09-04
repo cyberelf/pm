@@ -150,6 +150,7 @@ function renderTodoBoard() {
     { status: "doing", title: "进行中" },
     { status: "closed", title: "已关闭" },
   ];
+  const savedScrollLeft = board.scrollLeft;
   board.innerHTML = columns.map((column) => {
     const items = state.todos.filter((todo) => todo.status === column.status);
     return `
@@ -162,6 +163,42 @@ function renderTodoBoard() {
       </section>
     `;
   }).join("");
+  ensureTodoBoardDots(board);
+  const dots = $("todo-board-dots");
+  if (dots) {
+    dots.innerHTML = columns.map((column, index) =>
+      `<button type="button" data-column="${index}" aria-label="${column.title}"></button>`).join("");
+    board.scrollLeft = savedScrollLeft;
+    syncTodoBoardDots(board);
+  }
+}
+
+function ensureTodoBoardDots(board) {
+  if ($("todo-board-dots")) return;
+  const dots = document.createElement("div");
+  dots.id = "todo-board-dots";
+  dots.className = "todo-board-dots";
+  dots.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-column]");
+    if (!button) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    board.scrollTo({ left: Number(button.dataset.column) * board.clientWidth, behavior: reduceMotion ? "auto" : "smooth" });
+  });
+  board.after(dots);
+  board.addEventListener("scroll", () => {
+    if (board.todoDotRaf) return;
+    board.todoDotRaf = requestAnimationFrame(() => {
+      board.todoDotRaf = 0;
+      syncTodoBoardDots(board);
+    });
+  }, { passive: true });
+}
+
+function syncTodoBoardDots(board) {
+  const dots = $("todo-board-dots");
+  if (!dots) return;
+  const index = Math.round(board.scrollLeft / (board.clientWidth || 1));
+  dots.querySelectorAll("button").forEach((dot, i) => dot.classList.toggle("active", i === index));
 }
 
 function renderTodoCard(todo) {
