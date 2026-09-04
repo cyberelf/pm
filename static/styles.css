@@ -900,8 +900,24 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .topbar { padding: 82px 16px 20px; align-items: flex-start; flex-direction: column; gap: 18px; }
   .actions { width: 100%; justify-content: flex-start; }
   .actions button { flex: 1 1 140px; }
-  .tabs { position: static; width: calc(100% - 32px); margin-inline: 16px; }
+  .tabs { position: static; width: calc(100% - 32px); margin-inline: 16px; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: 0 0 auto; }
   .workspace { padding: 24px 16px 56px; }
+  #workspace.pager-mode {
+    position: relative;
+    display: flex;
+    gap: 0;
+    align-items: flex-start;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    overscroll-behavior-x: contain;
+    padding: 0 0 56px;
+    scrollbar-width: none;
+  }
+  #workspace.pager-mode::-webkit-scrollbar { display: none; }
+  #workspace.pager-mode .tab-panel { flex: 0 0 100%; min-width: 0; padding: 0 16px 24px; scroll-snap-align: start; }
+  #workspace.pager-mode .tab-panel.hidden { display: grid !important; }
   .todo-board {
     display: flex;
     gap: 0;

@@ -1070,9 +1070,33 @@ function switchTab(tab) {
   document.querySelectorAll("[data-project-settings]").forEach(btn => {
     btn.classList.toggle("active", tab === "settings" && Number(btn.dataset.projectSettings) === state.projectId);
   });
-  document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.add("hidden"));
+  const workspace = $("workspace");
   const el = $(`tab-${tab}`);
+  if (workspace.classList.contains("pager-mode")) {
+    workspace.querySelectorAll(".tab-panel").forEach(panel => panel.classList.remove("hidden"));
+    if (el && workspace.clientWidth) {
+      const panels = [...workspace.querySelectorAll(".tab-panel")];
+      const reduce = typeof window !== "undefined" && window.matchMedia
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      workspace.scrollTo({ left: panels.indexOf(el) * workspace.clientWidth, behavior: reduce ? "auto" : "smooth" });
+      centerTabStrip(reduce ? "auto" : "smooth");
+    }
+    return;
+  }
+  document.querySelectorAll(".tab-panel").forEach(panel => panel.classList.add("hidden"));
   if (el) el.classList.remove("hidden");
+}
+
+function centerTabStrip(behavior) {
+  const strip = document.querySelector(".tabs");
+  const active = strip && strip.querySelector("button.active");
+  if (!strip || !active) return;
+  const stripRect = strip.getBoundingClientRect();
+  const buttonRect = active.getBoundingClientRect();
+  strip.scrollTo({
+    left: strip.scrollLeft + buttonRect.left - stripRect.left - (strip.clientWidth - buttonRect.width) / 2,
+    behavior: behavior || "auto",
+  });
 }
 
 function input(name, label, value, type = "text") { return `<label>${label}<input name="${name}" type="${type}" value="${escapeAttr(value || "")}"></label>`; }
@@ -1190,6 +1214,33 @@ function openNewProjectDialog() {
 $("new-project").onclick = openNewProjectDialog;
 $("open-project-sheet").onclick = () => $("project-sheet").showModal();
 $("close-project-sheet").onclick = () => $("project-sheet").close();
+const workspacePagerQuery = window.matchMedia("(max-width: 767px)");
+const workspaceElement = $("workspace");
+function applyWorkspacePagerMode() {
+  workspaceElement.classList.toggle("pager-mode", workspacePagerQuery.matches);
+  switchTab(state.tab);
+}
+workspacePagerQuery.addEventListener("change", applyWorkspacePagerMode);
+applyWorkspacePagerMode();
+workspaceElement.addEventListener("scroll", () => {
+  if (workspaceElement.tabPagerRaf) return;
+  workspaceElement.tabPagerRaf = requestAnimationFrame(() => {
+    workspaceElement.tabPagerRaf = 0;
+    if (!workspaceElement.classList.contains("pager-mode") || !workspaceElement.clientWidth) return;
+    const panels = [...workspaceElement.querySelectorAll(".tab-panel")];
+    const index = Math.round(workspaceElement.scrollLeft / workspaceElement.clientWidth);
+    const panel = panels[index];
+    if (!panel) return;
+    const name = panel.id.replace(/^tab-/, "");
+    let changed = false;
+    document.querySelectorAll(".tabs button").forEach(btn => {
+      const active = btn.dataset.tab === name;
+      if (btn.classList.contains("active") !== active) changed = true;
+      btn.classList.toggle("active", active);
+    });
+    if (changed) centerTabStrip("smooth");
+  });
+}, { passive: true });
 $("cancel-project").onclick = () => $("project-dialog").close();
 $("close-material-preview").onclick = () => $("material-preview-dialog").close();
 $("project-form").onsubmit = async (event) => {

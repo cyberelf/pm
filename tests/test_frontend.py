@@ -152,7 +152,7 @@ function testElement() {
     textContent: "",
     disabled: false,
     dataset: {},
-    classList: { add() {}, remove() {}, toggle() {} },
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     setAttribute() {},
     focus() {},
   };
@@ -228,7 +228,7 @@ function testElement() {
     textContent: "",
     disabled: false,
     dataset: {},
-    classList: { add() {}, remove() {}, toggle() {} },
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     showModal() { this.open = true; },
     close() { this.open = false; },
   };
