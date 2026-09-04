@@ -352,8 +352,8 @@ async function openTodoMaterial(projectId, materialId) {
   if (materialId) await previewMaterial(Number(materialId));
 }
 
-function renderProjects() {
-  $("project-list").innerHTML = state.projects.map(p => `
+function projectRowHtml(p) {
+  return `
     <div class="project-row ${p.id === state.projectId ? "active" : ""}">
       <button class="project-item" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
         ${statusDot(projectDisplayStatus(p), "project-item-status")}
@@ -366,11 +366,19 @@ function renderProjects() {
         ${faIcon("gear")}
       </button>
     </div>
-  `).join("") + `<button type="button" class="project-add-tile" data-add-project aria-label="新建项目"><span aria-hidden="true">＋</span>新建项目</button>`;
+  `;
+}
+
+function renderProjects() {
+  const rows = state.projects.map(projectRowHtml).join("");
+  $("project-list").innerHTML = rows;
+  $("sheet-project-list").innerHTML = rows +
+    `<button type="button" class="sheet-add-row" data-add-project><span aria-hidden="true">＋</span>新建项目</button>`;
   const addProjectButton = document.querySelector("[data-add-project]");
   if (addProjectButton) addProjectButton.onclick = openNewProjectDialog;
   document.querySelectorAll("[data-project]").forEach(btn => {
     btn.onclick = async () => {
+      closeProjectSheet();
       state.projectId = Number(btn.dataset.project);
       localStorage.setItem("currentProjectId", String(state.projectId));
       await loadWorkspace();
@@ -379,6 +387,7 @@ function renderProjects() {
   });
   document.querySelectorAll("[data-project-settings]").forEach(btn => {
     btn.onclick = async () => {
+      closeProjectSheet();
       const projectId = Number(btn.dataset.projectSettings);
       if (state.projectId !== projectId) {
         state.projectId = projectId;
@@ -390,8 +399,16 @@ function renderProjects() {
     };
   });
   document.querySelectorAll("[data-project-generate]").forEach(btn => {
-    btn.onclick = () => confirmProjectGeneration(Number(btn.dataset.projectGenerate));
+    btn.onclick = () => {
+      closeProjectSheet();
+      confirmProjectGeneration(Number(btn.dataset.projectGenerate));
+    };
   });
+}
+
+function closeProjectSheet() {
+  const sheet = $("project-sheet");
+  if (sheet.open) sheet.close();
 }
 
 function render() {
@@ -512,13 +529,13 @@ function renderRepoRow(r) {
     : "";
   return `
     <tr class="${enabled ? "" : "repo-row-disabled"}">
-      <td><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}${target ? `<br>${target}` : ""}</td>
-      <td>${renderBranchPicker(r)}</td>
-      <td><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
-      <td>${enabled
+      <td data-label="仓库"><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}${target ? `<br>${target}` : ""}</td>
+      <td data-label="跟踪分支">${renderBranchPicker(r)}</td>
+      <td data-label="补充说明"><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
+      <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
-      <td><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="saveRepoNotes(${r.id})">Save</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">Delete</button></div></td>
+      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="saveRepoNotes(${r.id})">Save</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">Delete</button></div></td>
     </tr>
   `;
 }
@@ -782,20 +799,20 @@ function renderUploadedMaterialRow(m) {
   const extractionMessage = m.extraction_error ? `<div class="material-message">${escapeHtml(m.extraction_error)}</div>` : "";
   const summaryMessage = m.summary_error ? `<div class="material-message">AI 摘要失败，当前显示回退摘要：${escapeHtml(m.summary_error)}</div>` : "";
   return `<tr>
-    <td><strong>${escapeHtml(m.filename)}</strong><small>${formatBytes(m.size_bytes)}</small></td>
-    <td><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
-    <td><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
-    <td>${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
-    <td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateMaterialSummary(${m.id})">Save summary</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">Delete</button>` : ""}</div></td>
+    <td data-label="文件"><strong>${escapeHtml(m.filename)}</strong><small>${formatBytes(m.size_bytes)}</small></td>
+    <td data-label="提取"><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
+    <td data-label="摘要"><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
+    <td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
+    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateMaterialSummary(${m.id})">Save summary</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">Delete</button>` : ""}</div></td>
   </tr>`;
 }
 
 function renderManualMaterialRow(m) {
   const content = escapeHtml(m.content || "");
   if (m.editable) {
-    return `<tr><td><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateManualMaterial(${m.id})">Save</button><button class="danger" onclick="deleteMaterial(${m.id})">Delete</button></div></td></tr>`;
+    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateManualMaterial(${m.id})">Save</button><button class="danger" onclick="deleteMaterial(${m.id})">Delete</button></div></td></tr>`;
   }
-  return `<tr><td>${escapeHtml(m.filename)}</td><td><div class="locked-material">${content}</div></td><td>${escapeHtml(formatChinaTime(m.created_at))}</td><td>${escapeHtml(formatChinaTime(m.updated_at))}</td><td><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><span class="status">locked</span></div></td></tr>`;
+  return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><span class="status">locked</span></div></td></tr>`;
 }
 
 async function previewMaterial(id) {
@@ -981,7 +998,7 @@ function renderReport(ws) {
     </div>
     <div class="panel">
       <div class="panel-head"><h2>生成历史</h2><span>Run metadata only</span></div>
-      <table class="table"><thead><tr><th>Trigger</th><th>Provider</th><th>Status</th><th>Input</th><th>Failure</th></tr></thead><tbody>${ws.jobs.map(j => `<tr><td>${escapeHtml(j.trigger_type)}<br>${escapeHtml(formatChinaTime(j.started_at))}</td><td>${escapeHtml(j.provider)}</td><td><span class="status ${j.status}">${j.status}</span></td><td>${escapeHtml(j.input_summary || j.input_snapshot_hash)}</td><td>${escapeHtml(j.failure_reason || "")}</td></tr>`).join("") || "<tr><td colspan='5'>No generation runs.</td></tr>"}</tbody></table>
+      <table class="table"><thead><tr><th>Trigger</th><th>Provider</th><th>Status</th><th>Input</th><th>Failure</th></tr></thead><tbody>${ws.jobs.map(j => `<tr><td data-label="触发">${escapeHtml(j.trigger_type)}<br>${escapeHtml(formatChinaTime(j.started_at))}</td><td data-label="生成器">${escapeHtml(j.provider)}</td><td data-label="状态"><span class="status ${j.status}">${j.status}</span></td><td data-label="输入">${escapeHtml(j.input_summary || j.input_snapshot_hash)}</td><td data-label="失败原因">${escapeHtml(j.failure_reason || "")}</td></tr>`).join("") || "<tr><td colspan='5'>No generation runs.</td></tr>"}</tbody></table>
     </div>
   `;
 }
@@ -1004,7 +1021,7 @@ function renderRisks(ws) {
     <div class="panel">
       <div class="panel-head"><h2>进度和风险</h2><span>Project risks only</span></div>
       <p>Progress status: <span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(ws.progress_status)}</span></p>
-      <table class="table"><thead><tr><th>Severity</th><th>Rule</th><th>Title</th><th>Status</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td><span class="status ${r.severity}">${r.severity}</span></td><td>${escapeHtml(r.rule)}</td><td>${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td>${escapeHtml(r.status)}</td></tr>`).join("") || "<tr><td colspan='4'>No risks.</td></tr>"}</tbody></table>
+      <table class="table"><thead><tr><th>Severity</th><th>Rule</th><th>Title</th><th>Status</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td data-label="严重度"><span class="status ${r.severity}">${r.severity}</span></td><td data-label="规则">${escapeHtml(r.rule)}</td><td data-label="标题">${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td data-label="状态">${escapeHtml(r.status)}</td></tr>`).join("") || "<tr><td colspan='4'>No risks.</td></tr>"}</tbody></table>
     </div>
     <div class="panel">
       <div class="panel-head"><h2>系统诊断</h2><span>Sources and generation status</span></div>
@@ -1068,7 +1085,7 @@ function timezoneSelect(name, label, value) {
   return `<label>${label}<select name="${name}"><option value="${CHINA_TIMEZONE}" ${(value || CHINA_TIMEZONE) === CHINA_TIMEZONE ? "selected" : ""}>中国标准时间 (Asia/Shanghai)</option></select></label>`;
 }
 function textarea(name, label, value, cls = "") { return `<label class="${cls}">${label}<textarea name="${name}">${escapeHtml(value || "")}</textarea></label>`; }
-function rowItem(item) { return `<tr><td>${escapeHtml(item.title || "")}</td><td>${escapeHtml(item.owner_label || "")}</td><td>${escapeHtml(item.status || "")}</td></tr>`; }
+function rowItem(item) { return `<tr><td data-label="标题">${escapeHtml(item.title || "")}</td><td data-label="负责人">${escapeHtml(item.owner_label || "")}</td><td data-label="状态">${escapeHtml(item.status || "")}</td></tr>`; }
 function itemPayload(row) {
   const payload = {};
   row.querySelectorAll("input, select, textarea").forEach((control) => {
@@ -1165,24 +1182,14 @@ function formatChinaTime(value) {
 }
 
 function openNewProjectDialog() {
+  closeProjectSheet();
   $("project-form").reset();
   $("project-form").start_date.value = new Date().toISOString().slice(0, 10);
   $("project-dialog").showModal();
 }
 $("new-project").onclick = openNewProjectDialog;
-const projectMenu = $("project-menu");
-const projectMenuToggle = $("project-menu-toggle");
-const desktopSidebar = window.matchMedia("(min-width: 768px)");
-const syncProjectMenu = () => {
-  projectMenu.classList.toggle("open", desktopSidebar.matches);
-  projectMenuToggle.setAttribute("aria-expanded", String(desktopSidebar.matches));
-};
-desktopSidebar.addEventListener("change", syncProjectMenu);
-syncProjectMenu();
-projectMenuToggle.onclick = () => {
-  if (desktopSidebar.matches) return;
-  projectMenuToggle.setAttribute("aria-expanded", String(projectMenu.classList.toggle("open")));
-};
+$("open-project-sheet").onclick = () => $("project-sheet").showModal();
+$("close-project-sheet").onclick = () => $("project-sheet").close();
 $("cancel-project").onclick = () => $("project-dialog").close();
 $("close-material-preview").onclick = () => $("material-preview-dialog").close();
 $("project-form").onsubmit = async (event) => {

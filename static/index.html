@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=29" />
+    <link rel="stylesheet" href="/styles.css?v=30" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -29,13 +29,8 @@
           </div>
         </div>
         <button id="new-project" class="primary full">新建项目</button>
-        <div id="project-menu" class="project-menu open">
-          <button id="project-menu-toggle" class="sidebar-label project-menu-toggle" type="button" aria-expanded="true" aria-controls="project-list">
-            项目
-            <svg class="project-menu-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-          </button>
-          <div id="project-list" class="project-list"></div>
-        </div>
+        <div class="sidebar-label">项目</div>
+        <div id="project-list" class="project-list"></div>
       </aside>
 
       <div class="page-shell">
@@ -44,6 +39,9 @@
             <div>
               <div class="project-heading">
                 <h1 id="project-title">周报工作台</h1>
+                <button id="open-project-sheet" class="project-switch" type="button" aria-label="切换项目" title="切换项目">
+                  <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                </button>
                 <span id="project-status-dot" class="status-dot is-neutral" role="img" aria-label="项目状态" title="项目状态"></span>
                 <p id="project-meta">本地个人项目管理</p>
               </div>
@@ -112,6 +110,15 @@
           <button class="primary" value="default">创建</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="project-sheet" class="sheet">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <header class="sheet-head">
+        <h2>项目</h2>
+        <button id="close-project-sheet" type="button">完成</button>
+      </header>
+      <div id="sheet-project-list" class="sheet-list"></div>
     </dialog>
 
     <dialog id="close-todo-dialog">
@@ -191,6 +198,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=22"></script>
+    <script src="/app.js?v=23"></script>
   </body>
 </html>
