@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=28" />
+    <link rel="stylesheet" href="/styles.css?v=29" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -29,8 +29,13 @@
           </div>
         </div>
         <button id="new-project" class="primary full">新建项目</button>
-        <div class="sidebar-label">项目</div>
-        <div id="project-list" class="project-list"></div>
+        <div id="project-menu" class="project-menu open">
+          <button id="project-menu-toggle" class="sidebar-label project-menu-toggle" type="button" aria-expanded="true" aria-controls="project-list">
+            项目
+            <svg class="project-menu-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          </button>
+          <div id="project-list" class="project-list"></div>
+        </div>
       </aside>
 
       <div class="page-shell">
@@ -186,6 +191,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=21"></script>
+    <script src="/app.js?v=22"></script>
   </body>
 </html>

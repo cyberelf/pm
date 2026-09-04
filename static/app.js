@@ -366,7 +366,9 @@ function renderProjects() {
         ${faIcon("gear")}
       </button>
     </div>
-  `).join("");
+  `).join("") + `<button type="button" class="project-add-tile" data-add-project aria-label="新建项目"><span aria-hidden="true">＋</span>新建项目</button>`;
+  const addProjectButton = document.querySelector("[data-add-project]");
+  if (addProjectButton) addProjectButton.onclick = openNewProjectDialog;
   document.querySelectorAll("[data-project]").forEach(btn => {
     btn.onclick = async () => {
       state.projectId = Number(btn.dataset.project);
@@ -1162,10 +1164,24 @@ function formatChinaTime(value) {
   }).format(date);
 }
 
-$("new-project").onclick = () => {
+function openNewProjectDialog() {
   $("project-form").reset();
   $("project-form").start_date.value = new Date().toISOString().slice(0, 10);
   $("project-dialog").showModal();
+}
+$("new-project").onclick = openNewProjectDialog;
+const projectMenu = $("project-menu");
+const projectMenuToggle = $("project-menu-toggle");
+const desktopSidebar = window.matchMedia("(min-width: 768px)");
+const syncProjectMenu = () => {
+  projectMenu.classList.toggle("open", desktopSidebar.matches);
+  projectMenuToggle.setAttribute("aria-expanded", String(desktopSidebar.matches));
+};
+desktopSidebar.addEventListener("change", syncProjectMenu);
+syncProjectMenu();
+projectMenuToggle.onclick = () => {
+  if (desktopSidebar.matches) return;
+  projectMenuToggle.setAttribute("aria-expanded", String(projectMenu.classList.toggle("open")));
 };
 $("cancel-project").onclick = () => $("project-dialog").close();
 $("close-material-preview").onclick = () => $("material-preview-dialog").close();
