@@ -2,11 +2,13 @@ import base64
 import io
 import json
 import os
+import shutil
+import ssl
 import subprocess
 import tempfile
 import threading
 import unittest
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 from pathlib import Path
@@ -39,7 +41,7 @@ from reports_app.materials import (
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, provider_command, transient_provider_error
 from reports_app.risks import evaluate_risks, progress_status
-from reports_app.server import Handler, add_repo, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
+from reports_app.server import Handler, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from reports_app.voice_todos import (
@@ -139,6 +141,35 @@ class CoreTest(unittest.TestCase):
         self.assertNotIn("<script>", todo["description_html"])
         with self.assertRaises(ValidationError):
             update_todo(self.conn, todo_id, {"status": "closed"})
+
+    def test_tls_listener_serves_api_for_secure_context_clients(self):
+        openssl = shutil.which("openssl")
+        if not openssl:
+            self.skipTest("openssl is required to generate a test certificate")
+        cert = Path(self.tmp.name) / "service.crt"
+        key = Path(self.tmp.name) / "service.key"
+        subprocess.run(
+            [openssl, "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "1", "-nodes",
+             "-keyout", str(key), "-out", str(cert), "-subj", "/CN=weeklyreports"],
+            check=True, capture_output=True,
+        )
+        self.assertIsNone(build_tls_server("127.0.0.1", None, self.db_path, cert, key))
+        tls_server = build_tls_server("127.0.0.1", 0, self.db_path, cert, key)
+        thread = threading.Thread(target=tls_server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            context = ssl._create_unverified_context()
+            client = HTTPSConnection("127.0.0.1", tls_server.server_port, timeout=10, context=context)
+            client.request("GET", "/api/state")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertIn("voice_agent", payload)
+        finally:
+            tls_server.shutdown()
+            tls_server.server_close()
+            thread.join(timeout=2)
 
     def test_load_env_file_fills_missing_values_only(self):
         env_file = Path(self.tmp.name) / "custom.env"

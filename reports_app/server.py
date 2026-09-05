@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import ssl
 import sys
 import threading
 import time
@@ -60,18 +61,39 @@ from .validation import (
 )
 
 
-def run(host="127.0.0.1", port=8000, db_path=DB_PATH):
+def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
     init_db(db_path)
     stop = threading.Event()
     scheduler = threading.Thread(target=scheduler_loop, args=(stop, db_path), daemon=True)
     scheduler.start()
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.db_path = db_path
+    tls_server = build_tls_server(host, tls_port, db_path, tls_cert, tls_key)
+    if tls_server:
+        threading.Thread(target=tls_server.serve_forever, daemon=True).start()
     try:
         print(f"Weekly reports workspace running at http://{host}:{port}")
+        if tls_server:
+            print(f"Weekly reports workspace running at https://{host}:{tls_server.server_port} (self-signed TLS)")
         httpd.serve_forever()
     finally:
         stop.set()
+        if tls_server:
+            tls_server.shutdown()
+            tls_server.server_close()
+
+
+def build_tls_server(host, tls_port, db_path, tls_cert, tls_key):
+    """Builds an HTTPS listener used by devices that need microphone access
+    (browsers only expose getUserMedia on secure origins)."""
+    if tls_port is None or not (tls_cert and tls_key):
+        return None
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(tls_cert, tls_key)
+    httpd = ThreadingHTTPServer((host, int(tls_port)), Handler)
+    httpd.db_path = db_path
+    httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    return httpd
 
 
 def scheduler_loop(stop, db_path):
