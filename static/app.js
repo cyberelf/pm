@@ -21,6 +21,7 @@ const state = {
   pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   theme: "blue",
+  appearance: "light",
   branchOptions: {},
   tab: "overview",
   sourceTab: "files",
@@ -43,9 +44,9 @@ function updateThemeColorSurface() {
   if (!themeColor || typeof getComputedStyle !== "function") return;
   const todoView = $("todo-view");
   const surface = document.body.classList.contains("todo-mode") && todoView
-    ? getComputedStyle(todoView).backgroundColor || "#12151f"
-    : "#ffffff";
-  themeColor.setAttribute("content", surface);
+    ? getComputedStyle(todoView).backgroundColor
+    : getComputedStyle(document.documentElement).backgroundColor;
+  if (surface) themeColor.setAttribute("content", surface);
 }
 
 function applyTheme(themeId, persist = true) {
@@ -57,7 +58,18 @@ function applyTheme(themeId, persist = true) {
   if (persist) localStorage.setItem("appTheme", themeId);
   updateThemeColorSurface();
 }
+
+function applyAppearance(mode, persist = true) {
+  const normalized = mode === "dark" ? "dark" : "light";
+  state.appearance = normalized;
+  const root = document.documentElement;
+  if (root) root.dataset.mode = normalized;
+  document.querySelectorAll(".mode-option").forEach((btn) => btn.classList.toggle("active", btn.dataset.modeOption === normalized));
+  if (persist) localStorage.setItem("appAppearance", normalized);
+  updateThemeColorSurface();
+}
 applyTheme(localStorage.getItem("appTheme") || "blue", false);
+applyAppearance(localStorage.getItem("appAppearance") || "light", false);
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -523,7 +535,11 @@ function renderSettings(ws) {
       <div class="wide row"><button class="primary">Save Settings</button></div>
     </form>
     <div class="panel">
-      <div class="panel-head"><h2>主题色</h2><span>界面与 TODO 看板跟随的强调色</span></div>
+      <div class="panel-head"><h2>外观</h2><span>背景深浅与主题色，TODO 看板同步跟随</span></div>
+      <div class="mode-switch" role="group" aria-label="背景深浅色">
+        <button type="button" class="mode-option${state.appearance === "dark" ? "" : " active"}" data-mode-option="light" onclick="applyAppearance('light')">浅色</button>
+        <button type="button" class="mode-option${state.appearance === "dark" ? " active" : ""}" data-mode-option="dark" onclick="applyAppearance('dark')">深色</button>
+      </div>
       <div class="theme-swatches">
         ${THEMES.map((theme) => `<button type="button" class="theme-swatch${theme.id === state.theme ? " active" : ""}" data-theme-id="${theme.id}" onclick="applyTheme('${theme.id}')"><span class="theme-swatch-dot" style="background:${theme.color}"></span>${theme.label}</button>`).join("")}
       </div>
