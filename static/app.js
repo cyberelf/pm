@@ -20,6 +20,7 @@ const state = {
   pendingReportProjectId: null,
   pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
+  theme: "blue",
   branchOptions: {},
   tab: "overview",
   sourceTab: "files",
@@ -27,6 +28,36 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+const THEMES = [
+  { id: "blue", label: "经典蓝", color: "#2563eb" },
+  { id: "graphite", label: "石墨黑", color: "#111827" },
+  { id: "green", label: "松石绿", color: "#059669" },
+  { id: "purple", label: "雅紫", color: "#7c3aed" },
+  { id: "orange", label: "落日橙", color: "#ea580c" },
+  { id: "pink", label: "樱粉", color: "#db2777" },
+];
+
+function updateThemeColorSurface() {
+  const themeColor = document.querySelector?.('meta[name="theme-color"]');
+  if (!themeColor || typeof getComputedStyle !== "function") return;
+  const todoView = $("todo-view");
+  const surface = document.body.classList.contains("todo-mode") && todoView
+    ? getComputedStyle(todoView).backgroundColor || "#12151f"
+    : "#ffffff";
+  themeColor.setAttribute("content", surface);
+}
+
+function applyTheme(themeId, persist = true) {
+  if (!THEMES.some((theme) => theme.id === themeId)) themeId = "blue";
+  state.theme = themeId;
+  const root = document.documentElement;
+  if (root) root.dataset.theme = themeId;
+  document.querySelectorAll(".theme-swatch").forEach((btn) => btn.classList.toggle("active", btn.dataset.themeId === themeId));
+  if (persist) localStorage.setItem("appTheme", themeId);
+  updateThemeColorSurface();
+}
+applyTheme(localStorage.getItem("appTheme") || "blue", false);
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -107,13 +138,7 @@ async function switchAppMode(mode, persist = true) {
   if (persist) localStorage.setItem("workspaceMode", state.mode);
   const showingTodos = state.mode === "todos";
   document.body.classList.toggle("todo-mode", showingTodos);
-  const themeColor = document.querySelector?.('meta[name="theme-color"]');
-  if (themeColor) {
-    const surface = showingTodos
-      ? getComputedStyle(document.documentElement).getPropertyValue("--board-canvas").trim() || "#172033"
-      : "#ffffff";
-    themeColor.setAttribute("content", surface);
-  }
+  updateThemeColorSurface();
   $("page-current-label").textContent = showingTodos ? "TODO" : "周报";
   $("page-target-label").textContent = showingTodos ? "周报" : "TODO";
   $("page-corner").setAttribute("aria-label", `当前页面：${showingTodos ? "TODO" : "周报"}；切换到${showingTodos ? "周报" : "TODO"}`);
@@ -497,6 +522,12 @@ function renderSettings(ws) {
       </div>
       <div class="wide row"><button class="primary">Save Settings</button></div>
     </form>
+    <div class="panel">
+      <div class="panel-head"><h2>主题色</h2><span>界面与 TODO 看板跟随的强调色</span></div>
+      <div class="theme-swatches">
+        ${THEMES.map((theme) => `<button type="button" class="theme-swatch${theme.id === state.theme ? " active" : ""}" data-theme-id="${theme.id}" onclick="applyTheme('${theme.id}')"><span class="theme-swatch-dot" style="background:${theme.color}"></span>${theme.label}</button>`).join("")}
+      </div>
+    </div>
     <div class="panel">
       <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
       <div class="row">
