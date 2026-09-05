@@ -628,6 +628,13 @@ async function recordingBlobToWav(blob) {
   }
 }
 
+const voiceJobs = new Map();
+
+function truncateVoiceTranscript(text) {
+  const cleaned = String(text || "").trim().replace(/\s+/g, " ");
+  return cleaned.length > 64 ? `${cleaned.slice(0, 64)}…` : cleaned;
+}
+
 async function submitVoiceTodo(blob) {
   let payload;
   try {
@@ -642,17 +649,65 @@ async function submitVoiceTodo(blob) {
     return;
   }
   try {
-    await withBusy("正在整理语音 TODO", "本地识别服务转写中，随后由 CLI 整理为 TODO…", async () => {
-      const data = await api("/api/todos/voice", { method: "POST", body: JSON.stringify(payload) });
-      updateTodos(data);
-      const count = (data.ids || []).length;
-      toast(data.fallback
-        ? `语音整理失败，已按原始转写创建 TODO：${data.error || "未知错误"}`
-        : count > 1 ? `已创建 ${count} 条语音 TODO` : "语音 TODO 已创建");
-    });
+    const data = await api("/api/todos/voice", { method: "POST", body: JSON.stringify(payload) });
+    voiceJobs.set(data.id, { status: data.status || "transcribing", transcript: "" });
+    renderVoiceJobProgress();
+    startVoiceJobPolling();
+    toast("语音已提交，后台转写整理中");
   } catch (error) {
     toast(error.message);
   }
+}
+
+function startVoiceJobPolling() {
+  if (voiceJobs.timer) return;
+  voiceJobs.timer = setInterval(pollVoiceJobs, 1500);
+  pollVoiceJobs();
+}
+
+async function pollVoiceJobs() {
+  for (const [id, job] of Array.from(voiceJobs.entries())) {
+    let data;
+    try {
+      data = await api(`/api/voice-jobs/${id}`);
+    } catch {
+      continue;
+    }
+    job.status = data.status;
+    job.transcript = data.transcript || "";
+    if (data.status === "completed") {
+      voiceJobs.delete(id);
+      await loadTodos().catch(() => {});
+      toast(data.fallback
+        ? `语音整理失败，已按原始转写创建 TODO：${data.error || "未知错误"}`
+        : `语音 TODO 已创建（${(data.todo_ids || []).length} 条）`);
+    } else if (data.status === "failed") {
+      voiceJobs.delete(id);
+      toast(`语音处理失败：${data.error || "未知错误"}`);
+    }
+  }
+  if (!voiceJobs.size && voiceJobs.timer) {
+    clearInterval(voiceJobs.timer);
+    voiceJobs.timer = 0;
+  }
+  renderVoiceJobProgress();
+}
+
+function renderVoiceJobProgress() {
+  const bubble = $("voice-todo-progress");
+  if (!bubble) return;
+  const jobs = Array.from(voiceJobs.values());
+  if (!jobs.length) {
+    bubble.classList.add("hidden");
+    return;
+  }
+  const job = jobs[jobs.length - 1];
+  bubble.classList.remove("hidden");
+  const stage = job.status === "structuring" ? "转写完成，正在整理 TODO…" : "正在转写语音…";
+  const transcript = truncateVoiceTranscript(job.transcript);
+  bubble.innerHTML = `<small>${escapeHtml(stage)}</small>${
+    transcript ? `<span class="voice-job-transcript">${escapeHtml(transcript)}</span>` : "<span class='voice-live-empty'>等待识别结果…</span>"
+  }`;
 }
 
 function renderVoiceSettings() {

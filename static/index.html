@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=47" />
+    <link rel="stylesheet" href="/styles.css?v=48" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -255,6 +255,7 @@
     </nav>
 
     <div id="voice-todo-widget" class="voice-todo-widget">
+      <div id="voice-todo-progress" class="voice-todo-progress hidden" aria-live="polite"></div>
       <div id="voice-todo-live" class="voice-todo-live hidden" aria-live="polite"></div>
       <button id="voice-todo-fab" class="voice-todo-fab" type="button" aria-label="按住说话，创建语音 TODO" title="按住说话，创建语音 TODO">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a2.8 2.8 0 0 1 2.8 2.8v5.7a2.8 2.8 0 0 1-5.6 0V6.3A2.8 2.8 0 0 1 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path><path d="M5.8 11.5a6.2 6.2 0 0 0 12.4 0M12 17.7v2.8M8.8 20.5h6.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
@@ -268,6 +269,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=38"></script>
+    <script src="/app.js?v=39"></script>
   </body>
 </html>

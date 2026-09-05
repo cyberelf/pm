@@ -60,6 +60,7 @@ class FrontendTest(unittest.TestCase):
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('id="voice-todo-fab"', html)
         self.assertIn('id="voice-todo-live"', html)
+        self.assertIn('id="voice-todo-progress"', html)
         self.assertIn('id="voice-agent-select"', html)
         self.assertIn('id="asr-endpoint-input"', html)
         self.assertIn('id="asr-model-input"', html)
@@ -76,6 +77,9 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("window.isSecureContext", source)
         self.assertIn('`https://${location.hostname}:8443`', source)
         self.assertIn('"/api/todos/voice"', source)
+        self.assertIn("`/api/voice-jobs/${id}`", source)
+        self.assertIn("function truncateVoiceTranscript", source)
+        self.assertIn("cleaned.slice(0, 64)", source)
         self.assertIn("asr_endpoint: $(\"asr-endpoint-input\")?.value || \"\"", source)
         self.assertIn("state.voiceAgent = data.voice_agent === \"claude\" ? \"claude\" : \"codex\";", source)
         self.assertIn("function renderVoiceSettings()", source)
@@ -84,6 +88,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("padding: 0;", styles)
         self.assertIn(".voice-todo-fab.is-recording {", styles)
         self.assertIn(".voice-todo-live {", styles)
+        self.assertIn(".voice-todo-progress {", styles)
+        self.assertIn(".voice-job-transcript {", styles)
         self.assertIn(".voice-settings {", styles)
 
     def test_responsive_layout_contains_wide_content_overflow(self):

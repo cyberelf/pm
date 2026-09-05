@@ -886,6 +886,9 @@ strong { color: var(--ink); }
   50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--error) 0%, transparent); }
 }
 .voice-todo-live { max-width: min(320px, calc(100vw - 88px)); border-radius: var(--radius-md); background: var(--surface-dark); color: var(--on-dark); padding: 9px 12px; font-size: 13px; line-height: 1.5; box-shadow: var(--shadow-elevated); overflow-wrap: anywhere; }
+.voice-todo-progress { max-width: min(320px, calc(100vw - 88px)); border-radius: var(--radius-md); background: var(--surface-dark); color: var(--on-dark); padding: 9px 12px; font-size: 13px; line-height: 1.5; box-shadow: var(--shadow-elevated); }
+.voice-todo-progress small { display: block; margin-bottom: 2px; color: var(--on-dark-soft); font-size: 11px; }
+.voice-job-transcript { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .voice-todo-live small { display: block; margin-bottom: 2px; color: var(--on-dark-soft); font-size: 11px; }
 .voice-todo-live .voice-live-empty { color: var(--on-dark-soft); }
 .voice-settings { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
