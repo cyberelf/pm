@@ -10,7 +10,7 @@ This repository implements a local personal weekly project reporting workspace. 
 - Storage: SQLite at `data/reports.sqlite3`.
 - Uploads: local files under `data/uploads/`.
 - Frontend: dependency-free static HTML/CSS/JS in `static/`.
-- External tools: local `gh` (GitHub), `glab` (GitLab), Codex CLI, and Claude Code CLI.
+- External tools: local `gh` (GitHub), `glab` (GitLab), Codex CLI, Claude Code CLI, and a local whisper.cpp ASR service (`scripts/install_asr_service.sh`, port 8766) for voice TODO transcription.
 - Stable service: macOS LaunchAgent scripts in `scripts/`.
 
 ## Development Rules

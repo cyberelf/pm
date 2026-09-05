@@ -56,8 +56,9 @@ The first release is local-only: the backend must run on the same machine as the
 
 ## Voice TODO
 
-- A floating microphone button at the bottom right records while held. Speech is transcribed in the browser (Web Speech API; Safari or Chrome required), so no audio is stored.
-- On release, the transcript is sent to `POST /api/todos/voice`, and the conversion agent selected in 全局设置 (global settings; `codex` or `claude` CLI, stored workspace-wide) turns it into one or more structured TODO items.
+- A floating microphone button at the bottom right records while held. The browser only captures audio and converts it to a 16 kHz mono WAV locally (no speech leaves the machine at this stage); Safari and Chrome are supported.
+- On release, the WAV goes to `POST /api/todos/voice`. The backend transcribes it through the ASR service configured in 全局设置 (global settings), then the configured agent (`codex` or `claude` CLI) structures the transcript into one or more TODO items.
+- The ASR service is any OpenAI-compatible transcription endpoint. The default is the bundled whisper.cpp server (`/inference` on port 8766, large-v3-turbo model); install it with `scripts/install_asr_service.sh` after `brew install whisper-cpp` and placing a GGML model under `data/models/`.
 - If the agent CLI fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
 
 ## Uploads
