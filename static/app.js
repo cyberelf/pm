@@ -20,6 +20,7 @@ const state = {
   pendingReportProjectId: null,
   pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
+  settingsView: false,
   theme: "blue",
   appearance: "light",
   branchOptions: {},
@@ -67,6 +68,14 @@ function applyAppearance(mode, persist = true) {
 }
 applyTheme(localStorage.getItem("appTheme") || "blue", false);
 applyAppearance(localStorage.getItem("appAppearance") || "light", false);
+
+function renderAppearanceSettings() {
+  const swatches = $("appearance-swatches");
+  if (!swatches) return;
+  swatches.innerHTML = THEMES.map((theme) =>
+    `<button type="button" class="theme-swatch${theme.id === state.theme ? " active" : ""}" data-theme-id="${theme.id}" onclick="applyTheme('${theme.id}')"><span class="theme-swatch-dot" style="background:${theme.color}"></span>${theme.label}</button>`).join("");
+}
+renderAppearanceSettings();
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -142,19 +151,37 @@ function updateTodos(data) {
   renderTodoBoard();
 }
 
+function syncWorkspaceView() {
+  const settings = state.settingsView;
+  $("settings-view").classList.toggle("hidden", !settings);
+  $("report-view").classList.toggle("hidden", settings || state.mode !== "reports");
+  $("todo-view").classList.toggle("hidden", settings || state.mode !== "todos");
+  document.querySelectorAll("[data-mode-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.modeTab === (settings ? "settings" : state.mode));
+  });
+}
+
+function toggleSettingsView(force) {
+  state.settingsView = typeof force === "boolean" ? force : !state.settingsView;
+  const showingTodos = state.mode === "todos" && !state.settingsView;
+  document.body.classList.toggle("todo-mode", showingTodos);
+  $("project-sidebar").classList.toggle("hidden", showingTodos);
+  syncWorkspaceView();
+  updateThemeColorSurface();
+}
+
 async function switchAppMode(mode, persist = true) {
   state.mode = mode === "todos" ? "todos" : "reports";
+  state.settingsView = false;
   if (persist) localStorage.setItem("workspaceMode", state.mode);
   const showingTodos = state.mode === "todos";
   document.body.classList.toggle("todo-mode", showingTodos);
-  document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.classList.toggle("active", btn.dataset.modeTab === state.mode));
+  $("project-sidebar").classList.toggle("hidden", showingTodos);
+  syncWorkspaceView();
   updateThemeColorSurface();
   $("page-current-label").textContent = showingTodos ? "TODO" : "周报";
   $("page-target-label").textContent = showingTodos ? "周报" : "TODO";
   $("page-corner").setAttribute("aria-label", `当前页面：${showingTodos ? "TODO" : "周报"}；切换到${showingTodos ? "周报" : "TODO"}`);
-  $("project-sidebar").classList.toggle("hidden", showingTodos);
-  $("report-view").classList.toggle("hidden", showingTodos);
-  $("todo-view").classList.toggle("hidden", !showingTodos);
   if (persist) playPageTurn();
   if (showingTodos) {
     await loadTodos();
@@ -537,16 +564,6 @@ function renderSettings(ws) {
       </div>
       <div class="wide row"><button class="primary">Save Settings</button></div>
     </form>
-    <div class="panel">
-      <div class="panel-head"><h2>外观</h2><span>背景深浅与主题色，TODO 看板同步跟随</span></div>
-      <div class="mode-switch" role="group" aria-label="背景深浅色">
-        <button type="button" class="mode-option${state.appearance === "dark" ? "" : " active"}" data-mode-option="light" onclick="applyAppearance('light')">浅色</button>
-        <button type="button" class="mode-option${state.appearance === "dark" ? " active" : ""}" data-mode-option="dark" onclick="applyAppearance('dark')">深色</button>
-      </div>
-      <div class="theme-swatches">
-        ${THEMES.map((theme) => `<button type="button" class="theme-swatch${theme.id === state.theme ? " active" : ""}" data-theme-id="${theme.id}" onclick="applyTheme('${theme.id}')"><span class="theme-swatch-dot" style="background:${theme.color}"></span>${theme.label}</button>`).join("")}
-      </div>
-    </div>
     <div class="panel">
       <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
       <div class="row">
@@ -1115,6 +1132,7 @@ async function runConfirmedProjectGeneration() {
 }
 
 function switchTab(tab) {
+  if (state.settingsView) toggleSettingsView(false);
   state.tab = tab;
   document.querySelectorAll(".tabs button").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
   document.querySelectorAll("[data-project-settings]").forEach(btn => {
@@ -1365,7 +1383,15 @@ $("project-form").onsubmit = async (event) => {
   toast("Project created");
 };
 $("page-corner").onclick = () => switchAppMode(state.mode === "todos" ? "reports" : "todos");
-document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () => switchAppMode(btn.dataset.modeTab));
+document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () => {
+  const target = btn.dataset.modeTab;
+  if (target === "settings") {
+    toggleSettingsView();
+    return;
+  }
+  switchAppMode(target);
+});
+$("open-global-settings").onclick = () => toggleSettingsView(true);
 $("page-corner").onkeydown = (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();

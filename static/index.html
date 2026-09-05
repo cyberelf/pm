@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=37" />
+    <link rel="stylesheet" href="/styles.css?v=38" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -31,6 +31,10 @@
         <button id="new-project" class="primary full">新建项目</button>
         <div class="sidebar-label">项目</div>
         <div id="project-list" class="project-list"></div>
+        <button id="open-global-settings" class="sidebar-settings" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><circle cx="14.5" cy="7" r="2.5" fill="currentColor"></circle><circle cx="9.5" cy="17" r="2.5" fill="currentColor"></circle></svg>
+          全局设置
+        </button>
       </aside>
 
       <div class="page-shell">
@@ -88,6 +92,27 @@
             </div>
           </header>
           <section id="todo-board" class="todo-board" aria-label="TODO 看板"></section>
+        </main>
+
+        <main id="settings-view" class="main hidden">
+          <header class="topbar">
+            <div>
+              <div class="project-heading">
+                <h1>全局设置</h1>
+                <p>外观与偏好，对所有项目生效</p>
+              </div>
+            </div>
+          </header>
+          <section class="settings-panels">
+            <div class="panel">
+              <div class="panel-head"><h2>外观</h2><span>背景深浅与主题色，TODO 看板同步跟随</span></div>
+              <div class="mode-switch" role="group" aria-label="背景深浅色">
+                <button type="button" class="mode-option active" data-mode-option="light" onclick="applyAppearance('light')">浅色</button>
+                <button type="button" class="mode-option" data-mode-option="dark" onclick="applyAppearance('dark')">深色</button>
+              </div>
+              <div id="appearance-swatches" class="theme-swatches"></div>
+            </div>
+          </section>
         </main>
 
       </div>
@@ -204,6 +229,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h6.5L18 8v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1zM13.5 3.5V8H18M10 12.5h5M10 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
         <span>周报</span>
       </button>
+      <button type="button" data-mode-tab="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><circle cx="14.5" cy="7" r="2.5" fill="currentColor"></circle><circle cx="9.5" cy="17" r="2.5" fill="currentColor"></circle></svg>
+        <span>设置</span>
+      </button>
     </nav>
 
     <div id="toast" class="toast hidden"></div>
@@ -214,6 +243,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=29"></script>
+    <script src="/app.js?v=30"></script>
   </body>
 </html>
