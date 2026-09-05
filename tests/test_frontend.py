@@ -142,7 +142,7 @@ class FrontendTest(unittest.TestCase):
         self.assertIn(".project-heading p {", styles)
         self.assertIn("to { opacity: 1; transform: none; }", styles)
         self.assertIn('setTimeout(() => el.classList.remove("view-enter"), 320)', source)
-        self.assertIn("border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);", styles)
+        self.assertIn("border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);", styles)
         self.assertIn('id="settings-view"', html)
         self.assertIn('id="appearance-swatches"', html)
         self.assertIn('data-mode-tab="settings"', html)

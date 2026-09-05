@@ -125,7 +125,7 @@ body {
 button, input, textarea, select { min-width: 0; font: inherit; color: inherit; }
 button {
   min-height: 40px;
-  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: var(--radius-md);
   padding: 10px 16px;
   background: var(--canvas);
