@@ -2,7 +2,7 @@ import base64
 import json
 import uuid
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from .config import DEFAULT_ASR_ENDPOINT, DEFAULT_ASR_MODEL
 from .validation import ValidationError
@@ -63,7 +63,11 @@ def transcribe_audio(raw, content_type, endpoint, model, timeout=120):
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         method="POST",
     )
-    with urlopen(request, timeout=timeout) as response:
+    # The ASR service runs on this host; never route the call through a
+    # proxy (env vars or macOS system proxy settings would otherwise send
+    # loopback traffic to e.g. a Clash remote node and time out).
+    opener = build_opener(ProxyHandler({}))
+    with opener.open(request, timeout=timeout) as response:
         result = json.loads(response.read().decode("utf-8"))
     text = ""
     if isinstance(result, dict):

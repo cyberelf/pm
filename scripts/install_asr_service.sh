@@ -42,6 +42,7 @@ data = {
         "--host", "127.0.0.1",
         "--port", port,
         "--model", model,
+        "--language", "auto",
     ],
     "RunAtLoad": True,
     "KeepAlive": True,
