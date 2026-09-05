@@ -516,18 +516,18 @@ function renderOverview(ws) {
   $("tab-overview").innerHTML = `
     <div class="status-strip">
       <div class="metric"><span>项目周</span><strong>${ws.week_key}</strong><small>当前项目周</small></div>
-      <div class="metric"><span>进度状态</span><strong>${escapeHtml(ws.progress_status)}</strong><small>确定性规则计算</small></div>
-      <div class="metric"><span>活跃风险</span><strong>${ws.risks.filter(r => r.status === "active").length}</strong><small>visible warnings</small></div>
-      <div class="metric"><span>资料源</span><strong>${ws.materials.length + ws.repos.length}</strong><small>materials + repos</small></div>
+      <div class="metric"><span>进度状态</span><strong>${escapeHtml(statusLabel(ws.progress_status))}</strong><small>确定性规则计算</small></div>
+      <div class="metric"><span>活跃风险</span><strong>${ws.risks.filter(r => r.status === "active").length}</strong><small>当前活跃</small></div>
+      <div class="metric"><span>资料源</span><strong>${ws.materials.length + ws.repos.length}</strong><small>资料 + 仓库</small></div>
     </div>
     <div class="grid-2">
       <div class="panel">
-        <div class="panel-head"><h2>当前计划</h2><span>Plan baseline</span></div>
-        <p>${escapeHtml(ws.plan.objectives || "No objectives yet.")}</p>
-        <table class="table"><tbody>${ws.plan.milestones.map(rowItem).join("") || "<tr><td>No milestones.</td></tr>"}</tbody></table>
+        <div class="panel-head"><h2>当前计划</h2><span>计划基线</span></div>
+        <p>${escapeHtml(ws.plan.objectives || "暂无目标。")}</p>
+        <table class="table"><tbody>${ws.plan.milestones.map(rowItem).join("") || "<tr><td>暂无里程碑。</td></tr>"}</tbody></table>
       </div>
       <div class="panel">
-        <div class="panel-head"><h2>当前周报</h2><span>Canonical report</span></div>
+        <div class="panel-head"><h2>当前周报</h2><span>正式周报</span></div>
         ${ws.report ? `
           <div class="overview-report-summary">
             <span>周报摘要</span>
@@ -535,7 +535,7 @@ function renderOverview(ws) {
           </div>
           <p class="report-updated">更新于 ${escapeHtml(formatChinaTime(ws.report.updated_at))}</p>
         ` : "<p>当前项目周还没有生成周报。</p>"}
-        <div class="row"><button onclick="switchTab('report')">Open Report</button></div>
+        <div class="row"><button onclick="switchTab('report')">打开周报</button></div>
       </div>
     </div>
   `;
@@ -546,24 +546,24 @@ function renderSettings(ws) {
   $("tab-settings").innerHTML = `
     <form id="settings-form" class="panel form-grid">
       <div class="panel-head wide"><h2>项目设置</h2><span>项目与报告配置</span></div>
-      ${input("name", "Name", p.name)}
-      ${input("status", "Status", p.status)}
-      ${input("start_date", "Start date", p.start_date, "date")}
-      ${input("end_date", "End date", p.end_date || "", "date")}
-      ${timezoneSelect("timezone", "Timezone", p.timezone)}
-      <label>Provider<select name="report_provider"><option value="codex" ${p.report_provider === "codex" ? "selected" : ""}>Codex CLI</option><option value="claude" ${p.report_provider === "claude" ? "selected" : ""}>Claude Code CLI</option></select></label>
-      ${textarea("description", "Description", p.description, "wide")}
-      ${textarea("manual_background", "Background", p.manual_background, "wide")}
-      ${textarea("manual_objectives", "Objectives", p.manual_objectives, "wide")}
-      ${textarea("manual_constraints", "Constraints", p.manual_constraints, "wide")}
-      ${textarea("system_prompt", "System Prompt", p.system_prompt, "wide")}
-      ${textarea("report_template", "Project Report Template", p.report_template, "wide")}
+      ${input("name", "名称", p.name)}
+      ${input("status", "状态", p.status)}
+      ${input("start_date", "开始日期", p.start_date, "date")}
+      ${input("end_date", "结束日期", p.end_date || "", "date")}
+      ${timezoneSelect("timezone", "时区", p.timezone)}
+      <label>生成器<select name="report_provider"><option value="codex" ${p.report_provider === "codex" ? "selected" : ""}>Codex CLI</option><option value="claude" ${p.report_provider === "claude" ? "selected" : ""}>Claude Code CLI</option></select></label>
+      ${textarea("description", "描述", p.description, "wide")}
+      ${textarea("manual_background", "背景", p.manual_background, "wide")}
+      ${textarea("manual_objectives", "目标", p.manual_objectives, "wide")}
+      ${textarea("manual_constraints", "约束", p.manual_constraints, "wide")}
+      ${textarea("system_prompt", "系统提示词", p.system_prompt, "wide")}
+      ${textarea("report_template", "项目周报模板", p.report_template, "wide")}
       <div class="wide panel">
         <div class="panel-head"><h3>更新时间点</h3><span>同一项目周内覆盖当前周报</span></div>
         <div id="schedule-list">${renderSchedules(ws.schedules, p.timezone)}</div>
-        <button type="button" onclick="addSchedule()">+ Schedule</button>
+        <button type="button" onclick="addSchedule()">+ 添加时间点</button>
       </div>
-      <div class="wide row"><button class="primary">Save Settings</button></div>
+      <div class="wide row"><button class="primary">保存设置</button></div>
     </form>
     <div class="panel">
       <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
@@ -572,9 +572,9 @@ function renderSettings(ws) {
         <input id="repo-input" placeholder="owner/repo">
         <input id="repo-server-input" placeholder="GitLab 服务器地址，如 https://gitlab.example.com" class="hidden">
         <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
-        <button type="button" onclick="addRepo()">Add Repo</button>
+        <button type="button" onclick="addRepo()">添加仓库</button>
       </div>
-      <table class="table"><thead><tr><th>Repo</th><th>跟踪分支</th><th>补充说明</th><th>Status</th><th>Action</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>No repositories.</td></tr>"}</tbody></table>
+      <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>暂无仓库。</td></tr>"}</tbody></table>
     </div>
   `;
   $("settings-form").onsubmit = saveSettings;
@@ -603,7 +603,7 @@ function renderRepoRow(r) {
       <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
-      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="saveRepoNotes(${r.id})">Save</button><button type="button" onclick="refreshRepo(${r.id})">Refresh</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">Delete</button></div></td>
+      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="saveRepoNotes(${r.id})">保存</button><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
     </tr>
   `;
 }
@@ -616,7 +616,7 @@ function renderBranchPicker(repo) {
     <details class="branch-picker" id="branch-picker-${repo.id}">
       <summary>${escapeHtml(summary)}</summary>
       <div class="branch-menu">
-        <div class="branch-actions"><button type="button" onclick="loadRepoBranches(${repo.id})">Load Branches</button></div>
+        <div class="branch-actions"><button type="button" onclick="loadRepoBranches(${repo.id})">加载分支</button></div>
         <div class="branch-options">
           ${options.map(branch => `
             <label class="branch-option">
@@ -653,10 +653,10 @@ function renderSchedules(schedules, timezone) {
     return `
     <div class="row schedule-row${enabled ? "" : " schedule-row-disabled"}">
       <label class="switch" title="${enabled ? "已启用" : "已停用"}"><input type="checkbox" data-schedule-enabled ${enabled ? "checked" : ""}><span class="switch-slider"></span></label>
-      <label>Weekday <input name="schedule_weekday" type="number" min="1" max="7" value="${s.weekday}"></label>
-      <label>Time <input name="schedule_time" value="${escapeHtml(s.local_time)}"></label>
-      ${timezoneSelect("schedule_timezone", "Timezone", s.timezone)}
-      <button type="button" class="danger" onclick="this.closest('.schedule-row').remove()">Remove</button>
+      <label>星期 <input name="schedule_weekday" type="number" min="1" max="7" value="${s.weekday}"></label>
+      <label>时间 <input name="schedule_time" value="${escapeHtml(s.local_time)}"></label>
+      ${timezoneSelect("schedule_timezone", "时区", s.timezone)}
+      <button type="button" class="danger" onclick="this.closest('.schedule-row').remove()">移除</button>
       <small class="schedule-last-fire">${s.last_checked_at ? `上次触发 ${escapeHtml(formatChinaTime(s.last_checked_at))}` : "尚未触发"}</small>
     </div>
   `;}).join("");
@@ -680,28 +680,28 @@ async function saveSettings(event) {
   const payload = Object.fromEntries(fd.entries());
   payload.schedules = schedules;
   await api(`/api/projects/${state.projectId}/settings`, { method: "PUT", body: JSON.stringify(payload) });
-  toast("Settings saved");
+  toast("设置已保存");
   await loadWorkspace();
 }
 
 function renderPlan(ws) {
   $("tab-plan").innerHTML = `
     <form id="plan-form" class="panel">
-      <div class="panel-head"><h2>项目计划</h2><span>Milestones and deliverables</span></div>
-      ${textarea("objectives", "Objectives", ws.plan.objectives)}
-      <h3>Milestones</h3>
+      <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物</span></div>
+      ${textarea("objectives", "目标", ws.plan.objectives)}
+      <h3>里程碑</h3>
       <div id="milestones">${renderPlanItems(ws.plan.milestones)}</div>
-      <button type="button" onclick="addPlanItem('milestones')">+ Milestone</button>
-      <h3>Deliverables</h3>
+      <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
+      <h3>交付物</h3>
       <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
-      <button type="button" onclick="addPlanItem('deliverables')">+ Deliverable</button>
-      <div class="row"><button class="primary">Save Plan</button></div>
+      <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
+      <div class="row"><button class="primary">保存计划</button></div>
     </form>
     <form id="outcome-form" class="panel">
       <div class="panel-head"><h2>本周计划产出</h2><span>${escapeHtml(ws.week_key)}</span></div>
       <div id="outcomes">${renderOutcomes(ws.outcomes)}</div>
-      <button type="button" onclick="addOutcome()">+ Outcome</button>
-      <div class="row"><button class="primary">Save Outcomes</button></div>
+      <button type="button" onclick="addOutcome()">+ 添加产出</button>
+      <div class="row"><button class="primary">保存产出</button></div>
     </form>
   `;
   $("plan-form").onsubmit = savePlan;
@@ -711,11 +711,11 @@ function renderPlan(ws) {
 function renderPlanItems(items) {
   return (items.length ? items : [{ title: "", status: "planned", owner_label: "", target_date: "" }]).map(item => `
     <div class="row plan-item">
-      <input name="title" placeholder="Title" value="${escapeAttr(item.title || "")}">
-      <input name="owner_label" placeholder="Owner label" value="${escapeAttr(item.owner_label || "")}">
+      <input name="title" placeholder="标题" value="${escapeAttr(item.title || "")}">
+      <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
       <input name="target_date" type="date" value="${escapeAttr(item.target_date || "")}">
       <select name="status">${statusOptions(item.status)}</select>
-      <button type="button" onclick="this.closest('.plan-item').remove()">Remove</button>
+      <button type="button" class="danger" onclick="this.closest('.plan-item').remove()">移除</button>
     </div>
   `).join("");
 }
@@ -728,18 +728,18 @@ async function savePlan(event) {
   event.preventDefault();
   const groups = (id) => Array.from($(id).querySelectorAll(".plan-item")).map(row => itemPayload(row)).filter(i => i.title);
   await api(`/api/projects/${state.projectId}/plan`, { method: "PUT", body: JSON.stringify({ objectives: event.target.objectives.value, milestones: groups("milestones"), deliverables: groups("deliverables") }) });
-  toast("Plan saved");
+  toast("计划已保存");
   await loadWorkspace();
 }
 
 function renderOutcomes(items) {
   return (items.length ? items : [{ title: "", details: "", status: "planned", owner_label: "" }]).map(item => `
     <div class="row outcome-item">
-      <input name="title" placeholder="Outcome" value="${escapeAttr(item.title || "")}">
-      <input name="owner_label" placeholder="Owner label" value="${escapeAttr(item.owner_label || "")}">
+      <input name="title" placeholder="产出" value="${escapeAttr(item.title || "")}">
+      <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
       <select name="status">${statusOptions(item.status)}</select>
-      <input name="details" placeholder="Details" value="${escapeAttr(item.details || "")}">
-      <button type="button" onclick="this.closest('.outcome-item').remove()">Remove</button>
+      <input name="details" placeholder="说明" value="${escapeAttr(item.details || "")}">
+      <button type="button" class="danger" onclick="this.closest('.outcome-item').remove()">移除</button>
     </div>
   `).join("");
 }
@@ -750,7 +750,7 @@ async function saveOutcomes(event) {
   event.preventDefault();
   const outcomes = Array.from($("outcomes").querySelectorAll(".outcome-item")).map(row => itemPayload(row)).filter(i => i.title);
   await api(`/api/projects/${state.projectId}/weekly-outcomes`, { method: "PUT", body: JSON.stringify({ outcomes }) });
-  toast("Outcomes saved");
+  toast("产出已保存");
   await loadWorkspace();
 }
 
@@ -759,18 +759,18 @@ function renderUpdates(ws) {
   $("tab-updates").innerHTML = `
     <form id="update-form" class="panel form-grid">
       <div class="panel-head wide"><h2>本周进展</h2><span>${escapeHtml(ws.week_key)}</span></div>
-      ${textarea("completed", "Completed", u.completed || "", "wide")}
-      ${textarea("in_progress", "In Progress", u.in_progress || "", "wide")}
-      ${textarea("blockers", "Blockers", u.blockers || "", "wide")}
-      ${textarea("risks", "Risks", u.risks || "", "wide")}
-      ${textarea("next_steps", "Next Steps", u.next_steps || "", "wide")}
-      <div class="wide row"><button class="primary">Save Update</button></div>
+      ${textarea("completed", "已完成", u.completed || "", "wide")}
+      ${textarea("in_progress", "进行中", u.in_progress || "", "wide")}
+      ${textarea("blockers", "阻塞事项", u.blockers || "", "wide")}
+      ${textarea("risks", "风险", u.risks || "", "wide")}
+      ${textarea("next_steps", "下一步计划", u.next_steps || "", "wide")}
+      <div class="wide row"><button class="primary">保存进展</button></div>
     </form>
   `;
   $("update-form").onsubmit = async (event) => {
     event.preventDefault();
     await api(`/api/projects/${state.projectId}/weekly-update`, { method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(event.target).entries())) });
-    toast("Weekly update saved");
+    toast("本周进展已保存");
     await loadWorkspace();
   };
 }
@@ -793,7 +793,7 @@ function renderSources(ws) {
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
         </div>
-        <table class="table material-table"><thead><tr><th>File</th><th>Extraction</th><th>Summary</th><th>Updated</th><th>Action</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map(renderUploadedMaterialRow).join("") || "<tr><td colspan='5'>No uploaded materials.</td></tr>"}</tbody></table>
+        <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map(renderUploadedMaterialRow).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
       </div>
     </section>
     <section id="source-manual" class="source-view hidden" role="tabpanel">
@@ -802,9 +802,9 @@ function renderSources(ws) {
         <div class="manual-material-form">
           <input id="manual-material-title" placeholder="资料标题">
           <textarea id="manual-material-content" placeholder="输入本周新增的背景、决策、会议记录或补充资料"></textarea>
-          <button onclick="saveManualMaterial()">Save Manual Material</button>
+          <button onclick="saveManualMaterial()">保存手工资料</button>
         </div>
-        <table class="table"><thead><tr><th>Title</th><th>Content</th><th>Created</th><th>Updated</th><th>Action</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map(renderManualMaterialRow).join("") || "<tr><td colspan='5'>No manual materials.</td></tr>"}</tbody></table>
+        <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map(renderManualMaterialRow).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
       </div>
     </section>
   `;
@@ -871,16 +871,16 @@ function renderUploadedMaterialRow(m) {
     <td data-label="提取"><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
     <td data-label="摘要"><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
     <td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
-    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateMaterialSummary(${m.id})">Save summary</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">Delete</button>` : ""}</div></td>
+    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button onclick="updateMaterialSummary(${m.id})">保存摘要</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
   </tr>`;
 }
 
 function renderManualMaterialRow(m) {
   const content = escapeHtml(m.content || "");
   if (m.editable) {
-    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><button onclick="updateManualMaterial(${m.id})">Save</button><button class="danger" onclick="deleteMaterial(${m.id})">Delete</button></div></td></tr>`;
+    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button onclick="updateManualMaterial(${m.id})">保存</button><button class="danger" onclick="deleteMaterial(${m.id})">删除</button></div></td></tr>`;
   }
-  return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">Preview</button><span class="status">locked</span></div></td></tr>`;
+  return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><span class="status">已锁定</span></div></td></tr>`;
 }
 
 async function previewMaterial(id) {
@@ -926,7 +926,7 @@ function resetMaterialPreview() {
 
 async function uploadMaterial() {
   const files = Array.from($("material-file").files || []);
-  if (!files.length) return toast("Choose one or more files");
+  if (!files.length) return toast("请选择要上传的文件");
   await withBusy("正在上传资料", `正在提取 ${files.length} 个文件并生成 AI 摘要…`, async () => {
     const payloads = await Promise.all(files.map(async (file) => ({
       filename: file.name,
@@ -957,7 +957,7 @@ async function saveManualMaterial() {
       content: $("manual-material-content").value,
     }),
   });
-  toast("Manual material saved");
+  toast("手工资料已保存");
   await loadWorkspace();
 }
 
@@ -969,7 +969,7 @@ async function updateManualMaterial(id) {
       content: $(`manual-content-${id}`).value,
     }),
   });
-  toast("Manual material updated");
+  toast("手工资料已更新");
   await loadWorkspace();
 }
 
@@ -985,24 +985,24 @@ async function addRepo() {
   const payload = { repo: $("repo-input").value, notes: $("repo-notes-input").value, git_mode: gitMode };
   if (gitMode === "gitlab") payload.gitlab_server = $("repo-server-input").value;
   await api(`/api/projects/${state.projectId}/repos`, { method: "POST", body: JSON.stringify(payload) });
-  toast("Repository saved");
+  toast("仓库已保存");
   await loadWorkspace();
 }
 
 async function saveRepoNotes(id) {
   const branches = selectedRepoBranches(id);
-  if (!branches.length) return toast("Choose at least one branch");
+  if (!branches.length) return toast("请至少选择一个分支");
   const repo = (state.workspace.repos || []).find((item) => item.id === id);
   const payload = { notes: $(`repo-notes-${id}`).value, branches, git_mode: repo && repo.git_mode === "gitlab" ? "gitlab" : "github" };
   if (payload.git_mode === "gitlab") payload.gitlab_server = $(`repo-server-${id}`).value;
   await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-  toast("Repository saved");
+  toast("仓库已保存");
   await loadWorkspace();
 }
 
 async function refreshRepo(id) {
   await api(`/api/projects/${state.projectId}/repos/${id}/refresh`, { method: "POST", body: "{}" });
-  toast("Repository refreshed");
+  toast("仓库已刷新");
   await loadWorkspace();
 }
 
@@ -1015,7 +1015,7 @@ async function toggleRepo(id, enabled) {
 async function deleteRepo(id) {
   if (!window.confirm("确定删除该仓库？仅移除周报关联与配置，不会影响 GitHub / GitLab 上的仓库。")) return;
   await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "DELETE" });
-  toast("Repository deleted");
+  toast("仓库已删除");
   await loadWorkspace();
 }
 
@@ -1052,21 +1052,21 @@ function renderReport(ws) {
   $("tab-report").innerHTML = `
     <div class="panel">
       <div class="panel-head">
-        <div class="panel-title"><h2>当前周报</h2><span>Latest successful Markdown</span></div>
+        <div class="panel-title"><h2>当前周报</h2><span>最近一次成功生成的 Markdown</span></div>
         <div class="panel-actions">${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
       </div>
       ${jobNotice}
-      ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>No report generated yet.</p>"}
+      ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>当前项目周还没有生成周报。</p>"}
     </div>
     <div class="panel">
-      <div class="panel-head"><h2>历史周报</h2><span>Read-only archive</span></div>
+      <div class="panel-head"><h2>历史周报</h2><span>只读归档</span></div>
       <div class="report-history">
-        ${history.map(renderHistoryReport).join("") || "<p>No historical reports yet.</p>"}
+        ${history.map(renderHistoryReport).join("") || "<p>还没有历史周报。</p>"}
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><h2>生成历史</h2><span>Run metadata only</span></div>
-      <table class="table"><thead><tr><th>Trigger</th><th>Provider</th><th>Status</th><th>Input</th><th>Failure</th></tr></thead><tbody>${ws.jobs.map(j => `<tr><td data-label="触发">${escapeHtml(j.trigger_type)}<br>${escapeHtml(formatChinaTime(j.started_at))}</td><td data-label="生成器">${escapeHtml(j.provider)}</td><td data-label="状态"><span class="status ${j.status}">${j.status}</span></td><td data-label="输入">${escapeHtml(j.input_summary || j.input_snapshot_hash)}</td><td data-label="失败原因">${escapeHtml(j.failure_reason || "")}</td></tr>`).join("") || "<tr><td colspan='5'>No generation runs.</td></tr>"}</tbody></table>
+      <div class="panel-head"><h2>生成历史</h2><span>仅记录运行信息</span></div>
+      <table class="table"><thead><tr><th>触发</th><th>生成器</th><th>状态</th><th>输入</th><th>失败原因</th></tr></thead><tbody>${ws.jobs.map(j => `<tr><td data-label="触发">${escapeHtml(statusLabel(j.trigger_type))}<br>${escapeHtml(formatChinaTime(j.started_at))}</td><td data-label="生成器">${escapeHtml(j.provider)}</td><td data-label="状态"><span class="status ${j.status}">${statusLabel(j.status)}</span></td><td data-label="输入">${escapeHtml(j.input_summary || j.input_snapshot_hash)}</td><td data-label="失败原因">${escapeHtml(j.failure_reason || "")}</td></tr>`).join("") || "<tr><td colspan='5'>暂无生成记录。</td></tr>"}</tbody></table>
     </div>
   `;
 }
@@ -1087,26 +1087,26 @@ function exportReportPdf(weekKey) {
 function renderRisks(ws) {
   $("tab-risks").innerHTML = `
     <div class="panel">
-      <div class="panel-head"><h2>进度和风险</h2><span>Project risks only</span></div>
-      <p>Progress status: <span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(ws.progress_status)}</span></p>
-      <table class="table"><thead><tr><th>Severity</th><th>Rule</th><th>Title</th><th>Status</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td data-label="严重度"><span class="status ${r.severity}">${r.severity}</span></td><td data-label="规则">${escapeHtml(r.rule)}</td><td data-label="标题">${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td data-label="状态">${escapeHtml(r.status)}</td></tr>`).join("") || "<tr><td colspan='4'>No risks.</td></tr>"}</tbody></table>
+      <div class="panel-head"><h2>进度和风险</h2><span>仅项目相关风险</span></div>
+      <p>进度状态：<span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(statusLabel(ws.progress_status))}</span></p>
+      <table class="table"><thead><tr><th>严重度</th><th>规则</th><th>标题</th><th>状态</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td data-label="严重度"><span class="status ${r.severity}">${statusLabel(r.severity)}</span></td><td data-label="规则">${escapeHtml(r.rule)}</td><td data-label="标题">${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td data-label="状态">${escapeHtml(statusLabel(r.status))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无风险。</td></tr>"}</tbody></table>
     </div>
     <div class="panel">
-      <div class="panel-head"><h2>系统诊断</h2><span>Sources and generation status</span></div>
-      <table class="table"><thead><tr><th>Type</th><th>Severity</th><th>Title</th><th>Updated</th></tr></thead><tbody>${(ws.source_diagnostics || []).map(d => `<tr><td>${escapeHtml(d.kind)}</td><td><span class="status ${d.severity}">${escapeHtml(d.severity)}</span></td><td>${escapeHtml(d.title)}<br>${escapeHtml(d.details || "")}</td><td>${escapeHtml(formatChinaTime(d.updated_at))}</td></tr>`).join("") || "<tr><td colspan='4'>No diagnostics.</td></tr>"}</tbody></table>
+      <div class="panel-head"><h2>系统诊断</h2><span>资料源与生成状态</span></div>
+      <table class="table"><thead><tr><th>类型</th><th>严重度</th><th>标题</th><th>更新时间</th></tr></thead><tbody>${(ws.source_diagnostics || []).map(d => `<tr><td>${escapeHtml(d.kind)}</td><td><span class="status ${d.severity}">${escapeHtml(statusLabel(d.severity))}</span></td><td>${escapeHtml(d.title)}<br>${escapeHtml(d.details || "")}</td><td>${escapeHtml(formatChinaTime(d.updated_at))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无诊断信息。</td></tr>"}</tbody></table>
     </div>
   `;
 }
 
 async function generateReport() {
   await withBusy("正在生成周报", "正在收集本周新增资料、GitHub commits，并等待本地 CLI 返回结果...", async () => {
-    toast("Generation started");
+    toast("已开始生成");
     const workspace = await api(`/api/projects/${state.projectId}/generate`, {
       method: "POST",
       body: JSON.stringify({ force: true }),
     });
     updateWorkspace(workspace);
-    toast("Generation finished");
+    toast("生成完成");
   });
 }
 
@@ -1214,7 +1214,7 @@ function timezoneSelect(name, label, value) {
   return `<label>${label}<select name="${name}"><option value="${CHINA_TIMEZONE}" ${(value || CHINA_TIMEZONE) === CHINA_TIMEZONE ? "selected" : ""}>中国标准时间 (Asia/Shanghai)</option></select></label>`;
 }
 function textarea(name, label, value, cls = "") { return `<label class="${cls}">${label}<textarea name="${name}">${escapeHtml(value || "")}</textarea></label>`; }
-function rowItem(item) { return `<tr><td data-label="标题">${escapeHtml(item.title || "")}</td><td data-label="负责人">${escapeHtml(item.owner_label || "")}</td><td data-label="状态">${escapeHtml(item.status || "")}</td></tr>`; }
+function rowItem(item) { return `<tr><td data-label="标题">${escapeHtml(item.title || "")}</td><td data-label="负责人">${escapeHtml(item.owner_label || "")}</td><td data-label="状态">${escapeHtml(statusLabel(item.status || ""))}</td></tr>`; }
 function itemPayload(row) {
   const payload = {};
   row.querySelectorAll("input, select, textarea").forEach((control) => {
@@ -1222,9 +1222,38 @@ function itemPayload(row) {
   });
   return payload;
 }
+const STATUS_LABELS = {
+  planned: "计划中",
+  in_progress: "进行中",
+  blocked: "受阻",
+  complete: "已完成",
+  high: "高",
+  medium: "中",
+  low: "低",
+  info: "提示",
+  active: "活跃",
+  resolved: "已解决",
+  "on track": "进展顺利",
+  "at risk": "有风险",
+  "off track": "已偏离",
+  done: "已完成",
+  unknown: "未知",
+  pending: "等待中",
+  running: "生成中",
+  succeeded: "已成功",
+  failed: "已失败",
+  schedule: "定时",
+  manual: "手动",
+};
+
+function statusLabel(value) {
+  const key = String(value ?? "").toLowerCase();
+  return STATUS_LABELS[key] || value;
+}
+
 function statusOptions(value) {
   return ["planned", "in_progress", "blocked", "complete"]
-    .map((status) => `<option value="${status}" ${sel(value, status)}>${status}</option>`)
+    .map((status) => `<option value="${status}" ${sel(value, status)}>${statusLabel(status)}</option>`)
     .join("");
 }
 function sel(value, expected) { return (value || "planned") === expected ? "selected" : ""; }
@@ -1439,7 +1468,7 @@ $("project-form").onsubmit = async (event) => {
   state.projectId = data.id;
   localStorage.setItem("currentProjectId", String(state.projectId));
   await loadState();
-  toast("Project created");
+  toast("项目已创建");
 };
 $("page-corner").onclick = () => switchAppMode(state.mode === "todos" ? "reports" : "todos");
 document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () => {
