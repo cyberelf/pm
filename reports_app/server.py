@@ -42,6 +42,7 @@ from .validation import (
     validate_gitlab_server,
     validate_repo,
     validate_schedule_item,
+    validate_project_status,
     validate_timezone,
 )
 
@@ -64,7 +65,7 @@ def scheduler_loop(stop, db_path):
     while not stop.wait(60):
         try:
             with connect(db_path) as conn:
-                for row in conn.execute("SELECT id FROM projects WHERE status != 'archived'"):
+                for row in conn.execute("SELECT id FROM projects WHERE status = 'active'"):
                     evaluate_schedules(conn, row["id"])
                 conn.commit()
         except Exception:
@@ -73,6 +74,8 @@ def scheduler_loop(stop, db_path):
 
 def evaluate_schedules(conn, project_id):
     project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if project["status"] != "active":
+        return
     week_key = current_week_key(project["timezone"])
     due = False
     for schedule in conn.execute("SELECT * FROM update_schedules WHERE project_id = ?", (project_id,)):
@@ -173,6 +176,7 @@ class Handler(BaseHTTPRequestHandler):
                 require_project_name(payload)
                 validate_timezone(payload.get("timezone") or "Asia/Shanghai")
                 validate_provider(payload.get("report_provider") or "codex")
+                validate_project_status(payload.get("status") or "active")
                 project_id = create_project(conn, payload)
                 conn.commit()
                 self.json({"id": project_id}, HTTPStatus.CREATED)
@@ -217,6 +221,16 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
                     self.report_pdf(conn, project_id, parts[4])
+                    return
+                if len(parts) == 4 and parts[3] == "status" and method == "POST":
+                    payload = self.body_json()
+                    status = "active" if payload.get("enabled", True) else "paused"
+                    conn.execute(
+                        "UPDATE projects SET status = ?, updated_at = ? WHERE id = ?",
+                        (status, iso_now(), project_id),
+                    )
+                    conn.commit()
+                    self.json({"id": project_id, "status": status})
                     return
                 if len(parts) == 4 and parts[3] == "settings" and method == "PUT":
                     update_settings(conn, project_id, self.body_json())
@@ -578,6 +592,7 @@ def material_detail(conn, project_id, material_id):
 def update_settings(conn, project_id, payload):
     validate_timezone(payload.get("timezone") or "Asia/Shanghai")
     validate_provider(payload.get("report_provider") or "codex")
+    validate_project_status(payload.get("status") or "active")
     for item in payload.get("schedules") or []:
         validate_schedule_item(item)
     now = iso_now()

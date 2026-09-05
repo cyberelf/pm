@@ -8,6 +8,7 @@ from .config import (
     GIT_MODE_GITLAB,
     SUPPORTED_GIT_MODES,
     SUPPORTED_MATERIAL_EXTENSIONS,
+    SUPPORTED_PROJECT_STATUSES,
     SUPPORTED_PROVIDERS,
     TRACK_ALL_BRANCHES,
 )
@@ -32,6 +33,12 @@ def require_project_name(data):
 def validate_provider(provider):
     if provider not in SUPPORTED_PROVIDERS:
         raise ValidationError("unsupported report provider")
+
+
+def validate_project_status(status):
+    if status not in SUPPORTED_PROJECT_STATUSES:
+        raise ValidationError("invalid project status; use active, paused, or archived")
+    return status
 
 
 def validate_timezone(tz_name):

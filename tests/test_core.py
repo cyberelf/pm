@@ -1251,6 +1251,57 @@ class CoreTest(unittest.TestCase):
             evaluate_schedules(self.conn, self.project_id)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM generation_jobs WHERE trigger_type = 'scheduled'").fetchone()["n"], 1)
 
+    def test_paused_project_skips_scheduled_generation_and_status_toggle(self):
+        update_settings(
+            self.conn,
+            self.project_id,
+            {
+                "name": "Demo",
+                "start_date": "2026-06-27",
+                "timezone": "Asia/Shanghai",
+                "status": "paused",
+                "report_provider": "codex",
+                "schedules": [{"weekday": 5, "local_time": "18:00", "timezone": "Asia/Shanghai"}],
+            },
+        )
+        with mock.patch("reports_app.server.schedule_due", return_value=True):
+            evaluate_schedules(self.conn, self.project_id)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM generation_jobs").fetchone()["n"], 0)
+
+        with self.assertRaises(ValidationError):
+            update_settings(
+                self.conn,
+                self.project_id,
+                {"name": "Demo", "start_date": "2026-06-27", "status": "sleeping"},
+            )
+
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                f"/api/projects/{self.project_id}/status",
+                body=json.dumps({"enabled": True}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["status"], "active")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        with mock.patch("reports_app.server.schedule_due", return_value=True):
+            evaluate_schedules(self.conn, self.project_id)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM generation_jobs").fetchone()["n"], 1)
+
     def test_markdown_sanitizes_raw_html(self):
         html = render_markdown("# Hello\n<script>alert(1)</script>\n- **ok**")
         self.assertIn("&lt;script&gt;", html)
