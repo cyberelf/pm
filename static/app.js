@@ -238,7 +238,8 @@ function renderTodoBoard() {
   if (dots) {
     dots.innerHTML = columns.map((column, index) =>
       `<button type="button" data-column="${index}" aria-label="${column.title}"></button>`).join("");
-    board.scrollLeft = savedScrollLeft;
+    const pageWidth = board.clientWidth || 1;
+    board.scrollLeft = Math.round(savedScrollLeft / pageWidth) * pageWidth;
     syncTodoBoardDots(board);
   }
 }
@@ -252,6 +253,7 @@ function ensureTodoBoardDots(board) {
     const button = event.target.closest("button[data-column]");
     if (!button) return;
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    board._pageSnapPending = undefined;
     board.scrollTo({ left: Number(button.dataset.column) * board.clientWidth, behavior: reduceMotion ? "auto" : "smooth" });
   });
   board.after(dots);
@@ -1499,6 +1501,7 @@ function switchTab(tab) {
   if (workspace.classList.contains("pager-mode")) {
     workspace.querySelectorAll(".tab-panel").forEach(panel => panel.classList.remove("hidden"));
     if (el && workspace.clientWidth) {
+      workspace._pageSnapPending = undefined;
       const panels = [...workspace.querySelectorAll(".tab-panel")];
       const reduce = typeof window !== "undefined" && window.matchMedia
         && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1534,6 +1537,7 @@ function ensureWorkspaceDots() {
     const button = event.target.closest("button[data-page]");
     if (!button) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    workspaceElement._pageSnapPending = undefined;
     workspaceElement.scrollTo({ left: Number(button.dataset.page) * workspaceElement.clientWidth, behavior: reduce ? "auto" : "smooth" });
   });
   workspaceElement.after(dots);
@@ -1717,6 +1721,11 @@ function attachSwipeNav(el, options = {}) {
   let gesture = "idle";
   const enabled = options.enabled || (() => true);
   el.addEventListener("touchstart", (event) => {
+    if (typeof el._pageSnapPending === "number") {
+      // finish a smooth snap that a previous gesture or re-render interrupted
+      el.scrollLeft = el._pageSnapPending;
+      el._pageSnapPending = undefined;
+    }
     if (event.touches.length !== 1 || !enabled()) {
       gesture = "idle";
       return;
@@ -1741,22 +1750,30 @@ function attachSwipeNav(el, options = {}) {
     el.scrollLeft = startLeft - (lastX - startX);
   }, { passive: false });
   const settle = () => {
-    if (gesture !== "swipe") {
-      gesture = "idle";
-      return;
-    }
+    const width = el.clientWidth || 1;
     const dx = lastX - startX;
     const elapsed = Date.now() - startedAt;
-    const width = el.clientWidth || 1;
-    const pageIndex = Math.round(startLeft / width);
     const maxIndex = Math.max(0, Math.round(el.scrollWidth / width) - 1);
-    let index = pageIndex;
-    if (Math.abs(dx) >= Math.max(56, width * 0.25) || (Math.abs(dx) >= 28 && elapsed < 220)) {
-      index += dx < 0 ? 1 : -1;
+    let index = Math.round(el.scrollLeft / width);
+    if (gesture === "swipe") {
+      const pageIndex = Math.round(startLeft / width);
+      index = pageIndex;
+      if (Math.abs(dx) >= Math.max(56, width * 0.25) || (Math.abs(dx) >= 28 && elapsed < 220)) {
+        index += dx < 0 ? 1 : -1;
+      }
     }
     index = Math.min(maxIndex, Math.max(0, index));
+    const target = index * width;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollTo({ left: index * width, behavior: reduce ? "auto" : "smooth" });
+    el._pageSnapPending = target;
+    el.scrollTo({ left: target, behavior: reduce ? "auto" : "smooth" });
+    setTimeout(() => {
+      // a re-render or native momentum can interrupt the smooth snap; force the page-aligned position
+      if (el._pageSnapPending === target && Math.abs(el.scrollLeft - target) > 2) {
+        el.scrollLeft = target;
+      }
+      if (el._pageSnapPending === target) el._pageSnapPending = undefined;
+    }, reduce ? 80 : 440);
     if (options.onPage) options.onPage(index);
     gesture = "idle";
   };
@@ -1807,6 +1824,7 @@ workspaceElement.addEventListener("scroll", () => {
       syncWorkspacePager(index);
     }
     const name = panel.id.replace(/^tab-/, "");
+    if (state.tab !== name) state.tab = name;
     let changed = false;
     document.querySelectorAll(".tabs button").forEach(btn => {
       const active = btn.dataset.tab === name;
