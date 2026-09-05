@@ -4,6 +4,21 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.cyberelf.weeklyreports"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+# .env supplies defaults for missing variables; real environment always wins.
+if [ -f "$ROOT_DIR/.env" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in ''|\#*) continue ;; esac
+    case "$line" in *=*) ;; *) continue ;; esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    if [ -n "$key" ] && [ -z "${!key:-}" ]; then
+      export "$key=$value"
+    fi
+  done < "$ROOT_DIR/.env"
+fi
+
 PORT="${PORT:-8765}"
 FAKE_PROVIDER="${REPORTS_FAKE_PROVIDER:-0}"
 HOST="${REPORTS_HOST:-}"

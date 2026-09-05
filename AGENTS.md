@@ -50,6 +50,7 @@ curl --noproxy '*' http://127.0.0.1:8765/api/state
 - Remove the LaunchAgent with `scripts/uninstall_service.sh` when it should no longer run. Reinstall it with `scripts/install_service.sh` rather than editing the generated plist directly.
 - `scripts/start_server.sh` and `scripts/stop_server.sh` are for temporary manual operation. Do not run the manual server and LaunchAgent on the same port; stop or uninstall one mode before starting the other.
 - The default service port is `8765`. Set `PORT` explicitly when installing or manually starting on another port, and use the same port in health checks.
+- `PORT`, `REPORTS_HOST`, and `REPORTS_FAKE_PROVIDER` may live in a `.env` file at the repo root (git-ignored). `run.py` and `install_service.sh` load it for missing variables only; real environment variables always take precedence.
 - Frontend-only changes do not require a service restart, but verify them with a fresh browser load and account for static asset caching before diagnosing stale UI behavior.
 
 ## UI Guidelines

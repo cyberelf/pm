@@ -25,6 +25,15 @@ scripts/stop_server.sh
 
 Set `PORT=9000` to choose another port.
 
+Or keep machine-local settings in a `.env` file at the repo root (git-ignored):
+
+```bash
+PORT=8765
+REPORTS_HOST=10.200.200.3
+```
+
+Both `python3 run.py` and `scripts/install_service.sh` read `.env` for `PORT`, `REPORTS_HOST`, and `REPORTS_FAKE_PROVIDER` defaults. Real environment variables always take precedence over the file.
+
 On macOS, use a LaunchAgent for the most stable local service:
 
 ```bash
