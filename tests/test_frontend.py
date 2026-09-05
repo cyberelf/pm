@@ -146,6 +146,12 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('scroll-snap-type: x mandatory;', styles)
         self.assertIn('.todo-column { flex: 0 0 calc(100% - 16px); margin-inline: 8px; scroll-snap-align: center; }', styles)
         self.assertIn('.todo-mode .app-shell { grid-template-columns: minmax(0, 1fr); }', styles)
+        self.assertIn('function ensureWorkspaceDots()', source)
+        self.assertIn('dots.id = "workspace-dots";', source)
+        self.assertIn("function syncWorkspacePager(", source)
+        self.assertIn("workspace.tabPagerIndex = panels.indexOf(el);", source)
+        self.assertIn(".pager-dots { display: none; }", styles)
+        self.assertIn("transition: height 240ms ease;", styles)
 
     def test_todo_inline_editor_creates_and_updates_on_auto_save(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

@@ -1111,6 +1111,8 @@ function switchTab(tab) {
         && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       workspace.scrollTo({ left: panels.indexOf(el) * workspace.clientWidth, behavior: reduce ? "auto" : "smooth" });
       centerTabStrip(reduce ? "auto" : "smooth");
+      workspace.tabPagerIndex = panels.indexOf(el);
+      syncWorkspacePager(panels.indexOf(el));
     }
     return;
   }
@@ -1128,6 +1130,40 @@ function centerTabStrip(behavior) {
     left: strip.scrollLeft + buttonRect.left - stripRect.left - (strip.clientWidth - buttonRect.width) / 2,
     behavior: behavior || "auto",
   });
+}
+
+function ensureWorkspaceDots() {
+  if ($("workspace-dots")) return;
+  const dots = document.createElement("div");
+  dots.id = "workspace-dots";
+  dots.className = "pager-dots hidden";
+  dots.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-page]");
+    if (!button) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    workspaceElement.scrollTo({ left: Number(button.dataset.page) * workspaceElement.clientWidth, behavior: reduce ? "auto" : "smooth" });
+  });
+  workspaceElement.after(dots);
+}
+
+function syncWorkspacePager(index) {
+  const pager = workspaceElement.classList.contains("pager-mode");
+  const dots = $("workspace-dots");
+  const panels = [...workspaceElement.querySelectorAll(".tab-panel")];
+  if (dots) {
+    if (pager && dots.childElementCount !== panels.length) {
+      dots.innerHTML = panels.map((panel, i) =>
+        `<button type="button" data-page="${i}" aria-label="${panel.id.replace(/^tab-/, "")}"></button>`).join("");
+    }
+    dots.querySelectorAll("button").forEach((dot, i) => dot.classList.toggle("active", pager && i === index));
+    dots.classList.toggle("hidden", !pager || workspaceElement.classList.contains("hidden"));
+  }
+  if (!pager) {
+    workspaceElement.style.height = "";
+    return;
+  }
+  const panel = panels[index];
+  if (panel) workspaceElement.style.height = `${panel.offsetHeight}px`;
 }
 
 function input(name, label, value, type = "text") { return `<label>${label}<input name="${name}" type="${type}" value="${escapeAttr(value || "")}"></label>`; }
@@ -1249,10 +1285,31 @@ const workspacePagerQuery = window.matchMedia("(max-width: 767px)");
 const workspaceElement = $("workspace");
 function applyWorkspacePagerMode() {
   workspaceElement.classList.toggle("pager-mode", workspacePagerQuery.matches);
+  ensureWorkspaceDots();
   switchTab(state.tab);
 }
 workspacePagerQuery.addEventListener("change", applyWorkspacePagerMode);
 applyWorkspacePagerMode();
+window.addEventListener("resize", () => {
+  if (!workspacePagerQuery.matches) return;
+  requestAnimationFrame(() => {
+    if (!workspaceElement.classList.contains("pager-mode") || !workspaceElement.clientWidth) return;
+    const panels = [...workspaceElement.querySelectorAll(".tab-panel")];
+    const index = Math.min(panels.length - 1, Math.max(0, Math.round(workspaceElement.scrollLeft / workspaceElement.clientWidth)));
+    workspaceElement.tabPagerIndex = index;
+    syncWorkspacePager(index);
+  });
+});
+if (typeof ResizeObserver === "function") {
+  const pagerHeightObserver = new ResizeObserver(() => {
+    if (!workspaceElement.classList.contains("pager-mode")) return;
+    const panels = [...workspaceElement.querySelectorAll(".tab-panel")];
+    const index = Math.min(panels.length - 1, Math.max(0, Math.round(workspaceElement.scrollLeft / (workspaceElement.clientWidth || 1))));
+    const panel = panels[index];
+    if (panel) workspaceElement.style.height = `${panel.offsetHeight}px`;
+  });
+  workspaceElement.querySelectorAll(".tab-panel").forEach((panel) => pagerHeightObserver.observe(panel));
+}
 workspaceElement.addEventListener("scroll", () => {
   if (workspaceElement.tabPagerRaf) return;
   workspaceElement.tabPagerRaf = requestAnimationFrame(() => {
@@ -1262,6 +1319,10 @@ workspaceElement.addEventListener("scroll", () => {
     const index = Math.round(workspaceElement.scrollLeft / workspaceElement.clientWidth);
     const panel = panels[index];
     if (!panel) return;
+    if (workspaceElement.tabPagerIndex !== index) {
+      workspaceElement.tabPagerIndex = index;
+      syncWorkspacePager(index);
+    }
     const name = panel.id.replace(/^tab-/, "");
     let changed = false;
     document.querySelectorAll(".tabs button").forEach(btn => {
