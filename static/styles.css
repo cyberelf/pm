@@ -526,6 +526,8 @@ strong { color: var(--ink); }
 .todo-empty { border: 1px dashed var(--board-line-soft); border-radius: var(--radius-lg); padding: 24px 12px; color: var(--board-muted-on-dark); font-size: 13px; text-align: center; }
 .todo-board-dots { display: none; }
 .pager-dots { display: none; }
+.project-bar { display: none; }
+.mobile-tabbar { display: none; }
 .todo-draft { min-height: 92px; display: grid; align-content: center; gap: 5px; border: 1px dashed var(--board-line-strong); border-radius: var(--radius-lg); background: var(--board-draft-fill); color: var(--board-on-accent); text-align: left; }
 .todo-draft strong { color: var(--board-head-ink); }
 .todo-draft span { font-size: 11px; font-weight: 500; }
@@ -952,7 +954,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--hairline);
-    padding: 10px 156px 12px 16px;
+    padding: 10px 16px 12px;
     overflow: visible;
   }
   .brand { padding: 0; }
@@ -983,8 +985,66 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   }
   .table td[colspan] { padding: 12px 0; color: var(--muted); }
   .table-textarea, .table-input { width: 100%; }
-  .page-corner { transform: scale(0.78); transform-origin: 100% 0; }
-  .topbar { padding: 82px 16px 20px; align-items: flex-start; flex-direction: column; gap: 18px; }
+  .page-corner { display: none; }
+  .topbar { padding: 16px 16px 18px; align-items: flex-start; flex-direction: column; gap: 18px; }
+  #report-view .topbar { display: none; }
+  .project-bar {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: calc(100% - 32px);
+    margin: 12px 16px 0;
+    min-height: 48px;
+    padding: 8px 14px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-lg);
+    background: var(--canvas);
+    box-shadow: var(--shadow-soft);
+    color: var(--ink);
+    text-align: left;
+  }
+  .project-bar-icon {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    flex: 0 0 auto;
+  }
+  .project-bar-icon svg { width: 17px; height: 17px; }
+  .project-bar strong { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+  .project-bar-chevron { width: 12px; height: 12px; color: var(--muted); flex: 0 0 auto; }
+  .mobile-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 55;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-top: 1px solid var(--hairline);
+    background: color-mix(in srgb, var(--canvas) 88%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    padding: 6px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+  .mobile-tabbar button {
+    display: grid;
+    justify-items: center;
+    gap: 3px;
+    min-height: 48px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .mobile-tabbar button svg { width: 23px; height: 23px; }
+  .mobile-tabbar button.active { color: var(--accent); }
   .actions { width: 100%; justify-content: flex-start; }
   .actions button { flex: 1 1 140px; }
   .tabs { position: static; width: calc(100% - 32px); margin-inline: 16px; overflow-x: auto; scrollbar-width: none; }
@@ -1022,7 +1082,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     display: flex;
     justify-content: center;
     gap: 8px;
-    padding: 2px 0 44px;
+    padding: 2px 0 calc(66px + env(safe-area-inset-bottom));
   }
   .todo-board-dots button { width: 8px; height: 8px; min-height: 8px; padding: 0; border: 0; border-radius: 9999px; background: var(--board-line-strong); opacity: 0.5; transition: width 160ms ease, opacity 160ms ease, background 160ms ease; }
   .todo-board-dots button.active { width: 22px; background: var(--board-accent-blue); opacity: 1; }
@@ -1030,7 +1090,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     display: flex;
     justify-content: center;
     gap: 8px;
-    padding: 0 0 44px;
+    padding: 0 0 calc(66px + env(safe-area-inset-bottom));
   }
   .pager-dots button { width: 8px; height: 8px; min-height: 8px; padding: 0; border: 0; border-radius: 9999px; background: var(--surface-strong); transition: width 160ms ease, background 160ms ease; }
   .pager-dots button.active { width: 22px; background: var(--accent); }
@@ -1049,6 +1109,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .preview-body { min-height: 220px; height: 62vh; }
   .preview-content, .preview-markdown { padding: 16px; }
   .project-heading h1 { font-size: 24px; }
+  .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
 }
 
 @media (max-width: 420px) {

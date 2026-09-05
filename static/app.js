@@ -150,6 +150,7 @@ async function switchAppMode(mode, persist = true) {
   if (persist) localStorage.setItem("workspaceMode", state.mode);
   const showingTodos = state.mode === "todos";
   document.body.classList.toggle("todo-mode", showingTodos);
+  document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.classList.toggle("active", btn.dataset.modeTab === state.mode));
   updateThemeColorSurface();
   $("page-current-label").textContent = showingTodos ? "TODO" : "周报";
   $("page-target-label").textContent = showingTodos ? "周报" : "TODO";
@@ -454,6 +455,11 @@ function render() {
   $("workspace").classList.toggle("hidden", !ws);
   if (!ws) return;
   $("project-title").textContent = ws.project.name;
+  $("project-bar-name").textContent = ws.project.name;
+  $("open-project-bar").classList.remove("hidden");
+  const projectBarDot = $("project-bar-dot");
+  projectBarDot.className = `status-dot ${statusTone(ws.progress_status)}`;
+  projectBarDot.title = ws.progress_status;
   $("project-meta").textContent = ws.week_key;
   const projectStatusDot = $("project-status-dot");
   projectStatusDot.className = `status-dot ${statusTone(ws.progress_status)}`;
@@ -1295,7 +1301,7 @@ function openNewProjectDialog() {
   $("project-dialog").showModal();
 }
 $("new-project").onclick = openNewProjectDialog;
-$("open-project-sheet").onclick = () => $("project-sheet").showModal();
+$("open-project-bar").onclick = () => $("project-sheet").showModal();
 $("close-project-sheet").onclick = () => $("project-sheet").close();
 const workspacePagerQuery = window.matchMedia("(max-width: 767px)");
 const workspaceElement = $("workspace");
@@ -1362,6 +1368,7 @@ $("project-form").onsubmit = async (event) => {
   toast("Project created");
 };
 $("page-corner").onclick = () => switchAppMode(state.mode === "todos" ? "reports" : "todos");
+document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () => switchAppMode(btn.dataset.modeTab));
 $("page-corner").onkeydown = (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();

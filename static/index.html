@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=34" />
+    <link rel="stylesheet" href="/styles.css?v=35" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -35,13 +35,18 @@
 
       <div class="page-shell">
         <main id="report-view" class="main">
+          <button id="open-project-bar" class="project-bar hidden" type="button" aria-label="切换项目">
+            <span class="project-bar-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4.2a2 2 0 0 1 1.7 1l.7 1H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"></path></svg>
+            </span>
+            <strong id="project-bar-name">项目</strong>
+            <span id="project-bar-dot" class="status-dot is-neutral" role="img" aria-label="项目状态"></span>
+            <svg class="project-bar-chevron" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          </button>
           <header class="topbar">
             <div>
               <div class="project-heading">
                 <h1 id="project-title">周报工作台</h1>
-                <button id="open-project-sheet" class="project-switch" type="button" aria-label="切换项目" title="切换项目">
-                  <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
-                </button>
                 <span id="project-status-dot" class="status-dot is-neutral" role="img" aria-label="项目状态" title="项目状态"></span>
                 <p id="project-meta">本地个人项目管理</p>
               </div>
@@ -190,6 +195,17 @@
       </div>
     </dialog>
 
+    <nav id="mobile-tabbar" class="mobile-tabbar" aria-label="切换工作区">
+      <button type="button" data-mode-tab="todos">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5A1.5 1.5 0 0 1 6 4h12a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 18 20H6a1.5 1.5 0 0 1-1.5-1.5zM9 12.2l2.3 2.3 4-4.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <span>TODO</span>
+      </button>
+      <button type="button" data-mode-tab="reports">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h6.5L18 8v11.5a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1zM13.5 3.5V8H18M10 12.5h5M10 16h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <span>周报</span>
+      </button>
+    </nav>
+
     <div id="toast" class="toast hidden"></div>
     <div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="true">
       <div class="loading-box">
@@ -198,6 +214,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=27"></script>
+    <script src="/app.js?v=28"></script>
   </body>
 </html>
