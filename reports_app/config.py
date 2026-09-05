@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 
@@ -6,6 +7,35 @@ DATA_DIR = ROOT_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "reports.sqlite3"
 STATIC_DIR = ROOT_DIR / "static"
+ENV_FILE = ROOT_DIR / ".env"
+
+
+def load_env_file(path=None):
+    """Load KEY=VALUE pairs from a .env file into os.environ.
+
+    Variables already present in the environment always win, so a real
+    environment (LaunchAgent plist, shell export) overrides the file.
+    Returns the mapping of variables applied from the file.
+    """
+    applied = {}
+    try:
+        lines = Path(path or ENV_FILE).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return applied
+    for line in lines:
+        entry = line.strip()
+        if not entry or entry.startswith("#") or "=" not in entry:
+            continue
+        key, _, value = entry.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = value
+        applied[key] = value
+    return applied
 
 WORKSPACE_USER = "local-user"
 SUPPORTED_PROVIDERS = {"codex", "claude"}

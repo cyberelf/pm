@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
+from reports_app.config import load_env_file
 from reports_app.db import create_project, init_db, connect
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
@@ -136,6 +137,27 @@ class CoreTest(unittest.TestCase):
         self.assertNotIn("<script>", todo["description_html"])
         with self.assertRaises(ValidationError):
             update_todo(self.conn, todo_id, {"status": "closed"})
+
+    def test_load_env_file_fills_missing_values_only(self):
+        env_file = Path(self.tmp.name) / "custom.env"
+        env_file.write_text(
+            "# service binding\n"
+            "\n"
+            "REPORTS_TEST_A=alpha\n"
+            'REPORTS_TEST_B="beta"\n'
+            "REPORTS_TEST_C='gam ma'\n"
+            "REPORTS_TEST_A=second\n"
+            "MALFORMED_LINE\n"
+            "REPORTS_TEST_D=\n",
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"REPORTS_TEST_A": "existing"}):
+            applied = load_env_file(env_file)
+            self.assertEqual(applied, {"REPORTS_TEST_B": "beta", "REPORTS_TEST_C": "gam ma", "REPORTS_TEST_D": ""})
+            self.assertEqual(os.environ["REPORTS_TEST_B"], "beta")
+            self.assertEqual(os.environ["REPORTS_TEST_C"], "gam ma")
+            self.assertEqual(os.environ["REPORTS_TEST_A"], "existing")
+        self.assertEqual(load_env_file(Path(self.tmp.name) / "missing.env"), {})
 
     def test_voice_todo_prompt_and_json_parser(self):
         transcript = "明天上午十点开评审会，然后给王老师发周报初稿"
