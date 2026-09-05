@@ -457,6 +457,9 @@ function setupVoiceTodoFab() {
   fab.addEventListener("pointerup", endVoiceHold);
   fab.addEventListener("pointercancel", cancelVoiceHold);
   fab.addEventListener("contextmenu", (event) => event.preventDefault());
+  fab.addEventListener("click", () => {
+    if (activeVoiceJobId() !== null) cancelActiveVoiceJob();
+  });
 }
 
 function voicePermissionErrorMessage(error) {
@@ -469,6 +472,7 @@ function voicePermissionErrorMessage(error) {
 
 async function startVoiceHold(event) {
   if (voiceCapture.holding) return;
+  if (activeVoiceJobId() !== null) return;
   event.preventDefault();
   const fab = $("voice-todo-fab");
   try { fab.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
@@ -632,6 +636,56 @@ async function recordingBlobToWav(blob) {
 
 const voiceJobs = new Map();
 
+const VOICE_FAB_MIC_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a2.8 2.8 0 0 1 2.8 2.8v5.7a2.8 2.8 0 0 1-5.6 0V6.3A2.8 2.8 0 0 1 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path><path d="M5.8 11.5a6.2 6.2 0 0 0 12.4 0M12 17.7v2.8M8.8 20.5h6.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>';
+const VOICE_FAB_STOP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"></rect></svg>';
+
+function activeVoiceJobId() {
+  for (const [id, job] of voiceJobs) {
+    if (job.status === "transcribing" || job.status === "structuring") return id;
+  }
+  return null;
+}
+
+function updateVoiceFabMode() {
+  const fab = $("voice-todo-fab");
+  if (!fab || !voiceRecordingSupported()) return;
+  const stopping = activeVoiceJobId() !== null;
+  fab.classList.toggle("is-stopping", stopping);
+  fab.setAttribute("aria-label", stopping ? "停止当前语音任务" : "按住说话，创建语音 TODO");
+  fab.title = stopping ? "点击停止当前语音任务" : "按住说话，创建语音 TODO";
+  fab.innerHTML = stopping ? VOICE_FAB_STOP_SVG : VOICE_FAB_MIC_SVG;
+}
+
+async function cancelActiveVoiceJob() {
+  const id = activeVoiceJobId();
+  if (id === null) return;
+  try {
+    await api(`/api/voice-jobs/${id}/cancel`, { method: "POST", body: "{}" });
+    voiceJobs.delete(id);
+    toast("已取消语音任务");
+  } catch {
+    // the job finished before the cancel landed; sync its final state instead
+    pollVoiceJobs();
+    return;
+  }
+  renderVoiceJobProgress();
+  updateVoiceFabMode();
+}
+
+async function restoreVoiceJobs() {
+  try {
+    const data = await api("/api/voice-jobs/active");
+    if (data.job) {
+      voiceJobs.set(data.job.id, { status: data.job.status, transcript: data.job.transcript || "" });
+      renderVoiceJobProgress();
+      startVoiceJobPolling();
+    }
+  } catch {
+    // transient error on load; polling can be restarted by the next submission
+  }
+  updateVoiceFabMode();
+}
+
 function truncateVoiceTranscript(text) {
   const cleaned = String(text || "").trim().replace(/\s+/g, " ");
   return cleaned.length > 64 ? `${cleaned.slice(0, 64)}…` : cleaned;
@@ -655,6 +709,7 @@ async function submitVoiceTodo(blob) {
     voiceJobs.set(data.id, { status: data.status || "transcribing", transcript: "" });
     renderVoiceJobProgress();
     startVoiceJobPolling();
+    updateVoiceFabMode();
     toast("语音已提交，后台转写整理中");
   } catch (error) {
     toast(error.message);
@@ -693,6 +748,7 @@ async function pollVoiceJobs() {
     voiceJobs.timer = 0;
   }
   renderVoiceJobProgress();
+  updateVoiceFabMode();
 }
 
 function renderVoiceJobProgress() {
@@ -1858,6 +1914,7 @@ document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () =
 $("open-global-settings").onclick = () => toggleSettingsView(true);
 $("save-voice-settings").onclick = () => saveVoiceSettings().catch((error) => toast(error.message));
 setupVoiceTodoFab();
+restoreVoiceJobs();
 $("page-corner").onkeydown = (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();

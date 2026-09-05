@@ -49,6 +49,7 @@ from reports_app.voice_todos import (
     build_voice_todo_prompt,
     create_todos_from_voice,
     create_todos_from_voice_audio,
+    fail_stale_voice_jobs,
     fallback_voice_items,
     parse_voice_todo_output,
 )
@@ -345,10 +346,122 @@ class CoreTest(unittest.TestCase):
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
-            if payload["status"] in {"completed", "failed"}:
+            if payload["status"] in {"completed", "failed", "cancelled"}:
                 return response.status, payload
             time.sleep(0.1)
         raise AssertionError("voice job did not finish in time")
+
+    def test_voice_job_single_task_lock_cancel_and_restore(self):
+        release = threading.Event()
+
+        class BlockingAsrHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                release.wait(timeout=5)
+                payload = json.dumps({"text": "迟到的转写内容"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, fmt, *args):
+                return
+
+        asr_server = ThreadingHTTPServer(("127.0.0.1", 0), BlockingAsrHandler)
+        asr_thread = threading.Thread(target=asr_server.serve_forever, daemon=True)
+        asr_thread.start()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("PUT", "/api/settings", body=json.dumps({"asr_endpoint": f"http://127.0.0.1:{asr_server.server_port}/inference"}), headers={"Content-Type": "application/json"})
+            client.getresponse().read()
+            client.close()
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                "/api/todos/voice",
+                body=json.dumps({"audio_base64": base64.b64encode(b"RIFFfake").decode(), "content_type": "audio/wav"}),
+                headers={"Content-Type": "application/json"},
+            )
+            first = json.loads(client.getresponse().read())
+            client.close()
+            self.assertEqual(first["status"], "transcribing")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "第二个任务"}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            conflict = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 409)
+            self.assertEqual(conflict["active_job_id"], first["id"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/voice-jobs/active")
+            active = json.loads(client.getresponse().read())
+            client.close()
+            self.assertEqual(active["job"]["id"], first["id"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", f"/api/voice-jobs/{first['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            cancelled = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(cancelled["status"], "cancelled")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/voice-jobs/active")
+            active = json.loads(client.getresponse().read())
+            client.close()
+            self.assertIsNone(active["job"])
+
+            release.set()
+            status, job = self._poll_voice_job(server.server_port, first["id"])
+            self.assertEqual(job["status"], "cancelled")
+            time.sleep(0.3)
+            self.assertEqual([row["title"] for row in todo_rows(self.conn) if row["title"] == "迟到的转写内容"], [])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "取消后新建任务"}), headers={"Content-Type": "application/json"})
+            third = json.loads(client.getresponse().read())
+            client.close()
+            self.assertEqual(third["status"], "transcribing")
+            status, job = self._poll_voice_job(server.server_port, third["id"])
+            self.assertEqual(job["status"], "completed")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", f"/api/voice-jobs/{third['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            asr_server.shutdown()
+            asr_server.server_close()
+            asr_thread.join(timeout=2)
+
+    def test_stale_voice_jobs_fail_on_startup(self):
+        now = iso_now()
+        for status in ("transcribing", "structuring"):
+            self.conn.execute(
+                "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES (?, ?, ?)",
+                (status, now, now),
+            )
+        self.conn.commit()
+        fail_stale_voice_jobs(self.db_path)
+        rows = self.conn.execute("SELECT status, error FROM voice_jobs").fetchall()
+        self.assertEqual([row["status"] for row in rows], ["failed", "failed"])
+        for row in rows:
+            self.assertEqual(row["error"], "interrupted by service restart")
 
     def test_voice_todo_settings_and_api_endpoints(self):
         class MockAsrHandler(BaseHTTPRequestHandler):

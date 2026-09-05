@@ -45,7 +45,14 @@ from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
 from .todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from .asr import normalize_asr_endpoint
-from .voice_todos import create_voice_job, get_voice_job, run_voice_job
+from .voice_todos import (
+    cancel_voice_job,
+    create_voice_job,
+    fail_stale_voice_jobs,
+    get_active_voice_job,
+    get_voice_job,
+    run_voice_job,
+)
 from .validation import (
     ValidationError,
     gitlab_server_from_url,
@@ -63,6 +70,7 @@ from .validation import (
 
 def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
     init_db(db_path)
+    fail_stale_voice_jobs(db_path)
     stop = threading.Event()
     scheduler = threading.Thread(target=scheduler_loop, args=(stop, db_path), daemon=True)
     scheduler.start()
@@ -234,6 +242,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/todos/voice" and method == "POST":
                 payload = self.body_json()
+                active = conn.execute(
+                    "SELECT id FROM voice_jobs WHERE status IN ('transcribing', 'structuring') ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                if active:
+                    self.json(
+                        {"error": "another voice job is already running", "active_job_id": active["id"]},
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
                 job_id = create_voice_job(conn)
                 conn.commit()
                 threading.Thread(
@@ -249,6 +266,15 @@ class Handler(BaseHTTPRequestHandler):
                     daemon=True,
                 ).start()
                 self.json({"id": job_id, "status": "transcribing"}, HTTPStatus.ACCEPTED)
+                return
+            if path == "/api/voice-jobs/active" and method == "GET":
+                self.json({"job": get_active_voice_job(conn)})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "voice-jobs"] and parts[2].isdigit() and parts[3] == "cancel" and method == "POST":
+                job_id = cancel_voice_job(conn, int(parts[2]))
+                conn.commit()
+                print(f"voice job {job_id}: cancel requested", flush=True)
+                self.json({"id": job_id, "status": "cancelled"})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "voice-jobs"] and parts[2].isdigit() and method == "GET":
                 job = get_voice_job(conn, int(parts[2]))

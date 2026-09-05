@@ -57,8 +57,44 @@ def get_voice_job(conn, job_id):
     return item
 
 
+def get_active_voice_job(conn):
+    row = conn.execute(
+        "SELECT id FROM voice_jobs WHERE status IN ('transcribing', 'structuring') ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return get_voice_job(conn, row["id"]) if row else None
+
+
+def cancel_voice_job(conn, job_id):
+    cur = conn.execute(
+        "UPDATE voice_jobs SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('transcribing', 'structuring')",
+        (iso_now(), job_id),
+    )
+    if cur.rowcount != 1:
+        row = conn.execute("SELECT status FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
+        state = row["status"] if row else "not found"
+        raise ValidationError(f"voice job is {state}; only running jobs can be cancelled")
+    return job_id
+
+
+def fail_stale_voice_jobs(db_path):
+    """Jobs stuck mid-flight belong to worker threads from a previous
+    process; after a restart they can never finish, so the single-task
+    lock must not keep blocking new submissions."""
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE voice_jobs SET status = 'failed', error = 'interrupted by service restart', updated_at = ? WHERE status IN ('transcribing', 'structuring')",
+            (iso_now(),),
+        )
+        conn.commit()
+
+
 def _log_voice_job(job_id, message):
     print(f"voice job {job_id}: {message}", file=sys.stdout, flush=True)
+
+
+def _voice_job_status(conn, job_id):
+    row = conn.execute("SELECT status FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
+    return row["status"] if row else None
 
 
 def _update_voice_job(conn, job_id, **fields):
@@ -94,11 +130,20 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
         if not transcript:
             raise ValidationError("voice transcript is required")
         with connect(db_path) as conn:
+            if _voice_job_status(conn, job_id) == "cancelled":
+                _log_voice_job(job_id, "cancelled after transcription; discarding transcript")
+                _update_voice_job(conn, job_id, transcript=transcript)
+                conn.commit()
+                return
             _update_voice_job(conn, job_id, status="structuring", transcript=transcript)
             conn.commit()
         structure_started = time.monotonic()
         items, error = convert_transcript_to_todos(transcript[:MAX_VOICE_TEXT_LENGTH], voice_agent)
         with connect(db_path) as conn:
+            if _voice_job_status(conn, job_id) == "cancelled":
+                _log_voice_job(job_id, "cancelled during structuring; discarding results")
+                conn.commit()
+                return
             created = [create_todo(conn, item) for item in items]
             _update_voice_job(
                 conn,
@@ -118,8 +163,9 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
         _log_voice_job(job_id, f"failed after {time.monotonic() - started:.1f}s: {exc}")
         try:
             with connect(db_path) as conn:
-                _update_voice_job(conn, job_id, status="failed", error=str(exc)[:2000])
-                conn.commit()
+                if _voice_job_status(conn, job_id) != "cancelled":
+                    _update_voice_job(conn, job_id, status="failed", error=str(exc)[:2000])
+                    conn.commit()
         except Exception:
             pass
 

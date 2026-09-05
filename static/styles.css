@@ -880,6 +880,7 @@ strong { color: var(--ink); }
 .voice-todo-fab svg { width: 24px; height: 24px; pointer-events: none; }
 .voice-todo-fab:active { transform: scale(0.96); }
 .voice-todo-fab.is-recording { background: var(--error); border-color: var(--error); animation: voice-todo-pulse 1.2s ease-in-out infinite; }
+.voice-todo-fab.is-stopping { background: var(--error); border-color: var(--error); animation: voice-todo-pulse 1.6s ease-in-out infinite; }
 .voice-todo-fab.is-unsupported { background: var(--surface-strong); border-color: var(--hairline); color: var(--muted); cursor: not-allowed; }
 @keyframes voice-todo-pulse {
   0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--error) 45%, transparent); }
