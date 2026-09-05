@@ -51,6 +51,7 @@ curl --noproxy '*' http://127.0.0.1:8765/api/state
 - `scripts/start_server.sh` and `scripts/stop_server.sh` are for temporary manual operation. Do not run the manual server and LaunchAgent on the same port; stop or uninstall one mode before starting the other.
 - The default service port is `8765`. Set `PORT` explicitly when installing or manually starting on another port, and use the same port in health checks.
 - `PORT`, `REPORTS_HOST`, and `REPORTS_FAKE_PROVIDER` may live in a `.env` file at the repo root (git-ignored). `run.py` and `install_service.sh` load it for missing variables only; real environment variables always take precedence.
+- The service additionally serves HTTPS on port `REPORTS_TLS_PORT` (default `8443`, empty disables it) with a self-signed cert under `data/tls/`; phones use that listener because microphone access requires a secure context. Health checks stay on the plain HTTP port.
 - Frontend-only changes do not require a service restart, but verify them with a fresh browser load and account for static asset caching before diagnosing stale UI behavior.
 
 ## UI Guidelines

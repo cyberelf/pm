@@ -34,6 +34,8 @@ REPORTS_HOST=10.200.200.3
 
 Both `python3 run.py` and `scripts/install_service.sh` read `.env` for `PORT`, `REPORTS_HOST`, and `REPORTS_FAKE_PROVIDER` defaults. Real environment variables always take precedence over the file.
 
+The service also listens on HTTPS port `8443` (set `REPORTS_TLS_PORT` to change or set it empty to disable) with a self-signed certificate generated at `data/tls/`. Phones need this HTTPS listener to use microphone access for voice TODOs: open `https://<host>:8443` and accept the certificate warning once.
+
 On macOS, use a LaunchAgent for the most stable local service:
 
 ```bash
@@ -56,7 +58,7 @@ The first release is local-only: the backend must run on the same machine as the
 
 ## Voice TODO
 
-- A floating microphone button at the bottom right records while held. The browser only captures audio and converts it to a 16 kHz mono WAV locally (no speech leaves the machine at this stage); Safari and Chrome are supported.
+- A floating microphone button at the bottom right records while held. The browser only captures audio and converts it to a 16 kHz mono WAV locally (no speech leaves the machine at this stage); Safari and Chrome are supported. Microphone access requires a secure context: use `localhost` or the HTTPS listener (`https://<host>:8443`) from phones.
 - On release, the WAV goes to `POST /api/todos/voice`. The backend transcribes it through the ASR service configured in 全局设置 (global settings), then the configured agent (`codex` or `claude` CLI) structures the transcript into one or more TODO items.
 - The ASR service is any OpenAI-compatible transcription endpoint. The default is the bundled whisper.cpp server (`/inference` on port 8766, large-v3-turbo model); install it with `scripts/install_asr_service.sh` after `brew install whisper-cpp` and placing a GGML model under `data/models/`.
 - If the agent CLI fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
