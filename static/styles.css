@@ -413,8 +413,7 @@ strong { color: var(--ink); }
 .project-heading { min-width: 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .project-heading h1 { min-width: 0; font-size: 28px; line-height: 1.2; letter-spacing: -0.5px; overflow-wrap: anywhere; }
 .project-heading .status-dot { align-self: center; }
-.project-heading #project-meta { color: var(--muted); font-size: 14px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
-.todo-topbar .project-heading p { color: var(--muted); font-size: 14px; font-weight: 500; }
+.project-heading p { color: var(--muted); font-size: 14px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
 .actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .tabs {
   position: sticky;
@@ -990,9 +989,6 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .page-corner { display: none; }
   .topbar { padding: 16px 16px 18px; align-items: flex-start; flex-direction: column; gap: 18px; }
   #report-view .topbar { display: none; }
-  #todo-view .topbar { display: none; }
-  .project-bar.todo-bar { margin-top: 16px; cursor: default; }
-  .todo-bar-note { color: var(--muted); font-size: 12px; font-weight: 500; }
   .project-bar {
     display: flex;
     align-items: center;
