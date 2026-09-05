@@ -1,11 +1,15 @@
 import json
 import os
 import re
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 from .asr import transcribe_audio, validate_asr_audio
+from .db import connect
 from .todos import create_todo
+from .timeutil import iso_now
 from .validation import ValidationError
 
 MAX_VOICE_TEXT_LENGTH = 4000
@@ -33,6 +37,91 @@ def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_mod
     except Exception as exc:
         raise ValidationError(f"voice transcription failed: {exc}") from exc
     return create_todos_from_voice(conn, transcript, provider, timeout), transcript
+
+
+def create_voice_job(conn):
+    now = iso_now()
+    cur = conn.execute(
+        "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES ('transcribing', ?, ?)",
+        (now, now),
+    )
+    return cur.lastrowid
+
+
+def get_voice_job(conn, job_id):
+    row = conn.execute("SELECT * FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
+    if not row:
+        raise ValidationError("voice job not found")
+    item = dict(row)
+    item["todo_ids"] = json.loads(item.pop("todo_ids_json") or "[]")
+    return item
+
+
+def _log_voice_job(job_id, message):
+    print(f"voice job {job_id}: {message}", file=sys.stdout, flush=True)
+
+
+def _update_voice_job(conn, job_id, **fields):
+    if not fields:
+        return
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    conn.execute(
+        f"UPDATE voice_jobs SET {assignments}, updated_at = ? WHERE id = ?",
+        (*fields.values(), iso_now(), job_id),
+    )
+
+
+def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model):
+    """Background worker: transcribe the recording, structure it into TODO
+    items, and record stage timings so failures are diagnosable from
+    server.log. Opens its own database connection."""
+    started = time.monotonic()
+    try:
+        if payload.get("audio_base64"):
+            raw, content_type = validate_asr_audio(payload)
+            _log_voice_job(job_id, f"transcribing {len(raw)} bytes via {asr_endpoint}")
+            transcript_started = time.monotonic()
+            transcript = transcribe_audio(raw, content_type, asr_endpoint, asr_model, timeout=120)
+            _log_voice_job(
+                job_id,
+                f"transcript ready in {time.monotonic() - transcript_started:.1f}s ({len(transcript)} chars): {transcript[:120]}",
+            )
+        else:
+            transcript = (payload.get("text") or "").strip()[:MAX_VOICE_TEXT_LENGTH]
+            if not transcript:
+                raise ValidationError("voice transcript is required")
+            _log_voice_job(job_id, f"using submitted text transcript ({len(transcript)} chars)")
+        if not transcript:
+            raise ValidationError("voice transcript is required")
+        with connect(db_path) as conn:
+            _update_voice_job(conn, job_id, status="structuring", transcript=transcript)
+            conn.commit()
+        structure_started = time.monotonic()
+        items, error = convert_transcript_to_todos(transcript[:MAX_VOICE_TEXT_LENGTH], voice_agent)
+        with connect(db_path) as conn:
+            created = [create_todo(conn, item) for item in items]
+            _update_voice_job(
+                conn,
+                job_id,
+                status="completed",
+                fallback=1 if error else 0,
+                error=error[:2000],
+                todo_ids_json=json.dumps(created),
+            )
+            conn.commit()
+        _log_voice_job(
+            job_id,
+            f"completed in {time.monotonic() - started:.1f}s, created {len(created)} todo(s)"
+            + (f" with fallback ({error[:200]})" if error else ""),
+        )
+    except Exception as exc:
+        _log_voice_job(job_id, f"failed after {time.monotonic() - started:.1f}s: {exc}")
+        try:
+            with connect(db_path) as conn:
+                _update_voice_job(conn, job_id, status="failed", error=str(exc)[:2000])
+                conn.commit()
+        except Exception:
+            pass
 
 
 def convert_transcript_to_todos(transcript, provider, timeout=120):

@@ -43,6 +43,7 @@ from reports_app.reports import assemble_context, build_claude_evidence_prompt, 
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
+import time
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from reports_app.voice_todos import (
     build_voice_todo_prompt,
@@ -336,6 +337,19 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             create_todos_from_voice(self.conn, "   ", "codex")
 
+    def _poll_voice_job(self, server_port, job_id, timeout=30):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            client = HTTPConnection("127.0.0.1", server_port, timeout=10)
+            client.request("GET", f"/api/voice-jobs/{job_id}")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            if payload["status"] in {"completed", "failed"}:
+                return response.status, payload
+            time.sleep(0.1)
+        raise AssertionError("voice job did not finish in time")
+
     def test_voice_todo_settings_and_api_endpoints(self):
         class MockAsrHandler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -408,11 +422,14 @@ class CoreTest(unittest.TestCase):
                 response = client.getresponse()
                 payload = json.loads(response.read())
                 client.close()
-            self.assertEqual(response.status, 201)
-            self.assertFalse(payload["fallback"])
-            self.assertEqual(len(payload["ids"]), 1)
-            self.assertEqual(payload["todos"][0]["title"], "巡检线上集群状态")
-            self.assertEqual(payload["transcript"], "巡检线上集群状态")
+            self.assertEqual(response.status, 202)
+            self.assertEqual(payload["status"], "transcribing")
+            status, job = self._poll_voice_job(server.server_port, payload["id"])
+            self.assertEqual(status, 200)
+            self.assertEqual(job["status"], "completed")
+            self.assertFalse(job["fallback"])
+            self.assertEqual(job["transcript"], "巡检线上集群状态")
+            self.assertEqual(job["todo_ids"], [todo["id"] for todo in todo_rows(self.conn) if todo["title"] == "巡检线上集群状态"])
 
             with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
@@ -425,16 +442,22 @@ class CoreTest(unittest.TestCase):
                 response = client.getresponse()
                 payload = json.loads(response.read())
                 client.close()
-            self.assertEqual(response.status, 201)
-            self.assertEqual(payload["transcript"], "给官网更换证书")
-            self.assertEqual(payload["todos"][0]["title"], "给官网更换证书")
+            self.assertEqual(response.status, 202)
+            status, job = self._poll_voice_job(server.server_port, payload["id"])
+            self.assertEqual(job["status"], "completed")
+            self.assertEqual(job["transcript"], "给官网更换证书")
+            created = todo_rows(self.conn)[0]
+            self.assertEqual(created["title"], "给官网更换证书")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request("POST", "/api/todos/voice", body=json.dumps({"text": "  "}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
-            response.read()
+            payload = json.loads(response.read())
             client.close()
-            self.assertEqual(response.status, 400)
+            self.assertEqual(response.status, 202)
+            status, job = self._poll_voice_job(server.server_port, payload["id"])
+            self.assertEqual(job["status"], "failed")
+            self.assertIn("voice transcript is required", job["error"])
         finally:
             server.shutdown()
             server.server_close()

@@ -175,6 +175,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS voice_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'transcribing',
+    transcript TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    fallback INTEGER NOT NULL DEFAULT 0,
+    todo_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
