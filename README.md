@@ -45,6 +45,12 @@ The first release is local-only: the backend must run on the same machine as the
 - Set `REPORTS_CODEX_CMD` or `REPORTS_CLAUDE_CMD` to override provider commands.
 - Set `REPORTS_FAKE_PROVIDER=1` only for local tests or dry runs that generate a deterministic report without calling an agent CLI. Normal service startup uses real provider execution.
 
+## Voice TODO
+
+- A floating microphone button at the bottom right records while held. Speech is transcribed in the browser (Web Speech API; Safari or Chrome required), so no audio is stored.
+- On release, the transcript is sent to `POST /api/todos/voice`, and the conversion agent selected in 全局设置 (global settings; `codex` or `claude` CLI, stored workspace-wide) turns it into one or more structured TODO items.
+- If the agent CLI fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
+
 ## Uploads
 
 Supported project material types:
