@@ -73,6 +73,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("new MediaRecorder(stream", source)
         self.assertNotIn("webkitSpeechRecognition", source)
         self.assertIn("audioBufferToWav16kMono(", source)
+        self.assertIn("window.isSecureContext", source)
+        self.assertIn('`https://${location.hostname}:8443`', source)
         self.assertIn('"/api/todos/voice"', source)
         self.assertIn("asr_endpoint: $(\"asr-endpoint-input\")?.value || \"\"", source)
         self.assertIn("state.voiceAgent = data.voice_agent === \"claude\" ? \"claude\" : \"codex\";", source)

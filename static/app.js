@@ -443,8 +443,12 @@ function setupVoiceTodoFab() {
   if (!fab) return;
   if (!voiceRecordingSupported()) {
     fab.classList.add("is-unsupported");
-    fab.title = "当前浏览器不支持录音，请使用 Safari 或 Chrome";
-    fab.addEventListener("click", () => toast("当前浏览器不支持录音，请使用 Safari 或 Chrome"));
+    const httpsHint = `https://${location.hostname}:8443`;
+    const message = window.isSecureContext
+      ? "当前浏览器不支持录音，请使用 Safari 或 Chrome"
+      : `浏览器要求 HTTPS 才能使用麦克风。请改用 ${httpsHint} 访问，并接受自签名证书警告`;
+    fab.title = message;
+    fab.addEventListener("click", () => toast(message));
     return;
   }
   fab.addEventListener("pointerdown", startVoiceHold);
