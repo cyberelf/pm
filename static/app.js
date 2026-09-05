@@ -415,12 +415,18 @@ async function openTodoMaterial(projectId, materialId) {
   if (materialId) await previewMaterial(Number(materialId));
 }
 
+function projectPaused(p) {
+  return p.status === "paused";
+}
+
 function projectRowHtml(p) {
+  const paused = projectPaused(p);
   return `
-    <div class="project-row ${p.id === state.projectId ? "active" : ""}">
+    <div class="project-row${p.id === state.projectId ? " active" : ""}${paused ? " paused" : ""}">
       <button class="project-item" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
         ${statusDot(projectDisplayStatus(p), "project-item-status")}
         <strong>${escapeHtml(p.name)}</strong>
+        ${paused ? '<small class="project-item-flag">已停止</small>' : ""}
       </button>
       <button class="project-generate" data-project-generate="${p.id}" aria-label="为 ${escapeAttr(p.name)} 生成周报" title="生成周报">
         ${faIcon("report")}
@@ -482,14 +488,15 @@ function render() {
   $("project-title").textContent = ws.project.name;
   $("project-bar-name").textContent = ws.project.name;
   $("open-project-bar").classList.remove("hidden");
+  const displayStatus = ws.project.status === "paused" ? "paused" : ws.progress_status;
   const projectBarDot = $("project-bar-dot");
-  projectBarDot.className = `status-dot ${statusTone(ws.progress_status)}`;
-  projectBarDot.title = ws.progress_status;
+  projectBarDot.className = `status-dot ${statusTone(displayStatus)}`;
+  projectBarDot.title = statusLabel(displayStatus);
   $("project-meta").textContent = ws.week_key;
   const projectStatusDot = $("project-status-dot");
-  projectStatusDot.className = `status-dot ${statusTone(ws.progress_status)}`;
-  projectStatusDot.title = ws.progress_status;
-  projectStatusDot.setAttribute("aria-label", `项目状态：${ws.progress_status}`);
+  projectStatusDot.className = `status-dot ${statusTone(displayStatus)}`;
+  projectStatusDot.title = statusLabel(displayStatus);
+  projectStatusDot.setAttribute("aria-label", `项目状态：${statusLabel(displayStatus)}`);
   renderProjects();
   renderOverview(ws);
   renderSettings(ws);
@@ -547,7 +554,7 @@ function renderSettings(ws) {
     <form id="settings-form" class="panel form-grid">
       <div class="panel-head wide"><h2>项目设置</h2><span>项目与报告配置</span></div>
       ${input("name", "名称", p.name)}
-      ${input("status", "状态", p.status)}
+      ${projectRunToggle(p)}
       ${input("start_date", "开始日期", p.start_date, "date")}
       ${input("end_date", "结束日期", p.end_date || "", "date")}
       ${timezoneSelect("timezone", "时区", p.timezone)}
@@ -579,6 +586,22 @@ function renderSettings(ws) {
   `;
   $("settings-form").onsubmit = saveSettings;
   onRepoModeChange();
+}
+
+function projectRunToggle(p) {
+  const running = p.status !== "paused";
+  return `
+    <div class="wide project-toggle-row">
+      <label class="switch" title="${running ? "运行中：按计划自动生成周报" : "已停止：不再自动生成周报"}">
+        <input id="project-enabled-input" type="checkbox" aria-label="项目启停" ${running ? "checked" : ""}>
+        <span class="switch-slider"></span>
+      </label>
+      <div class="project-toggle-copy">
+        <strong>项目启停</strong>
+        <small>停止后项目在菜单中置灰，且不再按计划自动生成周报</small>
+      </div>
+    </div>
+  `;
 }
 
 function onRepoModeChange() {
@@ -678,6 +701,7 @@ async function saveSettings(event) {
     }))
     .filter(s => s.local_time);
   const payload = Object.fromEntries(fd.entries());
+  payload.status = $("project-enabled-input")?.checked ? "active" : "paused";
   payload.schedules = schedules;
   await api(`/api/projects/${state.projectId}/settings`, { method: "PUT", body: JSON.stringify(payload) });
   toast("设置已保存");
@@ -1232,6 +1256,8 @@ const STATUS_LABELS = {
   low: "低",
   info: "提示",
   active: "活跃",
+  paused: "已停止",
+  archived: "已归档",
   resolved: "已解决",
   "on track": "进展顺利",
   "at risk": "有风险",
@@ -1278,6 +1304,7 @@ function timezoneLabel(value) {
 }
 
 function projectDisplayStatus(project) {
+  if (project.status === "paused" || project.status === "archived") return project.status;
   if (project.id === state.projectId && state.workspace?.project?.id === project.id) {
     return state.workspace.progress_status;
   }

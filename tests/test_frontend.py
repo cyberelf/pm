@@ -33,6 +33,21 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("toggleRepo(", source)
         self.assertIn("data-schedule-enabled", source)
 
+    def test_project_pause_switch_and_greyed_menu_entries(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function projectPaused(p)", source)
+        self.assertIn('${paused ? " paused" : ""}', source)
+        self.assertIn('project-item-flag">已停止</small>', source)
+        self.assertIn('if (project.status === "paused" || project.status === "archived") return project.status;', source)
+        self.assertIn('paused: "已停止"', source)
+        self.assertIn('id="project-enabled-input"', source)
+        self.assertIn('payload.status = $("project-enabled-input")?.checked ? "active" : "paused";', source)
+        self.assertNotIn('${input("status", "状态", p.status)}', source)
+        self.assertIn(".project-row.paused .project-item strong {", styles)
+        self.assertIn(".project-item-flag {", styles)
+        self.assertIn(".project-toggle-row {", styles)
+
     def test_responsive_layout_contains_wide_content_overflow(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
