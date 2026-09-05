@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 from pathlib import Path
 from datetime import datetime
@@ -17,6 +17,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 from reports_app.config import load_env_file
+from reports_app.asr import normalize_asr_endpoint, transcribe_audio, validate_asr_audio
 from reports_app.db import create_project, init_db, connect
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
@@ -44,6 +45,7 @@ from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, u
 from reports_app.voice_todos import (
     build_voice_todo_prompt,
     create_todos_from_voice,
+    create_todos_from_voice_audio,
     fallback_voice_items,
     parse_voice_todo_output,
 )
@@ -159,6 +161,97 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(os.environ["REPORTS_TEST_A"], "existing")
         self.assertEqual(load_env_file(Path(self.tmp.name) / "missing.env"), {})
 
+    def test_asr_audio_validation_and_endpoint_normalization(self):
+        raw, content_type = validate_asr_audio({"audio_base64": base64.b64encode(b"RIFF....").decode(), "content_type": "audio/wav; codecs=0"})
+        self.assertEqual(raw, b"RIFF....")
+        self.assertEqual(content_type, "audio/wav")
+        with self.assertRaises(ValidationError):
+            validate_asr_audio({"audio_base64": base64.b64encode(b"x").decode(), "content_type": "video/mp4"})
+        with self.assertRaises(ValidationError):
+            validate_asr_audio({"audio_base64": "not-base64!!", "content_type": "audio/wav"})
+        with self.assertRaises(ValidationError):
+            validate_asr_audio({"audio_base64": "", "content_type": "audio/wav"})
+        self.assertEqual(normalize_asr_endpoint(" http://127.0.0.1:8766/inference "), "http://127.0.0.1:8766/inference")
+        with self.assertRaises(ValidationError):
+            normalize_asr_endpoint("ftp://127.0.0.1:8766/inference")
+        with self.assertRaises(ValidationError):
+            normalize_asr_endpoint("not-a-url")
+
+    def test_transcribe_audio_posts_multipart_and_parses_text(self):
+        captured = {}
+
+        class MockAsrHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                captured["body"] = self.rfile.read(length)
+                captured["path"] = self.path
+                payload = json.dumps({"text": "明天上午十点开评审会，给王老师发周报初稿"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, fmt, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), MockAsrHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            audio = b"RIFFfake-wav-bytes"
+            text = transcribe_audio(
+                audio,
+                "audio/wav",
+                f"http://127.0.0.1:{server.server_port}/inference",
+                "whisper",
+            )
+            self.assertEqual(text, "明天上午十点开评审会，给王老师发周报初稿")
+            self.assertTrue(captured["path"].endswith("/inference"))
+            self.assertIn(b'name="file"', captured["body"])
+            self.assertIn(audio, captured["body"])
+            self.assertIn(b'name="model"', captured["body"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_voice_todo_audio_flow_uses_configured_asr_service(self):
+        class MockAsrHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                payload = json.dumps({"text": "盘点线上集群状态"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, fmt, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), MockAsrHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
+                result, transcript = create_todos_from_voice_audio(
+                    self.conn,
+                    {"audio_base64": base64.b64encode(b"RIFFfake").decode(), "content_type": "audio/wav"},
+                    "codex",
+                    f"http://127.0.0.1:{server.server_port}/inference",
+                    "whisper",
+                )
+            self.assertEqual(transcript, "盘点线上集群状态")
+            self.assertFalse(result["fallback"])
+            todo = next(row for row in todo_rows(self.conn) if row["id"] == result["ids"][0])
+            self.assertEqual(todo["title"], "盘点线上集群状态")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_voice_todo_prompt_and_json_parser(self):
         transcript = "明天上午十点开评审会，然后给王老师发周报初稿"
         prompt = build_voice_todo_prompt(transcript)
@@ -213,21 +306,56 @@ class CoreTest(unittest.TestCase):
             create_todos_from_voice(self.conn, "   ", "codex")
 
     def test_voice_todo_settings_and_api_endpoints(self):
+        class MockAsrHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                payload = json.dumps({"text": "给官网更换证书"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, fmt, *args):
+                return
+
+        asr_server = ThreadingHTTPServer(("127.0.0.1", 0), MockAsrHandler)
+        asr_thread = threading.Thread(target=asr_server.serve_forever, daemon=True)
+        asr_thread.start()
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.db_path = self.db_path
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("PUT", "/api/settings", body=json.dumps({"voice_agent": "claude"}), headers={"Content-Type": "application/json"})
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({
+                    "voice_agent": "claude",
+                    "asr_endpoint": f"http://127.0.0.1:{asr_server.server_port}/inference",
+                    "asr_model": "whisper",
+                }),
+                headers={"Content-Type": "application/json"},
+            )
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
             self.assertEqual(response.status, 200)
-            self.assertEqual(payload, {"voice_agent": "claude"})
+            self.assertEqual(payload["voice_agent"], "claude")
+            self.assertEqual(payload["asr_endpoint"], f"http://127.0.0.1:{asr_server.server_port}/inference")
+            self.assertEqual(payload["asr_model"], "whisper")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request("PUT", "/api/settings", body=json.dumps({"voice_agent": "gpt"}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("PUT", "/api/settings", body=json.dumps({"asr_endpoint": "not-a-url"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             response.read()
             client.close()
@@ -240,6 +368,8 @@ class CoreTest(unittest.TestCase):
             client.close()
             self.assertEqual(response.status, 200)
             self.assertEqual(state_payload["voice_agent"], "claude")
+            self.assertEqual(state_payload["asr_endpoint"], f"http://127.0.0.1:{asr_server.server_port}/inference")
+            self.assertEqual(state_payload["asr_model"], "whisper")
 
             with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
@@ -251,6 +381,22 @@ class CoreTest(unittest.TestCase):
             self.assertFalse(payload["fallback"])
             self.assertEqual(len(payload["ids"]), 1)
             self.assertEqual(payload["todos"][0]["title"], "巡检线上集群状态")
+            self.assertEqual(payload["transcript"], "巡检线上集群状态")
+
+            with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request(
+                    "POST",
+                    "/api/todos/voice",
+                    body=json.dumps({"audio_base64": base64.b64encode(b"RIFFfake").decode(), "content_type": "audio/wav"}),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = client.getresponse()
+                payload = json.loads(response.read())
+                client.close()
+            self.assertEqual(response.status, 201)
+            self.assertEqual(payload["transcript"], "给官网更换证书")
+            self.assertEqual(payload["todos"][0]["title"], "给官网更换证书")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request("POST", "/api/todos/voice", body=json.dumps({"text": "  "}), headers={"Content-Type": "application/json"})
@@ -262,6 +408,9 @@ class CoreTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+            asr_server.shutdown()
+            asr_server.server_close()
+            asr_thread.join(timeout=2)
 
     def test_todo_card_links_open_in_new_tab(self):
         todo_id = create_todo(

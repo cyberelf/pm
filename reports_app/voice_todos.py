@@ -4,6 +4,7 @@ import re
 import tempfile
 from pathlib import Path
 
+from .asr import transcribe_audio, validate_asr_audio
 from .todos import create_todo
 from .validation import ValidationError
 
@@ -19,6 +20,19 @@ def create_todos_from_voice(conn, text, provider, timeout=120):
     items, error = convert_transcript_to_todos(transcript, provider, timeout)
     created = [create_todo(conn, item) for item in items]
     return {"ids": created, "fallback": bool(error), "error": error}
+
+
+def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_model, timeout=180):
+    """Transcribes an uploaded recording through the configured ASR service,
+    then structures the transcript into TODO items. Returns (result, transcript)."""
+    raw, content_type = validate_asr_audio(payload)
+    try:
+        transcript = transcribe_audio(raw, content_type, asr_endpoint, asr_model, timeout)
+    except ValidationError:
+        raise
+    except Exception as exc:
+        raise ValidationError(f"voice transcription failed: {exc}") from exc
+    return create_todos_from_voice(conn, transcript, provider, timeout), transcript
 
 
 def convert_transcript_to_todos(transcript, provider, timeout=120):
