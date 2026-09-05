@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=44" />
+    <link rel="stylesheet" href="/styles.css?v=45" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -111,6 +111,19 @@
                 <button type="button" class="mode-option" data-mode-option="dark" onclick="applyAppearance('dark')">深色</button>
               </div>
               <div id="appearance-swatches" class="theme-swatches"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO</span></div>
+              <div class="voice-settings">
+                <label>转换 Agent
+                  <select id="voice-agent-select">
+                    <option value="codex">Codex CLI</option>
+                    <option value="claude">Claude Code CLI</option>
+                  </select>
+                </label>
+                <button id="save-voice-settings" class="primary" type="button">保存</button>
+                <small>语音先在浏览器内转写为文字，再由所选 CLI 整理成 TODO 项；转换失败时会用原始转写直接创建。</small>
+              </div>
             </div>
           </section>
         </main>
@@ -235,6 +248,12 @@
       </button>
     </nav>
 
+    <div id="voice-todo-widget" class="voice-todo-widget">
+      <div id="voice-todo-live" class="voice-todo-live hidden" aria-live="polite"></div>
+      <button id="voice-todo-fab" class="voice-todo-fab" type="button" aria-label="按住说话，创建语音 TODO" title="按住说话，创建语音 TODO">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a2.8 2.8 0 0 1 2.8 2.8v5.7a2.8 2.8 0 0 1-5.6 0V6.3A2.8 2.8 0 0 1 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path><path d="M5.8 11.5a6.2 6.2 0 0 0 12.4 0M12 17.7v2.8M8.8 20.5h6.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path></svg>
+      </button>
+    </div>
     <div id="toast" class="toast hidden"></div>
     <div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="true">
       <div class="loading-box">
@@ -243,6 +262,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=35"></script>
+    <script src="/app.js?v=36"></script>
   </body>
 </html>

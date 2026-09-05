@@ -21,6 +21,7 @@ const state = {
   pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   settingsView: false,
+  voiceAgent: "codex",
   theme: "blue",
   appearance: "light",
   branchOptions: {},
@@ -122,6 +123,8 @@ function toast(message) {
 async function loadState() {
   const data = await api("/api/state");
   state.projects = data.projects;
+  state.voiceAgent = data.voice_agent === "claude" ? "claude" : "codex";
+  renderVoiceAgentSetting();
   if (!state.projectId && state.projects.length) state.projectId = state.projects[0].id;
   if (state.projectId && !state.projects.some((p) => p.id === state.projectId)) {
     state.projectId = state.projects.length ? state.projects[0].id : null;
@@ -413,6 +416,171 @@ async function openTodoMaterial(projectId, materialId) {
   switchTab("sources");
   switchSourceTab("manual");
   if (materialId) await previewMaterial(Number(materialId));
+}
+
+const voiceCapture = {
+  recognition: null,
+  holding: false,
+  submitPending: false,
+  finalText: "",
+  interimText: "",
+  error: "",
+};
+
+function voiceRecognitionSupported() {
+  return typeof window !== "undefined" && ("webkitSpeechRecognition" in window || "SpeechRecognition" in window);
+}
+
+function setupVoiceTodoFab() {
+  const fab = $("voice-todo-fab");
+  if (!fab) return;
+  if (!voiceRecognitionSupported()) {
+    fab.classList.add("is-unsupported");
+    fab.title = "当前浏览器不支持语音输入，请使用 Safari 或 Chrome";
+    fab.addEventListener("click", () => toast("当前浏览器不支持语音输入，请使用 Safari 或 Chrome"));
+    return;
+  }
+  fab.addEventListener("pointerdown", startVoiceHold);
+  fab.addEventListener("pointerup", endVoiceHold);
+  fab.addEventListener("pointercancel", cancelVoiceHold);
+  fab.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+
+function startVoiceHold(event) {
+  if (voiceCapture.holding) return;
+  event.preventDefault();
+  const fab = $("voice-todo-fab");
+  try { fab.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recognition = new Recognition();
+  Object.assign(voiceCapture, {
+    recognition,
+    holding: true,
+    submitPending: false,
+    finalText: "",
+    interimText: "",
+    error: "",
+  });
+  recognition.lang = "zh-CN";
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.onresult = (speechEvent) => {
+    let interim = "";
+    for (let i = speechEvent.resultIndex; i < speechEvent.results.length; i += 1) {
+      const result = speechEvent.results[i];
+      if (result.isFinal) voiceCapture.finalText += result[0].transcript;
+      else interim += result[0].transcript;
+    }
+    voiceCapture.interimText = interim;
+    renderVoiceLiveText();
+  };
+  recognition.onerror = (speechEvent) => {
+    voiceCapture.error = voiceErrorMessage(speechEvent.error);
+  };
+  recognition.onend = () => {
+    voiceCapture.recognition = null;
+    if (voiceCapture.submitPending) {
+      voiceCapture.submitPending = false;
+      submitVoiceTodo();
+    }
+  };
+  fab.classList.add("is-recording");
+  renderVoiceLiveText();
+  try {
+    recognition.start();
+  } catch {
+    voiceCapture.recognition = null;
+    voiceCapture.holding = false;
+    stopVoiceRecordingUi();
+    toast("语音识别启动失败，请重试");
+  }
+}
+
+function voiceErrorMessage(code) {
+  if (code === "not-allowed" || code === "service-not-allowed") return "麦克风权限被拒绝，请在浏览器设置中允许后重试";
+  if (code === "network") return "语音识别服务不可用，请检查网络后重试";
+  if (code === "no-speech") return "";
+  return `语音识别出错（${code}）`;
+}
+
+function stopVoiceRecordingUi() {
+  const fab = $("voice-todo-fab");
+  if (fab) fab.classList.remove("is-recording");
+  $("voice-todo-live").classList.add("hidden");
+}
+
+function endVoiceHold() {
+  if (!voiceCapture.holding) return;
+  voiceCapture.holding = false;
+  stopVoiceRecordingUi();
+  const recognition = voiceCapture.recognition;
+  if (!recognition) {
+    submitVoiceTodo();
+    return;
+  }
+  voiceCapture.submitPending = true;
+  try {
+    recognition.stop();
+  } catch {
+    voiceCapture.recognition = null;
+    voiceCapture.submitPending = false;
+    submitVoiceTodo();
+  }
+}
+
+function cancelVoiceHold() {
+  if (!voiceCapture.holding) return;
+  voiceCapture.holding = false;
+  voiceCapture.submitPending = false;
+  stopVoiceRecordingUi();
+  try { voiceCapture.recognition?.stop(); } catch { /* already stopped */ }
+  voiceCapture.recognition = null;
+}
+
+function renderVoiceLiveText() {
+  const bubble = $("voice-todo-live");
+  if (!bubble || !voiceCapture.holding) return;
+  bubble.classList.remove("hidden");
+  const text = escapeHtml(`${voiceCapture.finalText}${voiceCapture.interimText}`.trim());
+  bubble.innerHTML = `<small>正在聆听… 松开转为 TODO</small>${text || "<span class='voice-live-empty'>请开始说话</span>"}`;
+}
+
+async function submitVoiceTodo() {
+  const text = `${voiceCapture.finalText}${voiceCapture.interimText}`.trim();
+  if (voiceCapture.error) {
+    toast(voiceCapture.error);
+    return;
+  }
+  if (!text) {
+    toast("未识别到语音内容");
+    return;
+  }
+  try {
+    await withBusy("正在整理语音 TODO", "正在调用本地 CLI 将语音转写整理为 TODO…", async () => {
+      const data = await api("/api/todos/voice", { method: "POST", body: JSON.stringify({ text }) });
+      updateTodos(data);
+      const count = (data.ids || []).length;
+      toast(data.fallback
+        ? `语音整理失败，已按原始转写创建 TODO：${data.error || "未知错误"}`
+        : count > 1 ? `已创建 ${count} 条语音 TODO` : "语音 TODO 已创建");
+    });
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function renderVoiceAgentSetting() {
+  const select = $("voice-agent-select");
+  if (!select) return;
+  select.value = state.voiceAgent === "claude" ? "claude" : "codex";
+}
+
+async function saveVoiceSettings() {
+  const select = $("voice-agent-select");
+  if (!select) return;
+  const data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ voice_agent: select.value }) });
+  state.voiceAgent = data.voice_agent;
+  toast("语音设置已保存");
 }
 
 function projectPaused(p) {
@@ -1516,6 +1684,8 @@ document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () =
   switchAppMode(target);
 });
 $("open-global-settings").onclick = () => toggleSettingsView(true);
+$("save-voice-settings").onclick = () => saveVoiceSettings().catch((error) => toast(error.message));
+setupVoiceTodoFab();
 $("page-corner").onkeydown = (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
