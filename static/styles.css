@@ -1059,26 +1059,24 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     align-items: flex-start;
     overflow-x: auto;
     overflow-y: hidden;
-    scroll-snap-type: x mandatory;
     overscroll-behavior-x: contain;
     padding: 0;
     scrollbar-width: none;
     transition: height 240ms ease;
   }
   #workspace.pager-mode::-webkit-scrollbar { display: none; }
-  #workspace.pager-mode .tab-panel { flex: 0 0 100%; min-width: 0; padding: 0 16px calc(104px + env(safe-area-inset-bottom)); scroll-snap-align: start; }
+  #workspace.pager-mode .tab-panel { flex: 0 0 100%; min-width: 0; padding: 0 16px calc(104px + env(safe-area-inset-bottom)); }
   #workspace.pager-mode .tab-panel.hidden { display: grid !important; }
   .todo-board {
     display: flex;
     gap: 0;
     overflow-x: auto;
-    scroll-snap-type: x mandatory;
     overscroll-behavior-x: contain;
     padding: 4px 0 calc(112px + env(safe-area-inset-bottom));
     scrollbar-width: none;
   }
   .todo-board::-webkit-scrollbar { display: none; }
-  .todo-column { flex: 0 0 calc(100% - 16px); margin-inline: 8px; scroll-snap-align: center; }
+  .todo-column { flex: 0 0 calc(100% - 16px); margin-inline: 8px; }
   .pager-dots, .todo-board-dots {
     position: fixed;
     left: 50%;

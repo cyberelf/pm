@@ -1321,6 +1321,62 @@ $("open-project-bar").onclick = () => $("project-sheet").showModal();
 $("close-project-sheet").onclick = () => $("project-sheet").close();
 const workspacePagerQuery = window.matchMedia("(max-width: 767px)");
 const workspaceElement = $("workspace");
+function attachSwipeNav(el, options = {}) {
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let lastX = 0;
+  let startedAt = 0;
+  let gesture = "idle";
+  const enabled = options.enabled || (() => true);
+  el.addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1 || !enabled()) {
+      gesture = "idle";
+      return;
+    }
+    gesture = "pending";
+    startX = lastX = event.touches[0].clientX;
+    startY = event.touches[0].clientY;
+    startLeft = el.scrollLeft;
+    startedAt = Date.now();
+  }, { passive: true });
+  el.addEventListener("touchmove", (event) => {
+    if (gesture === "idle" || gesture === "vertical") return;
+    const dx = event.touches[0].clientX - startX;
+    const dy = event.touches[0].clientY - startY;
+    if (gesture === "pending") {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      gesture = Math.abs(dx) > Math.abs(dy) * 1.4 && el.scrollWidth > el.clientWidth + 1 ? "swipe" : "vertical";
+      if (gesture === "vertical") return;
+    }
+    event.preventDefault();
+    lastX = event.touches[0].clientX;
+    el.scrollLeft = startLeft - (lastX - startX);
+  }, { passive: false });
+  const settle = () => {
+    if (gesture !== "swipe") {
+      gesture = "idle";
+      return;
+    }
+    const dx = lastX - startX;
+    const elapsed = Date.now() - startedAt;
+    const width = el.clientWidth || 1;
+    const pageIndex = Math.round(startLeft / width);
+    const maxIndex = Math.max(0, Math.round(el.scrollWidth / width) - 1);
+    let index = pageIndex;
+    if (Math.abs(dx) >= Math.max(56, width * 0.25) || (Math.abs(dx) >= 28 && elapsed < 220)) {
+      index += dx < 0 ? 1 : -1;
+    }
+    index = Math.min(maxIndex, Math.max(0, index));
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ left: index * width, behavior: reduce ? "auto" : "smooth" });
+    if (options.onPage) options.onPage(index);
+    gesture = "idle";
+  };
+  el.addEventListener("touchend", settle);
+  el.addEventListener("touchcancel", settle);
+}
+
 function applyWorkspacePagerMode() {
   workspaceElement.classList.toggle("pager-mode", workspacePagerQuery.matches);
   ensureWorkspaceDots();
@@ -1328,6 +1384,8 @@ function applyWorkspacePagerMode() {
 }
 workspacePagerQuery.addEventListener("change", applyWorkspacePagerMode);
 applyWorkspacePagerMode();
+attachSwipeNav(workspaceElement, { enabled: () => workspaceElement.classList.contains("pager-mode") });
+attachSwipeNav($("todo-board"));
 window.addEventListener("resize", () => {
   if (!workspacePagerQuery.matches) return;
   requestAnimationFrame(() => {
