@@ -1055,7 +1055,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     transition: height 240ms ease;
   }
   #workspace.pager-mode::-webkit-scrollbar { display: none; }
-  #workspace.pager-mode .tab-panel { flex: 0 0 100%; min-width: 0; padding: 0 16px 24px; scroll-snap-align: start; }
+  #workspace.pager-mode .tab-panel { flex: 0 0 100%; min-width: 0; padding: 0 16px calc(104px + env(safe-area-inset-bottom)); scroll-snap-align: start; }
   #workspace.pager-mode .tab-panel.hidden { display: grid !important; }
   .todo-board {
     display: flex;
@@ -1063,27 +1063,30 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
     overflow-x: auto;
     scroll-snap-type: x mandatory;
     overscroll-behavior-x: contain;
-    padding: 4px 0 24px;
+    padding: 4px 0 calc(112px + env(safe-area-inset-bottom));
     scrollbar-width: none;
   }
   .todo-board::-webkit-scrollbar { display: none; }
   .todo-column { flex: 0 0 calc(100% - 16px); margin-inline: 8px; scroll-snap-align: center; }
-  .todo-board-dots {
+  .pager-dots, .todo-board-dots {
+    position: fixed;
+    left: 50%;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 45;
     display: flex;
     justify-content: center;
     gap: 8px;
-    padding: 2px 0 calc(66px + env(safe-area-inset-bottom));
+    padding: 8px 14px;
+    border: 1px solid var(--hairline);
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--canvas) 78%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: var(--shadow-elevated);
   }
-  .todo-board-dots button { width: 8px; height: 8px; min-height: 8px; padding: 0; border: 0; border-radius: 9999px; background: var(--board-line-strong); opacity: 0.5; transition: width 160ms ease, opacity 160ms ease, background 160ms ease; }
-  .todo-board-dots button.active { width: 22px; background: var(--board-accent-blue); opacity: 1; }
-  .pager-dots {
-    display: flex;
-    justify-content: center;
-    gap: 8px;
-    padding: 0 0 calc(66px + env(safe-area-inset-bottom));
-  }
-  .pager-dots button { width: 8px; height: 8px; min-height: 8px; padding: 0; border: 0; border-radius: 9999px; background: var(--surface-strong); transition: width 160ms ease, background 160ms ease; }
-  .pager-dots button.active { width: 22px; background: var(--accent); }
+  .pager-dots button, .todo-board-dots button { width: 8px; height: 8px; min-height: 8px; padding: 0; border: 0; border-radius: 9999px; background: var(--surface-strong); transition: width 160ms ease, background 160ms ease; }
+  .pager-dots button.active, .todo-board-dots button.active { width: 22px; background: var(--accent); }
   .empty { width: calc(100% - 32px); margin-top: 32px; padding: 32px 20px; }
   .status-strip, .form-grid, .schedule-row, .plan-item, .outcome-item { grid-template-columns: 1fr; }
   .panel { gap: 16px; padding: 18px; }
@@ -1099,7 +1102,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .preview-body { min-height: 220px; height: 62vh; }
   .preview-content, .preview-markdown { padding: 16px; }
   .project-heading h1 { font-size: 24px; }
-  .toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(116px + env(safe-area-inset-bottom)); }
 }
 
 @media (max-width: 420px) {

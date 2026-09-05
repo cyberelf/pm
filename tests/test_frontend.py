@@ -166,6 +166,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("function syncWorkspacePager(", source)
         self.assertIn("workspace.tabPagerIndex = panels.indexOf(el);", source)
         self.assertIn(".pager-dots { display: none; }", styles)
+        self.assertIn(".pager-dots, .todo-board-dots {", styles)
+        self.assertIn("position: fixed;", styles)
         self.assertIn("transition: height 240ms ease;", styles)
 
     def test_todo_inline_editor_creates_and_updates_on_auto_save(self):
