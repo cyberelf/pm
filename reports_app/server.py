@@ -11,8 +11,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .config import DB_PATH, STATIC_DIR, UPLOAD_DIR, WORKSPACE_USER
-from .db import connect, create_project, init_db, row_to_dict
+from .config import DB_PATH, DEFAULT_VOICE_AGENT, STATIC_DIR, UPLOAD_DIR, VOICE_AGENT_SETTING, WORKSPACE_USER
+from .db import connect, create_project, get_setting, init_db, row_to_dict, set_setting
 from .git_sources import check_repo, list_branches, refresh_repo
 from .markdown import render_markdown
 from .materials import (
@@ -32,6 +32,7 @@ from .risks import evaluate_risks, progress_status
 from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
 from .todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
+from .voice_todos import create_todos_from_voice
 from .validation import (
     ValidationError,
     gitlab_server_from_url,
@@ -169,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
                     project = dict(row)
                     project["progress_status"] = progress_status(conn, project["id"])
                     projects.append(project)
-                self.json({"projects": projects, "workspace_user": WORKSPACE_USER})
+                self.json({"projects": projects, "workspace_user": WORKSPACE_USER, "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT)})
                 return
             if path == "/api/projects" and method == "POST":
                 payload = self.body_json()
@@ -188,6 +189,32 @@ class Handler(BaseHTTPRequestHandler):
                 todo_id = create_todo(conn, self.body_json())
                 conn.commit()
                 self.json({"id": todo_id, "todos": todo_rows(conn)}, HTTPStatus.CREATED)
+                return
+            if path == "/api/todos/voice" and method == "POST":
+                payload = self.body_json()
+                result = create_todos_from_voice(
+                    conn,
+                    payload.get("text"),
+                    get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
+                )
+                conn.commit()
+                self.json(
+                    {
+                        "ids": result["ids"],
+                        "fallback": result["fallback"],
+                        "error": result["error"],
+                        "todos": todo_rows(conn),
+                    },
+                    HTTPStatus.CREATED,
+                )
+                return
+            if path == "/api/settings" and method == "PUT":
+                payload = self.body_json()
+                voice_agent = payload.get("voice_agent") or DEFAULT_VOICE_AGENT
+                validate_provider(voice_agent)
+                set_setting(conn, VOICE_AGENT_SETTING, voice_agent)
+                conn.commit()
+                self.json({"voice_agent": voice_agent})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "PUT":
                 update_todo(conn, int(parts[2]), self.body_json())

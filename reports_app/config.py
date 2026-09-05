@@ -9,6 +9,8 @@ STATIC_DIR = ROOT_DIR / "static"
 
 WORKSPACE_USER = "local-user"
 SUPPORTED_PROVIDERS = {"codex", "claude"}
+VOICE_AGENT_SETTING = "voice_agent"
+DEFAULT_VOICE_AGENT = "codex"
 PROJECT_STATUS_ACTIVE = "active"
 PROJECT_STATUS_PAUSED = "paused"
 PROJECT_STATUS_ARCHIVED = "archived"

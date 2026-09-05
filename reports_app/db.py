@@ -170,6 +170,11 @@ CREATE TABLE IF NOT EXISTS todos (
     updated_at TEXT NOT NULL,
     closed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -178,6 +183,18 @@ def connect(path: Path = DB_PATH):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def get_setting(conn, key, default=""):
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row and row["value"] else default
+
+
+def set_setting(conn, key, value):
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, str(value)),
+    )
 
 
 def init_db(path: Path = DB_PATH):

@@ -40,6 +40,12 @@ from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
+from reports_app.voice_todos import (
+    build_voice_todo_prompt,
+    create_todos_from_voice,
+    fallback_voice_items,
+    parse_voice_todo_output,
+)
 from reports_app.validation import ValidationError, gitlab_server_from_url, validate_branches, validate_git_mode, validate_gitlab_server, validate_material_filename, validate_repo, validate_schedule_item
 
 
@@ -130,6 +136,110 @@ class CoreTest(unittest.TestCase):
         self.assertNotIn("<script>", todo["description_html"])
         with self.assertRaises(ValidationError):
             update_todo(self.conn, todo_id, {"status": "closed"})
+
+    def test_voice_todo_prompt_and_json_parser(self):
+        transcript = "明天上午十点开评审会，然后给王老师发周报初稿"
+        prompt = build_voice_todo_prompt(transcript)
+        self.assertIn(transcript, prompt)
+        self.assertIn('"title"', prompt)
+        parsed = parse_voice_todo_output(
+            '```json\n[{"title": "开评审会", "description": "明天上午十点"}, {"title": "发周报初稿", "description": ""}]\n```'
+        )
+        self.assertEqual(
+            parsed,
+            [
+                {"title": "开评审会", "description": "明天上午十点"},
+                {"title": "发周报初稿", "description": ""},
+            ],
+        )
+        single = parse_voice_todo_output('{"title": "唯一任务", "description": "细节"}')
+        self.assertEqual(single, [{"title": "唯一任务", "description": "细节"}])
+        with self.assertRaises(ValueError):
+            parse_voice_todo_output("这不是 JSON")
+        with self.assertRaises(ValueError):
+            parse_voice_todo_output('[{"description": "缺少标题"}]')
+
+    def test_voice_todo_fallback_splits_raw_transcript(self):
+        items = fallback_voice_items("明天上午十点开评审会。下午给王老师发周报初稿")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "明天上午十点开评审会")
+        self.assertEqual(items[0]["description"], "明天上午十点开评审会。下午给王老师发周报初稿")
+        multi = fallback_voice_items("第一行任务\n第二行任务")
+        self.assertEqual([item["title"] for item in multi], ["第一行任务", "第二行任务"])
+
+    def test_create_todos_from_voice_with_fake_provider(self):
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
+            result = create_todos_from_voice(self.conn, "给后端日志加上脱敏处理", "claude")
+        self.assertFalse(result["fallback"])
+        self.assertEqual(len(result["ids"]), 1)
+        todo = next(row for row in todo_rows(self.conn) if row["id"] == result["ids"][0])
+        self.assertEqual(todo["title"], "给后端日志加上脱敏处理")
+        self.assertEqual(todo["status"], "todo")
+
+    def test_create_todos_from_voice_falls_back_when_provider_fails(self):
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):
+            with mock.patch(
+                "reports_app.reports.run_provider_command",
+                side_effect=RuntimeError("provider exploded"),
+            ):
+                result = create_todos_from_voice(self.conn, "盘点仓库权限", "codex")
+        self.assertTrue(result["fallback"])
+        self.assertIn("provider exploded", result["error"])
+        todo = next(row for row in todo_rows(self.conn) if row["id"] == result["ids"][0])
+        self.assertEqual(todo["title"], "盘点仓库权限")
+        with self.assertRaises(ValidationError):
+            create_todos_from_voice(self.conn, "   ", "codex")
+
+    def test_voice_todo_settings_and_api_endpoints(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("PUT", "/api/settings", body=json.dumps({"voice_agent": "claude"}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload, {"voice_agent": "claude"})
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("PUT", "/api/settings", body=json.dumps({"voice_agent": "gpt"}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/state")
+            response = client.getresponse()
+            state_payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(state_payload["voice_agent"], "claude")
+
+            with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request("POST", "/api/todos/voice", body=json.dumps({"text": "巡检线上集群状态"}), headers={"Content-Type": "application/json"})
+                response = client.getresponse()
+                payload = json.loads(response.read())
+                client.close()
+            self.assertEqual(response.status, 201)
+            self.assertFalse(payload["fallback"])
+            self.assertEqual(len(payload["ids"]), 1)
+            self.assertEqual(payload["todos"][0]["title"], "巡检线上集群状态")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "  "}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_todo_card_links_open_in_new_tab(self):
         todo_id = create_todo(
