@@ -42,10 +42,7 @@ const THEMES = [
 function updateThemeColorSurface() {
   const themeColor = document.querySelector?.('meta[name="theme-color"]');
   if (!themeColor || typeof getComputedStyle !== "function") return;
-  const todoView = $("todo-view");
-  const surface = document.body.classList.contains("todo-mode") && todoView
-    ? getComputedStyle(todoView).backgroundColor
-    : getComputedStyle(document.documentElement).backgroundColor;
+  const surface = getComputedStyle(document.documentElement).backgroundColor;
   if (surface) themeColor.setAttribute("content", surface);
 }
 

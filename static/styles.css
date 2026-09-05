@@ -34,28 +34,25 @@
   --error-surface: #fef2f2;
   --error-border: #fecaca;
   --error-ink: #b91c1c;
-  --board-canvas: color-mix(in srgb, var(--accent) 7%, #eceef3);
-  --board-column-fill: rgba(255, 255, 255, 0.78);
+  --board-column-fill: rgba(255, 255, 255, 0.9);
   --board-line: rgba(15, 23, 42, 0.08);
   --board-line-soft: rgba(15, 23, 42, 0.14);
   --board-line-strong: rgba(15, 23, 42, 0.28);
   --board-count-fill: rgba(15, 23, 42, 0.06);
-  --board-draft-fill: rgba(15, 23, 42, 0.03);
-  --board-draft-fill-active: color-mix(in srgb, var(--accent) 12%, transparent);
-  --board-todo-fill: color-mix(in srgb, var(--accent) 9%, white);
-  --board-todo-line: color-mix(in srgb, var(--accent-tint) 65%, transparent);
-  --board-doing-fill: color-mix(in srgb, var(--board-accent-green) 10%, white);
-  --board-doing-line: color-mix(in srgb, var(--board-accent-green) 45%, transparent);
-  --board-closed-fill: color-mix(in srgb, var(--board-accent-slate) 12%, white);
-  --board-closed-line: color-mix(in srgb, var(--board-accent-slate) 42%, transparent);
+  --board-draft-fill: color-mix(in srgb, var(--accent) 7%, white);
+  --board-draft-fill-active: color-mix(in srgb, var(--accent) 16%, white);
+  --board-todo-fill: color-mix(in srgb, var(--accent) 14%, white);
+  --board-todo-line: color-mix(in srgb, var(--accent-tint) 85%, transparent);
+  --board-doing-fill: color-mix(in srgb, var(--board-accent-green) 12%, white);
+  --board-doing-line: color-mix(in srgb, var(--board-accent-green) 55%, transparent);
+  --board-closed-fill: color-mix(in srgb, var(--board-accent-slate) 13%, white);
+  --board-closed-line: color-mix(in srgb, var(--board-accent-slate) 50%, transparent);
   --board-accent-blue: var(--accent);
   --board-accent-blue-line: var(--accent-tint);
   --board-accent-blue-soft: color-mix(in srgb, var(--accent) 60%, white);
   --board-accent-green: #059669;
   --board-accent-slate: #64748b;
   --board-on-accent: color-mix(in srgb, var(--accent) 55%, #0f172a);
-  --board-muted-on-dark: #64748b;
-  --board-head-ink: #1e293b;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -95,7 +92,6 @@
   --error-surface: rgba(239, 68, 68, 0.12);
   --error-border: rgba(239, 68, 68, 0.4);
   --error-ink: #fca5a5;
-  --board-canvas: color-mix(in srgb, var(--accent) 12%, #12151f);
   --board-column-fill: rgba(241, 245, 249, 0.12);
   --board-line: rgba(255, 255, 255, 0.2);
   --board-line-soft: rgba(255, 255, 255, 0.25);
@@ -111,8 +107,6 @@
   --board-closed-line: rgba(148, 163, 184, 0.68);
   --board-accent-blue-soft: color-mix(in srgb, var(--accent) 35%, white);
   --board-on-accent: color-mix(in srgb, var(--accent) 15%, white);
-  --board-muted-on-dark: color-mix(in srgb, var(--accent) 25%, white);
-  --board-head-ink: #ffffff;
 }
 
 * { box-sizing: border-box; }
@@ -302,9 +296,6 @@ strong { color: var(--ink); }
   .page-corner.turning, .view-enter, .sheet[open], .sheet[open]::backdrop { animation: none; }
   #workspace.pager-mode { transition: none; }
 }
-.todo-mode .page-corner-current { color: var(--board-head-ink); }
-.todo-mode .page-corner-fold { color: var(--board-head-ink); }
-:root[data-mode="dark"] .todo-mode .page-corner-fold { text-shadow: 0 1px 2px rgba(15, 23, 42, 0.75); }
 .sidebar {
   position: sticky;
   top: 0;
@@ -423,8 +414,7 @@ strong { color: var(--ink); }
 .project-heading h1 { min-width: 0; font-size: 28px; line-height: 1.2; letter-spacing: -0.5px; overflow-wrap: anywhere; }
 .project-heading .status-dot { align-self: center; }
 .project-heading #project-meta { color: var(--muted); font-size: 14px; font-weight: 500; line-height: 1.4; white-space: nowrap; }
-.todo-topbar .project-heading h1 { color: var(--board-head-ink); }
-.todo-topbar .project-heading p { color: var(--board-muted-on-dark); font-size: 14px; font-weight: 500; }
+.todo-topbar .project-heading p { color: var(--muted); font-size: 14px; font-weight: 500; }
 .actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .tabs {
   position: sticky;
@@ -475,7 +465,7 @@ strong { color: var(--ink); }
   align-items: start;
   gap: 16px;
 }
-#todo-view { min-height: 100vh; background: var(--board-canvas); }
+#todo-view { min-height: 100vh; background: var(--canvas); }
 #todo-view button:focus-visible { outline-color: var(--board-accent-blue-soft); }
 .todo-column {
   min-width: 0;
@@ -491,7 +481,7 @@ strong { color: var(--ink); }
 .todo-column-doing { border-color: var(--board-doing-line); background: var(--board-doing-fill); }
 .todo-column-closed { border-color: var(--board-closed-line); background: var(--board-closed-fill); }
 .todo-column-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 4px 8px; }
-.todo-column-head h2 { color: var(--board-head-ink); font-size: 16px; }
+.todo-column-head h2 { color: var(--ink); font-size: 16px; }
 .todo-column-head span { min-width: 26px; border-radius: 9999px; background: var(--board-count-fill); padding: 4px 10px; color: var(--board-on-accent); font-size: 12px; font-weight: 500; text-align: center; }
 .todo-column-todo .todo-column-head span { background: var(--board-accent-blue); color: var(--on-dark); }
 .todo-column-doing .todo-column-head span { background: var(--board-accent-green); color: var(--on-dark); }
@@ -523,13 +513,13 @@ strong { color: var(--ink); }
 .todo-card-meta { color: var(--muted-soft); font-size: 11px; }
 .todo-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding-top: 2px; }
 .todo-card-actions button { min-height: 34px; padding: 8px 11px; font-size: 12px; }
-.todo-empty { border: 1px dashed var(--board-line-soft); border-radius: var(--radius-lg); padding: 24px 12px; color: var(--board-muted-on-dark); font-size: 13px; text-align: center; }
+.todo-empty { border: 1px dashed var(--board-line-soft); border-radius: var(--radius-lg); padding: 24px 12px; color: var(--muted); font-size: 13px; text-align: center; }
 .todo-board-dots { display: none; }
 .pager-dots { display: none; }
 .project-bar { display: none; }
 .mobile-tabbar { display: none; }
 .todo-draft { min-height: 92px; display: grid; align-content: center; gap: 5px; border: 1px dashed var(--board-line-strong); border-radius: var(--radius-lg); background: var(--board-draft-fill); color: var(--board-on-accent); text-align: left; }
-.todo-draft strong { color: var(--board-head-ink); }
+.todo-draft strong { color: var(--ink); }
 .todo-draft span { font-size: 11px; font-weight: 500; }
 .todo-draft:hover, .todo-draft:active:not(:disabled) { border-color: var(--board-accent-blue-soft); background: var(--board-draft-fill-active); }
 .todo-card-editor { border-color: var(--board-accent-blue-line); box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2); }
