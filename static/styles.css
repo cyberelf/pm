@@ -409,9 +409,11 @@ strong { color: var(--ink); }
   font-weight: 500;
   white-space: nowrap;
 }
-.project-toggle-row { display: flex; align-items: center; gap: 14px; min-height: 40px; }
+.project-toggle-row { display: flex; align-items: center; gap: 12px; min-height: 40px; }
+.project-toggle-row .switch { flex: 0 0 auto; }
 .project-toggle-copy { display: grid; gap: 2px; min-width: 0; }
-.project-toggle-copy small { color: var(--muted-soft); }
+.project-toggle-state { color: var(--body); font-size: 13px; font-weight: 500; }
+.project-toggle-copy small { color: var(--muted-soft); font-size: 12px; }
 
 .main { flex: 1 0 auto; min-width: 0; width: 100%; background: var(--canvas); }
 .topbar {
@@ -1120,6 +1122,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .panel-actions button { flex: 1 1 130px; }
   .upload-dropzone { min-height: 190px; padding: 32px 18px; }
   .upload-actions button { width: 100%; }
+  .settings-save-row button { width: 100%; }
   .summary-editor, .material-editor { min-width: 180px; }
   .history-report summary button { width: 100%; margin-left: 0; }
   .preview-head { padding: 16px; }

@@ -426,7 +426,7 @@ function projectRowHtml(p) {
       <button class="project-item" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
         ${statusDot(projectDisplayStatus(p), "project-item-status")}
         <strong>${escapeHtml(p.name)}</strong>
-        ${paused ? '<small class="project-item-flag">已停止</small>' : ""}
+        ${paused ? '<small class="project-item-flag">已停用</small>' : ""}
       </button>
       <button class="project-generate" data-project-generate="${p.id}" aria-label="为 ${escapeAttr(p.name)} 生成周报" title="生成周报">
         ${faIcon("report")}
@@ -552,7 +552,10 @@ function renderSettings(ws) {
   const p = ws.project;
   $("tab-settings").innerHTML = `
     <form id="settings-form" class="panel form-grid">
-      <div class="panel-head wide"><h2>项目设置</h2><span>项目与报告配置</span></div>
+      <div class="panel-head wide">
+        <div class="panel-title"><h2>项目设置</h2><span>项目与报告配置</span></div>
+        <div class="panel-actions"><button class="primary" type="submit">保存设置</button></div>
+      </div>
       ${input("name", "名称", p.name)}
       ${projectRunToggle(p)}
       ${input("start_date", "开始日期", p.start_date, "date")}
@@ -570,7 +573,7 @@ function renderSettings(ws) {
         <div id="schedule-list">${renderSchedules(ws.schedules, p.timezone)}</div>
         <button type="button" onclick="addSchedule()">+ 添加时间点</button>
       </div>
-      <div class="wide row"><button class="primary">保存设置</button></div>
+      <div class="wide row settings-save-row"><button class="primary" type="submit">保存设置</button></div>
     </form>
     <div class="panel">
       <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
@@ -592,16 +595,22 @@ function projectRunToggle(p) {
   const running = p.status !== "paused";
   return `
     <div class="wide project-toggle-row">
-      <label class="switch" title="${running ? "运行中：按计划自动生成周报" : "已停止：不再自动生成周报"}">
-        <input id="project-enabled-input" type="checkbox" aria-label="项目启停" ${running ? "checked" : ""}>
+      <label class="switch" title="${running ? "已启用 · 按计划自动生成周报" : "已停用 · 不再自动生成周报"}">
+        <input id="project-enabled-input" type="checkbox" aria-label="项目启停" ${running ? "checked" : ""} onchange="syncProjectToggleState(this)">
         <span class="switch-slider"></span>
       </label>
       <div class="project-toggle-copy">
-        <strong>项目启停</strong>
-        <small>停止后项目在菜单中置灰，且不再按计划自动生成周报</small>
+        <span class="project-toggle-state">${running ? "已启用 · 按计划自动生成周报" : "已停用 · 不再自动生成周报"}</span>
+        <small>停止后项目在菜单中置灰，可随时重新开启</small>
       </div>
     </div>
   `;
+}
+
+function syncProjectToggleState(input) {
+  const state = input.closest(".project-toggle-row")?.querySelector(".project-toggle-state");
+  if (!state) return;
+  state.textContent = input.checked ? "已启用 · 按计划自动生成周报" : "已停用 · 不再自动生成周报";
 }
 
 function onRepoModeChange() {
@@ -1256,7 +1265,7 @@ const STATUS_LABELS = {
   low: "低",
   info: "提示",
   active: "活跃",
-  paused: "已停止",
+  paused: "已停用",
   archived: "已归档",
   resolved: "已解决",
   "on track": "进展顺利",
