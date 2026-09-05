@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=38" />
+    <link rel="stylesheet" href="/styles.css?v=40" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -83,6 +83,13 @@
         </main>
 
         <main id="todo-view" class="main hidden">
+          <div class="project-bar todo-bar">
+            <span class="project-bar-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4.5 5.5A1.5 1.5 0 0 1 6 4h12a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 18 20H6a1.5 1.5 0 0 1-1.5-1.5zM9 12.2l2.3 2.3 4-4.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            </span>
+            <strong>TODO 看板</strong>
+            <span class="todo-bar-note">个人工作队列</span>
+          </div>
           <header class="topbar todo-topbar">
             <div>
               <div class="project-heading">
@@ -243,6 +250,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=30"></script>
+    <script src="/app.js?v=31"></script>
   </body>
 </html>

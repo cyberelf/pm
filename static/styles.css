@@ -125,7 +125,7 @@ body {
 button, input, textarea, select { min-width: 0; font: inherit; color: inherit; }
 button {
   min-height: 40px;
-  border: 1px solid var(--hairline);
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
   border-radius: var(--radius-md);
   padding: 10px 16px;
   background: var(--canvas);
@@ -287,7 +287,7 @@ strong { color: var(--ink); }
 .page-corner.turning .page-corner-fold strong { opacity: 0; transition: opacity 140ms ease; }
 @keyframes view-enter {
   from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  to { opacity: 1; transform: none; }
 }
 .view-enter { animation: view-enter 280ms cubic-bezier(.2, .8, .2, 1) both; }
 @media (prefers-reduced-motion: reduce) {
@@ -597,7 +597,7 @@ strong { color: var(--ink); }
   align-items: center;
   gap: 8px;
   min-height: 38px;
-  border: 1px solid var(--hairline);
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent);
   border-radius: 9999px;
   padding: 6px 14px 6px 8px;
   background: var(--canvas);
@@ -990,6 +990,9 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .page-corner { display: none; }
   .topbar { padding: 16px 16px 18px; align-items: flex-start; flex-direction: column; gap: 18px; }
   #report-view .topbar { display: none; }
+  #todo-view .topbar { display: none; }
+  .project-bar.todo-bar { margin-top: 16px; cursor: default; }
+  .todo-bar-note { color: var(--muted); font-size: 12px; font-weight: 500; }
   .project-bar {
     display: flex;
     align-items: center;

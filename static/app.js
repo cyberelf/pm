@@ -201,6 +201,7 @@ function playPageTurn() {
     el.classList.remove("view-enter");
     void el.offsetWidth;
     el.classList.add("view-enter");
+    setTimeout(() => el.classList.remove("view-enter"), 320);
   });
 }
 
