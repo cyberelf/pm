@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=45" />
+    <link rel="stylesheet" href="/styles.css?v=46" />
   </head>
   <body>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -115,6 +115,12 @@
             <div class="panel">
               <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO</span></div>
               <div class="voice-settings">
+                <label>识别服务地址
+                  <input id="asr-endpoint-input" placeholder="http://127.0.0.1:8766/inference">
+                </label>
+                <label>识别模型名
+                  <input id="asr-model-input" placeholder="whisper">
+                </label>
                 <label>转换 Agent
                   <select id="voice-agent-select">
                     <option value="codex">Codex CLI</option>
@@ -122,7 +128,7 @@
                   </select>
                 </label>
                 <button id="save-voice-settings" class="primary" type="button">保存</button>
-                <small>语音先在浏览器内转写为文字，再由所选 CLI 整理成 TODO 项；转换失败时会用原始转写直接创建。</small>
+                <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本再由所选 CLI 整理成 TODO 项，整理失败时按原始转写创建。</small>
               </div>
             </div>
           </section>
@@ -262,6 +268,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=36"></script>
+    <script src="/app.js?v=37"></script>
   </body>
 </html>

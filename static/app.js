@@ -22,6 +22,8 @@ const state = {
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   settingsView: false,
   voiceAgent: "codex",
+  asrEndpoint: "",
+  asrModel: "whisper",
   theme: "blue",
   appearance: "light",
   branchOptions: {},
@@ -124,7 +126,9 @@ async function loadState() {
   const data = await api("/api/state");
   state.projects = data.projects;
   state.voiceAgent = data.voice_agent === "claude" ? "claude" : "codex";
-  renderVoiceAgentSetting();
+  state.asrEndpoint = data.asr_endpoint || "";
+  state.asrModel = data.asr_model || "";
+  renderVoiceSettings();
   if (!state.projectId && state.projects.length) state.projectId = state.projects[0].id;
   if (state.projectId && !state.projects.some((p) => p.id === state.projectId)) {
     state.projectId = state.projects.length ? state.projects[0].id : null;
@@ -419,25 +423,28 @@ async function openTodoMaterial(projectId, materialId) {
 }
 
 const voiceCapture = {
-  recognition: null,
+  recorder: null,
+  stream: null,
+  chunks: [],
   holding: false,
-  submitPending: false,
-  finalText: "",
-  interimText: "",
-  error: "",
+  pressActive: false,
+  startedAt: 0,
+  timerId: 0,
 };
 
-function voiceRecognitionSupported() {
-  return typeof window !== "undefined" && ("webkitSpeechRecognition" in window || "SpeechRecognition" in window);
+function voiceRecordingSupported() {
+  return typeof window !== "undefined"
+    && typeof MediaRecorder !== "undefined"
+    && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
 
 function setupVoiceTodoFab() {
   const fab = $("voice-todo-fab");
   if (!fab) return;
-  if (!voiceRecognitionSupported()) {
+  if (!voiceRecordingSupported()) {
     fab.classList.add("is-unsupported");
-    fab.title = "当前浏览器不支持语音输入，请使用 Safari 或 Chrome";
-    fab.addEventListener("click", () => toast("当前浏览器不支持语音输入，请使用 Safari 或 Chrome"));
+    fab.title = "当前浏览器不支持录音，请使用 Safari 或 Chrome";
+    fab.addEventListener("click", () => toast("当前浏览器不支持录音，请使用 Safari 或 Chrome"));
     return;
   }
   fab.addEventListener("pointerdown", startVoiceHold);
@@ -446,118 +453,193 @@ function setupVoiceTodoFab() {
   fab.addEventListener("contextmenu", (event) => event.preventDefault());
 }
 
-function startVoiceHold(event) {
+function voicePermissionErrorMessage(error) {
+  if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+    return "麦克风权限被拒绝，请在浏览器设置中允许后重试";
+  }
+  if (error && error.name === "NotFoundError") return "未检测到麦克风设备";
+  return `无法启动录音（${(error && error.name) || "unknown"}）`;
+}
+
+async function startVoiceHold(event) {
   if (voiceCapture.holding) return;
   event.preventDefault();
   const fab = $("voice-todo-fab");
   try { fab.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const recognition = new Recognition();
+  voiceCapture.pressActive = true;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    toast(voicePermissionErrorMessage(error));
+    return;
+  }
+  if (!voiceCapture.pressActive) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
   Object.assign(voiceCapture, {
-    recognition,
+    recorder: null,
+    stream,
+    chunks: [],
     holding: true,
-    submitPending: false,
-    finalText: "",
-    interimText: "",
-    error: "",
+    startedAt: Date.now(),
+    timerId: 0,
   });
-  recognition.lang = "zh-CN";
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.onresult = (speechEvent) => {
-    let interim = "";
-    for (let i = speechEvent.resultIndex; i < speechEvent.results.length; i += 1) {
-      const result = speechEvent.results[i];
-      if (result.isFinal) voiceCapture.finalText += result[0].transcript;
-      else interim += result[0].transcript;
-    }
-    voiceCapture.interimText = interim;
-    renderVoiceLiveText();
+  const mimeType = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", ""]
+    .find((type) => !type || MediaRecorder.isTypeSupported(type));
+  try {
+    voiceCapture.recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  } catch {
+    voiceCapture.recorder = new MediaRecorder(stream);
+  }
+  voiceCapture.recorder.ondataavailable = (recordEvent) => {
+    if (recordEvent.data && recordEvent.data.size) voiceCapture.chunks.push(recordEvent.data);
   };
-  recognition.onerror = (speechEvent) => {
-    voiceCapture.error = voiceErrorMessage(speechEvent.error);
-  };
-  recognition.onend = () => {
-    voiceCapture.recognition = null;
-    if (voiceCapture.submitPending) {
-      voiceCapture.submitPending = false;
-      submitVoiceTodo();
-    }
-  };
+  voiceCapture.recorder.onstop = () => finishVoiceRecording();
   fab.classList.add("is-recording");
   renderVoiceLiveText();
-  try {
-    recognition.start();
-  } catch {
-    voiceCapture.recognition = null;
-    voiceCapture.holding = false;
-    stopVoiceRecordingUi();
-    toast("语音识别启动失败，请重试");
-  }
-}
-
-function voiceErrorMessage(code) {
-  if (code === "not-allowed" || code === "service-not-allowed") return "麦克风权限被拒绝，请在浏览器设置中允许后重试";
-  if (code === "network") return "语音识别服务不可用，请检查网络后重试";
-  if (code === "no-speech") return "";
-  return `语音识别出错（${code}）`;
+  voiceCapture.timerId = setInterval(renderVoiceLiveText, 500);
+  voiceCapture.recorder.start(250);
 }
 
 function stopVoiceRecordingUi() {
   const fab = $("voice-todo-fab");
   if (fab) fab.classList.remove("is-recording");
   $("voice-todo-live").classList.add("hidden");
+  if (voiceCapture.timerId) {
+    clearInterval(voiceCapture.timerId);
+    voiceCapture.timerId = 0;
+  }
+}
+
+function releaseVoiceStream() {
+  if (voiceCapture.stream) {
+    voiceCapture.stream.getTracks().forEach((track) => track.stop());
+    voiceCapture.stream = null;
+  }
 }
 
 function endVoiceHold() {
+  voiceCapture.pressActive = false;
   if (!voiceCapture.holding) return;
   voiceCapture.holding = false;
   stopVoiceRecordingUi();
-  const recognition = voiceCapture.recognition;
-  if (!recognition) {
-    submitVoiceTodo();
+  const recorder = voiceCapture.recorder;
+  if (!recorder || recorder.state === "inactive") {
+    releaseVoiceStream();
+    toast("未识别到语音内容");
     return;
   }
-  voiceCapture.submitPending = true;
-  try {
-    recognition.stop();
-  } catch {
-    voiceCapture.recognition = null;
-    voiceCapture.submitPending = false;
-    submitVoiceTodo();
-  }
+  recorder.stop();
 }
 
 function cancelVoiceHold() {
+  voiceCapture.pressActive = false;
   if (!voiceCapture.holding) return;
   voiceCapture.holding = false;
-  voiceCapture.submitPending = false;
   stopVoiceRecordingUi();
-  try { voiceCapture.recognition?.stop(); } catch { /* already stopped */ }
-  voiceCapture.recognition = null;
+  const recorder = voiceCapture.recorder;
+  voiceCapture.recorder = null;
+  voiceCapture.chunks = [];
+  if (recorder && recorder.state !== "inactive") {
+    recorder.onstop = null;
+    try { recorder.stop(); } catch { /* already stopped */ }
+  }
+  releaseVoiceStream();
+}
+
+function finishVoiceRecording() {
+  releaseVoiceStream();
+  const chunks = voiceCapture.chunks;
+  voiceCapture.chunks = [];
+  voiceCapture.recorder = null;
+  if (!chunks.length) {
+    toast("未识别到语音内容");
+    return;
+  }
+  const blob = new Blob(chunks, { type: chunks[0].type || "audio/webm" });
+  submitVoiceTodo(blob);
 }
 
 function renderVoiceLiveText() {
   const bubble = $("voice-todo-live");
   if (!bubble || !voiceCapture.holding) return;
+  const seconds = Math.floor((Date.now() - voiceCapture.startedAt) / 1000);
   bubble.classList.remove("hidden");
-  const text = escapeHtml(`${voiceCapture.finalText}${voiceCapture.interimText}`.trim());
-  bubble.innerHTML = `<small>正在聆听… 松开转为 TODO</small>${text || "<span class='voice-live-empty'>请开始说话</span>"}`;
+  bubble.innerHTML = `<small>正在聆听… ${seconds}s · 松开转为 TODO</small><span class='voice-live-empty'>语音由本地识别服务转写，浏览器内不联网</span>`;
 }
 
-async function submitVoiceTodo() {
-  const text = `${voiceCapture.finalText}${voiceCapture.interimText}`.trim();
-  if (voiceCapture.error) {
-    toast(voiceCapture.error);
-    return;
+function audioBufferToWav16kMono(audioBuffer) {
+  const targetRate = 16000;
+  const channels = audioBuffer.numberOfChannels;
+  const length = audioBuffer.length;
+  const mono = new Float32Array(length);
+  for (let c = 0; c < channels; c += 1) {
+    const data = audioBuffer.getChannelData(c);
+    for (let i = 0; i < length; i += 1) mono[i] += data[i] / channels;
   }
-  if (!text) {
-    toast("未识别到语音内容");
+  const ratio = audioBuffer.sampleRate / targetRate;
+  const outLength = Math.max(1, Math.floor(length / ratio));
+  const samples = new Int16Array(outLength);
+  for (let i = 0; i < outLength; i += 1) {
+    const position = i * ratio;
+    const index = Math.floor(position);
+    const fraction = position - index;
+    const current = mono[index] || 0;
+    const next = mono[Math.min(index + 1, length - 1)] || 0;
+    samples[i] = Math.max(-1, Math.min(1, current + (next - current) * fraction)) * 32767;
+  }
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1, offset += 2) view.setInt16(offset, samples[i], true);
+  return new Blob([view], { type: "audio/wav" });
+}
+
+async function recordingBlobToWav(blob) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const context = new AudioCtx();
+  try {
+    const audioBuffer = await context.decodeAudioData(await blob.arrayBuffer());
+    return { wav: audioBufferToWav16kMono(audioBuffer), duration: audioBuffer.duration };
+  } finally {
+    context.close();
+  }
+}
+
+async function submitVoiceTodo(blob) {
+  let payload;
+  try {
+    const { wav, duration } = await recordingBlobToWav(blob);
+    if (duration < 0.4) {
+      toast("未识别到语音内容");
+      return;
+    }
+    payload = { audio_base64: await fileToBase64(wav), content_type: "audio/wav" };
+  } catch (error) {
+    toast(`录音转换失败：${error.message}`);
     return;
   }
   try {
-    await withBusy("正在整理语音 TODO", "正在调用本地 CLI 将语音转写整理为 TODO…", async () => {
-      const data = await api("/api/todos/voice", { method: "POST", body: JSON.stringify({ text }) });
+    await withBusy("正在整理语音 TODO", "本地识别服务转写中，随后由 CLI 整理为 TODO…", async () => {
+      const data = await api("/api/todos/voice", { method: "POST", body: JSON.stringify(payload) });
       updateTodos(data);
       const count = (data.ids || []).length;
       toast(data.fallback
@@ -569,17 +651,30 @@ async function submitVoiceTodo() {
   }
 }
 
-function renderVoiceAgentSetting() {
+function renderVoiceSettings() {
   const select = $("voice-agent-select");
   if (!select) return;
   select.value = state.voiceAgent === "claude" ? "claude" : "codex";
+  const endpoint = $("asr-endpoint-input");
+  if (endpoint) endpoint.value = state.asrEndpoint || "";
+  const model = $("asr-model-input");
+  if (model) model.value = state.asrModel || "";
 }
 
 async function saveVoiceSettings() {
   const select = $("voice-agent-select");
   if (!select) return;
-  const data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ voice_agent: select.value }) });
+  const data = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      voice_agent: select.value,
+      asr_endpoint: $("asr-endpoint-input")?.value || "",
+      asr_model: $("asr-model-input")?.value || "",
+    }),
+  });
   state.voiceAgent = data.voice_agent;
+  state.asrEndpoint = data.asr_endpoint;
+  state.asrModel = data.asr_model;
   toast("语音设置已保存");
 }
 
