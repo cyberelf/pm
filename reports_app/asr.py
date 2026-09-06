@@ -4,7 +4,7 @@ import uuid
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from .config import DEFAULT_ASR_ENDPOINT, DEFAULT_ASR_MODEL
+from .config import DEFAULT_ASR_ENDPOINT, DEFAULT_ASR_LANGUAGE, DEFAULT_ASR_MODEL
 from .validation import ValidationError
 
 ASR_ENDPOINT_SETTING = "asr_endpoint"
@@ -37,12 +37,16 @@ def validate_asr_audio(payload):
     return raw, content_type
 
 
-def transcribe_audio(raw, content_type, endpoint, model, timeout=120):
+def transcribe_audio(raw, content_type, endpoint, model, timeout=120, language=DEFAULT_ASR_LANGUAGE):
     """Sends audio to an OpenAI-compatible /v1/audio/transcriptions service
-    and returns the transcript text."""
+    and returns the transcript text. An empty language omits the field so
+    the service picks its own default."""
     boundary = f"----reports-asr-{uuid.uuid4().hex}"
     parts = []
-    for name, value in (("model", model), ("response_format", "json")):
+    fields = [("model", model), ("response_format", "json")]
+    if (language or "").strip():
+        fields.append(("language", language.strip()))
+    for name, value in fields:
         parts.append(
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="{name}"\r\n\r\n'

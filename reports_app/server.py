@@ -14,9 +14,11 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import (
     ASR_ENDPOINT_SETTING,
+    ASR_LANGUAGE_SETTING,
     ASR_MODEL_SETTING,
     DB_PATH,
     DEFAULT_ASR_ENDPOINT,
+    DEFAULT_ASR_LANGUAGE,
     DEFAULT_ASR_MODEL,
     DEFAULT_LLM_BASE_URLS,
     DEFAULT_LLM_PROVIDER,
@@ -242,6 +244,7 @@ class Handler(BaseHTTPRequestHandler):
                         "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
                         "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
                         "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
+                        "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
                         **llm_state(conn),
                     }
                 )
@@ -286,6 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                         get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
                         normalize_asr_endpoint(get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT)),
                         get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL) or DEFAULT_ASR_MODEL,
+                        get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE) or DEFAULT_ASR_LANGUAGE,
                     ),
                     daemon=True,
                 ).start()
@@ -310,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
                 validate_provider(voice_agent)
                 asr_endpoint = normalize_asr_endpoint(payload.get("asr_endpoint") or DEFAULT_ASR_ENDPOINT)
                 asr_model = (payload.get("asr_model") or "").strip() or DEFAULT_ASR_MODEL
+                asr_language = (payload.get("asr_language") or "").strip() or DEFAULT_ASR_LANGUAGE
                 llm_provider = validate_llm_provider(payload.get("llm_provider") or DEFAULT_LLM_PROVIDER)
                 llm_base_url = (payload.get("llm_base_url") or "").strip()
                 llm_base_url = validate_llm_base_url(llm_base_url) if llm_base_url else DEFAULT_LLM_BASE_URLS[llm_provider]
@@ -317,6 +322,7 @@ class Handler(BaseHTTPRequestHandler):
                 set_setting(conn, VOICE_AGENT_SETTING, voice_agent)
                 set_setting(conn, ASR_ENDPOINT_SETTING, asr_endpoint)
                 set_setting(conn, ASR_MODEL_SETTING, asr_model)
+                set_setting(conn, ASR_LANGUAGE_SETTING, asr_language)
                 set_setting(conn, LLM_PROVIDER_SETTING, llm_provider)
                 set_setting(conn, LLM_BASE_URL_SETTING, llm_base_url)
                 set_setting(conn, LLM_MODEL_SETTING, llm_model)
@@ -331,6 +337,7 @@ class Handler(BaseHTTPRequestHandler):
                         "voice_agent": voice_agent,
                         "asr_endpoint": asr_endpoint,
                         "asr_model": asr_model,
+                        "asr_language": asr_language,
                         **llm_state(conn),
                     }
                 )

@@ -24,6 +24,7 @@ const state = {
   voiceAgent: "codex",
   asrEndpoint: "",
   asrModel: "whisper",
+  asrLanguage: "zh",
   llmProvider: "openai",
   llmBaseUrl: "",
   llmModel: "",
@@ -145,6 +146,7 @@ async function loadState() {
   state.voiceAgent = ["codex", "claude", "internal"].includes(data.voice_agent) ? data.voice_agent : "codex";
   state.asrEndpoint = data.asr_endpoint || "";
   state.asrModel = data.asr_model || "";
+  state.asrLanguage = data.asr_language || "zh";
   state.llmProvider = data.llm_provider || "openai";
   state.llmBaseUrl = data.llm_base_url || "";
   state.llmModel = data.llm_model || "";
@@ -804,6 +806,8 @@ function renderVoiceSettings() {
   if (endpoint) endpoint.value = state.asrEndpoint || "";
   const model = $("asr-model-input");
   if (model) model.value = state.asrModel || "";
+  const language = $("asr-language-input");
+  if (language) language.value = state.asrLanguage || "zh";
 }
 
 async function saveVoiceSettings() {
@@ -815,11 +819,13 @@ async function saveVoiceSettings() {
       voice_agent: select.value,
       asr_endpoint: $("asr-endpoint-input")?.value || "",
       asr_model: $("asr-model-input")?.value || "",
+      asr_language: $("asr-language-input")?.value || "",
     }),
   });
   state.voiceAgent = data.voice_agent;
   state.asrEndpoint = data.asr_endpoint;
   state.asrModel = data.asr_model;
+  state.asrLanguage = data.asr_language;
   toast("语音设置已保存");
 }
 

@@ -19,6 +19,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 from reports_app.config import (
+    DEFAULT_ASR_LANGUAGE,
     DEFAULT_LLM_BASE_URLS,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
@@ -257,6 +258,12 @@ class CoreTest(unittest.TestCase):
             self.assertIn(b'name="file"', captured["body"])
             self.assertIn(audio, captured["body"])
             self.assertIn(b'name="model"', captured["body"])
+            self.assertIn(b'name="language"\r\n\r\nzh\r\n', captured["body"])
+
+            transcribe_audio(audio, "audio/wav", f"http://127.0.0.1:{server.server_port}/inference", "whisper", language="en")
+            self.assertIn(b'name="language"\r\n\r\nen\r\n', captured["body"])
+            transcribe_audio(audio, "audio/wav", f"http://127.0.0.1:{server.server_port}/inference", "whisper", language="  ")
+            self.assertNotIn(b'name="language"', captured["body"])
         finally:
             server.shutdown()
             server.server_close()
@@ -2162,6 +2169,61 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(state_payload["llm_model"], "claude-opus-5")
             self.assertTrue(state_payload["llm_api_key_set"])
             self.assertNotIn("llm_api_key", state_payload)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+    def test_asr_language_defaults_to_chinese_and_is_configurable(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"voice_agent": "codex", "asr_language": "en"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["asr_language"], "en")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/state")
+            response = client.getresponse()
+            state_payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(state_payload["asr_language"], "en")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"voice_agent": "codex", "asr_language": "  "}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(payload["asr_language"], DEFAULT_ASR_LANGUAGE, "blank asr_language resets to the Chinese default")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"voice_agent": "codex"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(payload["asr_language"], DEFAULT_ASR_LANGUAGE, "PUT without asr_language keeps the Chinese default")
         finally:
             server.shutdown()
             server.server_close()

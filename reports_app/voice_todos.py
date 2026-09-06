@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from .asr import transcribe_audio, validate_asr_audio
+from .config import DEFAULT_ASR_LANGUAGE
 from .db import connect
 from .todos import create_todo
 from .timeutil import iso_now
@@ -26,12 +27,12 @@ def create_todos_from_voice(conn, text, provider, timeout=120):
     return {"ids": created, "fallback": bool(error), "error": error}
 
 
-def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_model, timeout=180):
+def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_model, timeout=180, asr_language=DEFAULT_ASR_LANGUAGE):
     """Transcribes an uploaded recording through the configured ASR service,
     then structures the transcript into TODO items. Returns (result, transcript)."""
     raw, content_type = validate_asr_audio(payload)
     try:
-        transcript = transcribe_audio(raw, content_type, asr_endpoint, asr_model, timeout)
+        transcript = transcribe_audio(raw, content_type, asr_endpoint, asr_model, timeout, language=asr_language)
     except ValidationError:
         raise
     except Exception as exc:
@@ -107,7 +108,7 @@ def _update_voice_job(conn, job_id, **fields):
     )
 
 
-def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model):
+def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model, asr_language=DEFAULT_ASR_LANGUAGE):
     """Background worker: transcribe the recording, structure it into TODO
     items, and record stage timings so failures are diagnosable from
     server.log. Opens its own database connection."""
@@ -115,9 +116,9 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
     try:
         if payload.get("audio_base64"):
             raw, content_type = validate_asr_audio(payload)
-            _log_voice_job(job_id, f"transcribing {len(raw)} bytes via {asr_endpoint}")
+            _log_voice_job(job_id, f"transcribing {len(raw)} bytes via {asr_endpoint} (language={asr_language or 'service default'})")
             transcript_started = time.monotonic()
-            transcript = transcribe_audio(raw, content_type, asr_endpoint, asr_model, timeout=120)
+            transcript = transcribe_audio(raw, content_type, asr_endpoint, asr_model, timeout=120, language=asr_language)
             _log_voice_job(
                 job_id,
                 f"transcript ready in {time.monotonic() - transcript_started:.1f}s ({len(transcript)} chars): {transcript[:120]}",
