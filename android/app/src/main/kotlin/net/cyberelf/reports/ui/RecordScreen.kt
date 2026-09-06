@@ -258,6 +258,7 @@ private fun RunningPane(running: VoiceUi.Running, onCancelJob: () -> Unit) {
         }
         ProgressPane(
             when (running.stage) {
+                "queued" -> "排队等待中…"
                 "structuring" -> "正在整理成 TODO…"
                 "retrying" -> "网络波动，继续等待…"
                 else -> "转写中…"
