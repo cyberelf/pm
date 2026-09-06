@@ -165,6 +165,10 @@ The system SHALL support per-project configuration of the weekly report provider
 - **WHEN** a user selects Claude Code CLI as the project's report provider and saves a system prompt
 - **THEN** the system uses that provider and prompt for future weekly report generation jobs
 
+#### Scenario: Configure internal agent report generation
+- **WHEN** a user selects the internal agent as the project's report provider and saves a system prompt
+- **THEN** the system uses the internal agent with the configured LLM provider and that prompt for future weekly report generation jobs
+
 #### Scenario: Configure project report template
 - **WHEN** a user saves a project-specific Markdown report template
 - **THEN** the system uses that template for future weekly report generation jobs for that project

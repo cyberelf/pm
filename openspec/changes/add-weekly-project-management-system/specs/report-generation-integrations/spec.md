@@ -25,6 +25,28 @@ The system SHALL support Claude Code CLI as a weekly report generation provider.
 - **WHEN** a project is configured to use Claude Code CLI and a report job starts
 - **THEN** the system invokes Claude Code CLI with the project report context and system prompt
 
+### Requirement: Internal agent provider
+The system SHALL support an in-process internal agent as a weekly report generation provider that calls the configured LLM provider directly instead of an agent CLI.
+
+#### Scenario: Invoke internal agent
+- **WHEN** a project is configured to use the internal agent and a report job starts
+- **THEN** the system invokes the configured LLM provider through its langchain chat model binding with a bounded evidence prompt assembled from the report context
+
+#### Scenario: Fail when the internal agent produces no report
+- **WHEN** the internal agent LLM call fails or returns empty output
+- **THEN** the system marks the generation job as failed with the LLM error details
+
+### Requirement: LLM provider settings for the internal agent
+The system SHALL let the workspace user configure the internal agent's LLM provider (openai or anthropic), endpoint base URL, model name, and API key, and SHALL NOT expose the API key through the API.
+
+#### Scenario: Configure the internal agent LLM provider
+- **WHEN** the user saves LLM provider settings with provider, base URL, model, and API key
+- **THEN** the system persists the settings and reports only whether an API key is configured
+
+#### Scenario: Fall back to the standard environment API key
+- **WHEN** no API key is stored for the selected LLM provider
+- **THEN** the system uses the provider's standard API key environment variable when it is set
+
 ### Requirement: Report context assembly
 The system SHALL assemble a report context snapshot before invoking a report provider.
 

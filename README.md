@@ -48,20 +48,21 @@ The first release is local-only: the backend must run on the same machine as the
 ## Local Tools
 
 - Git repository activity uses the local authenticated `gh` CLI (GitHub) or `glab` CLI (GitLab, including self-hosted instances). Each repo selects its git mode; GitLab repos may configure a server address, defaulting to `https://gitlab.com`.
-- Report generation supports `codex` and `claude`.
+- Report generation supports `codex`, `claude`, and `internal`.
 - Codex default command uses `codex exec`.
 - Claude default command uses `claude --print`.
 - Markdown report rendering uses `markdown-it-py` with a Python-Markdown fallback.
 - Report agents retrieve project information through the read-only platform CLI `scripts/report_context.py`; they are instructed not to read SQLite, uploaded files, application files, git hosting services, or `gh`/`glab` directly.
 - Set `REPORTS_CODEX_CMD` or `REPORTS_CLAUDE_CMD` to override provider commands.
+- The `internal` agent runs in-process and calls the configured LLM directly through langchain's provider bindings (no agent CLI). Configure it in 全局设置 → 内部 Agent LLM: provider (`openai` or `anthropic`), endpoint base URL, model name, and API key. A blank base URL defaults to `https://api.openai.com/v1` / `https://api.anthropic.com`; any OpenAI-compatible or Anthropic-compatible endpoint (LM Studio, gateways) works. The API key is stored only in the local database (never returned by the API) and falls back to `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` environment variables when unset.
 - Set `REPORTS_FAKE_PROVIDER=1` only for local tests or dry runs that generate a deterministic report without calling an agent CLI. Normal service startup uses real provider execution.
 
 ## Voice TODO
 
 - A floating microphone button at the bottom right records while held. The browser only captures audio and converts it to a 16 kHz mono WAV locally (no speech leaves the machine at this stage); Safari and Chrome are supported. Microphone access requires a secure context: use `localhost` or the HTTPS listener (`https://<host>:8443`) from phones.
-- On release, the WAV goes to `POST /api/todos/voice`, which starts a background voice job and returns immediately. Only one voice job runs at a time; while one is active the mic button becomes a stop button that cancels it (`POST /api/voice-jobs/{id}/cancel`), and the progress bubble with the transcript survives page reloads (`GET /api/voice-jobs/active`). The configured agent (`codex` or `claude` CLI) structures the transcript into one or more TODO items.
+- On release, the WAV goes to `POST /api/todos/voice`, which starts a background voice job and returns immediately. Only one voice job runs at a time; while one is active the mic button becomes a stop button that cancels it (`POST /api/voice-jobs/{id}/cancel`), and the progress bubble with the transcript survives page reloads (`GET /api/voice-jobs/active`). The configured agent (`codex` CLI, `claude` CLI, or the `internal` agent backed by the LLM provider settings) structures the transcript into one or more TODO items.
 - The ASR service is any OpenAI-compatible transcription endpoint. The default is the bundled whisper.cpp server (`/inference` on port 8766, large-v3-turbo model); install it with `scripts/install_asr_service.sh` after `brew install whisper-cpp` and placing a GGML model under `data/models/`.
-- If the agent CLI fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
+- If the configured agent fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
 
 ## Uploads
 

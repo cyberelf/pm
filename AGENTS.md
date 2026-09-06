@@ -10,7 +10,7 @@ This repository implements a local personal weekly project reporting workspace. 
 - Storage: SQLite at `data/reports.sqlite3`.
 - Uploads: local files under `data/uploads/`.
 - Frontend: dependency-free static HTML/CSS/JS in `static/`.
-- External tools: local `gh` (GitHub), `glab` (GitLab), Codex CLI, Claude Code CLI, and a local whisper.cpp ASR service (`scripts/install_asr_service.sh`, port 8766) for voice TODO transcription.
+- External tools: local `gh` (GitHub), `glab` (GitLab), Codex CLI, Claude Code CLI, a local whisper.cpp ASR service (`scripts/install_asr_service.sh`, port 8766) for voice TODO transcription, and the in-process internal agent (`reports_app/internal_agent.py`) that calls OpenAI/Anthropic-compatible LLM endpoints through langchain bindings configured in 全局设置.
 - Stable service: macOS LaunchAgent scripts in `scripts/`.
 
 ## Development Rules
@@ -22,7 +22,7 @@ This repository implements a local personal weekly project reporting workspace. 
 - Report generation must use temporary input/output files and must not let agent CLIs write directly to app data.
 - Report generation defaults to real Codex/Claude provider execution. Use `REPORTS_FAKE_PROVIDER=1` only in tests or explicit dry runs.
 - Report context must include this week's newly uploaded or manually entered materials and this week's Git commits for connected repositories.
-- Agent CLIs must get platform information through `scripts/report_context.py`; do not prompt them to read SQLite, uploaded files, app files, or GitHub/`gh`/GitLab/`glab` directly.
+- Agent CLIs must get platform information through `scripts/report_context.py`; do not prompt them to read SQLite, uploaded files, app files, or GitHub/`gh`/GitLab/`glab` directly. The internal agent receives the same bounded evidence inline instead of the platform CLI.
 - Generated risk forecasts stay in Markdown report content. System risk warnings must come from deterministic rules.
 
 ## Verification
