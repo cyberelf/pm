@@ -18,7 +18,14 @@ from .config import (
     DB_PATH,
     DEFAULT_ASR_ENDPOINT,
     DEFAULT_ASR_MODEL,
+    DEFAULT_LLM_BASE_URLS,
+    DEFAULT_LLM_PROVIDER,
     DEFAULT_VOICE_AGENT,
+    LLM_API_KEY_ENV_VARS,
+    LLM_API_KEY_SETTING,
+    LLM_BASE_URL_SETTING,
+    LLM_MODEL_SETTING,
+    LLM_PROVIDER_SETTING,
     STATIC_DIR,
     UPLOAD_DIR,
     VOICE_AGENT_SETTING,
@@ -57,6 +64,8 @@ from .validation import (
     ValidationError,
     gitlab_server_from_url,
     require_project_name,
+    validate_llm_base_url,
+    validate_llm_provider,
     validate_provider,
     validate_branches,
     validate_git_mode,
@@ -66,6 +75,20 @@ from .validation import (
     validate_project_status,
     validate_timezone,
 )
+
+
+def llm_state(conn):
+    """LLM provider settings as exposed to the frontend; the API key
+    itself never leaves the server, only whether one is configured."""
+    provider = get_setting(conn, LLM_PROVIDER_SETTING, DEFAULT_LLM_PROVIDER)
+    if provider not in DEFAULT_LLM_BASE_URLS:
+        provider = DEFAULT_LLM_PROVIDER
+    return {
+        "llm_provider": provider,
+        "llm_base_url": get_setting(conn, LLM_BASE_URL_SETTING, "") or DEFAULT_LLM_BASE_URLS[provider],
+        "llm_model": get_setting(conn, LLM_MODEL_SETTING, ""),
+        "llm_api_key_set": bool(get_setting(conn, LLM_API_KEY_SETTING, "")) or bool(os.environ.get(LLM_API_KEY_ENV_VARS[provider], "")),
+    }
 
 
 def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
@@ -219,6 +242,7 @@ class Handler(BaseHTTPRequestHandler):
                         "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
                         "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
                         "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
+                        **llm_state(conn),
                     }
                 )
                 return
@@ -286,11 +310,30 @@ class Handler(BaseHTTPRequestHandler):
                 validate_provider(voice_agent)
                 asr_endpoint = normalize_asr_endpoint(payload.get("asr_endpoint") or DEFAULT_ASR_ENDPOINT)
                 asr_model = (payload.get("asr_model") or "").strip() or DEFAULT_ASR_MODEL
+                llm_provider = validate_llm_provider(payload.get("llm_provider") or DEFAULT_LLM_PROVIDER)
+                llm_base_url = (payload.get("llm_base_url") or "").strip()
+                llm_base_url = validate_llm_base_url(llm_base_url) if llm_base_url else DEFAULT_LLM_BASE_URLS[llm_provider]
+                llm_model = (payload.get("llm_model") or "").strip()
                 set_setting(conn, VOICE_AGENT_SETTING, voice_agent)
                 set_setting(conn, ASR_ENDPOINT_SETTING, asr_endpoint)
                 set_setting(conn, ASR_MODEL_SETTING, asr_model)
+                set_setting(conn, LLM_PROVIDER_SETTING, llm_provider)
+                set_setting(conn, LLM_BASE_URL_SETTING, llm_base_url)
+                set_setting(conn, LLM_MODEL_SETTING, llm_model)
+                # Empty llm_api_key means "keep the stored key" so the
+                # frontend never has to echo the secret back.
+                api_key = (payload.get("llm_api_key") or "").strip()
+                if api_key:
+                    set_setting(conn, LLM_API_KEY_SETTING, api_key)
                 conn.commit()
-                self.json({"voice_agent": voice_agent, "asr_endpoint": asr_endpoint, "asr_model": asr_model})
+                self.json(
+                    {
+                        "voice_agent": voice_agent,
+                        "asr_endpoint": asr_endpoint,
+                        "asr_model": asr_model,
+                        **llm_state(conn),
+                    }
+                )
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "PUT":
                 update_todo(conn, int(parts[2]), self.body_json())

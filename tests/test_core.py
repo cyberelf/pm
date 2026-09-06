@@ -18,9 +18,22 @@ from zoneinfo import ZoneInfo
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
-from reports_app.config import load_env_file
+from reports_app.config import (
+    DEFAULT_LLM_BASE_URLS,
+    LLM_API_KEY_SETTING,
+    LLM_BASE_URL_SETTING,
+    LLM_MODEL_SETTING,
+    LLM_PROVIDER_SETTING,
+    load_env_file,
+)
+from reports_app.internal_agent import (
+    generate_internal_report,
+    internal_voice_todo_items,
+    resolve_llm_settings,
+    validate_llm_settings,
+)
 from reports_app.asr import normalize_asr_endpoint, transcribe_audio, validate_asr_audio
-from reports_app.db import create_project, init_db, connect
+from reports_app.db import create_project, init_db, connect, set_setting
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
 from reports_app.gitlab import list_branches as gitlab_list_branches
@@ -39,7 +52,7 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, provider_command, transient_provider_error
+from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_internal_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, provider_command, transient_provider_error
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
@@ -53,7 +66,7 @@ from reports_app.voice_todos import (
     fallback_voice_items,
     parse_voice_todo_output,
 )
-from reports_app.validation import ValidationError, gitlab_server_from_url, validate_branches, validate_git_mode, validate_gitlab_server, validate_material_filename, validate_repo, validate_schedule_item
+from reports_app.validation import ValidationError, gitlab_server_from_url, validate_branches, validate_git_mode, validate_gitlab_server, validate_llm_base_url, validate_llm_provider, validate_material_filename, validate_provider, validate_repo, validate_schedule_item
 
 
 class CoreTest(unittest.TestCase):
@@ -1846,6 +1859,313 @@ class CoreTest(unittest.TestCase):
         data = workspace(self.conn, self.project_id)
         self.assertEqual(data["risks"], [])
         self.assertEqual({item["kind"] for item in data["source_diagnostics"]}, {"github", "material", "generation"})
+
+
+class InternalAgentTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        init_db(self.db_path)
+        self.conn = connect(self.db_path)
+        self.project_id = create_project(
+            self.conn,
+            {
+                "name": "Demo",
+                "start_date": "2026-06-27",
+                "timezone": "Asia/Shanghai",
+                "report_provider": "internal",
+            },
+        )
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def tearDown(self):
+        self.conn.close()
+        os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        self.tmp.cleanup()
+
+    def test_internal_agent_is_a_supported_provider(self):
+        validate_provider("internal")
+        validate_provider("codex")
+        with self.assertRaises(ValidationError):
+            validate_provider("gpt")
+        validate_llm_provider("openai")
+        validate_llm_provider("anthropic")
+        with self.assertRaises(ValidationError):
+            validate_llm_provider("gpt")
+        self.assertEqual(validate_llm_base_url("api.openai.com/v1"), "https://api.openai.com/v1")
+        self.assertEqual(validate_llm_base_url("http://127.0.0.1:1234/v1/"), "http://127.0.0.1:1234/v1")
+        with self.assertRaises(ValidationError):
+            validate_llm_base_url("http://")
+
+    def test_resolve_llm_settings_defaults_stored_values_and_env_fallback(self):
+        settings = resolve_llm_settings(self.conn)
+        self.assertEqual(settings["provider"], "openai")
+        self.assertEqual(settings["base_url"], DEFAULT_LLM_BASE_URLS["openai"])
+        self.assertEqual(settings["model"], "")
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "env-key"}):
+            self.assertEqual(resolve_llm_settings(self.conn)["api_key"], "env-key")
+
+        set_setting(self.conn, LLM_PROVIDER_SETTING, "anthropic")
+        set_setting(self.conn, LLM_BASE_URL_SETTING, "https://gateway.internal/anthropic")
+        set_setting(self.conn, LLM_MODEL_SETTING, "claude-opus-5")
+        set_setting(self.conn, LLM_API_KEY_SETTING, "stored-key")
+        settings = resolve_llm_settings(self.conn)
+        self.assertEqual(settings["provider"], "anthropic")
+        self.assertEqual(settings["base_url"], "https://gateway.internal/anthropic")
+        self.assertEqual(settings["model"], "claude-opus-5")
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "env-key"}):
+            self.assertEqual(resolve_llm_settings(self.conn)["api_key"], "stored-key")
+        self.assertTrue(validate_llm_settings(settings))
+
+    def test_validate_llm_settings_requires_model_and_key(self):
+        with self.assertRaises(ValidationError):
+            validate_llm_settings({"provider": "openai", "base_url": "https://x", "model": "", "api_key": "k"})
+        with self.assertRaises(ValidationError):
+            validate_llm_settings({"provider": "openai", "base_url": "https://x", "model": "gpt-4o", "api_key": ""})
+
+    def test_internal_evidence_prompt_carries_bounded_evidence(self):
+        store_manual_material(self.conn, self.project_id, {"title": "manual", "content": "internal context"})
+        context, _hash = assemble_context(self.conn, self.project_id)
+        prompt = build_internal_evidence_prompt(context)
+        self.assertIn("Evidence JSON", prompt)
+        self.assertIn("internal context", prompt)
+        self.assertIn("# Weekly Report", prompt)
+        self.assertIn("Do not invent facts", prompt)
+        self.assertNotIn("Claude Code CLI", prompt)
+        self.assertNotIn("`gh` or `glab`", prompt)
+
+    def test_generate_internal_report_invokes_chat_and_rejects_empty_output(self):
+        settings = {"provider": "openai", "base_url": DEFAULT_LLM_BASE_URLS["openai"], "api_key": "k", "model": "gpt-4o-mini"}
+        context = {"system_prompt": "s", "report_template": "# Weekly Report", "week_key": "2026-W36"}
+        with mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value=settings):
+            with mock.patch("reports_app.internal_agent.internal_chat", return_value="# Weekly Report") as chat:
+                output = generate_internal_report(context, timeout=30)
+        self.assertEqual(output, "# Weekly Report")
+        self.assertIn("Evidence JSON", chat.call_args[0][0])
+        self.assertEqual(chat.call_args[1].get("timeout"), 30)
+        with mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value=settings):
+            with mock.patch("reports_app.internal_agent.internal_chat", return_value="   "):
+                with self.assertRaises(RuntimeError):
+                    generate_internal_report(context)
+
+    def test_generate_report_with_internal_provider_records_success_and_failure(self):
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):
+            with mock.patch("reports_app.internal_agent.generate_internal_report", return_value="# Internal Report") as gen:
+                job_id = generate_report(self.conn, self.project_id, "manual", force=True)
+        row = self.conn.execute(
+            "SELECT status, provider, failure_reason FROM generation_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "success")
+        self.assertEqual(row["provider"], "internal")
+        report = self.conn.execute(
+            "SELECT content_md FROM weekly_reports WHERE project_id = ?", (self.project_id,)
+        ).fetchone()
+        self.assertEqual(report["content_md"], "# Internal Report")
+        self.assertEqual(gen.call_args[0][0]["project_profile"]["name"], "Demo")
+
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):
+            with mock.patch(
+                "reports_app.internal_agent.generate_internal_report",
+                side_effect=RuntimeError("LLM API key is not configured"),
+            ):
+                failed_job = generate_report(self.conn, self.project_id, "manual", force=True)
+        row = self.conn.execute(
+            "SELECT status, failure_reason FROM generation_jobs WHERE id = ?", (failed_job,)
+        ).fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("LLM API key is not configured", row["failure_reason"])
+
+    def test_internal_provider_still_uses_fake_report_when_fake_mode_on(self):
+        context = {
+            "project": {"name": "Demo"},
+            "week_key": "2026-W36",
+            "weekly_update": None,
+            "github_activity": [],
+            "git_commits_this_week": [],
+            "new_materials_this_week": [],
+            "weekly_planned_outcomes": [],
+        }
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
+            with mock.patch("reports_app.internal_agent.generate_internal_report") as gen:
+                output = invoke_provider("internal", context)
+        gen.assert_not_called()
+        self.assertIn("Weekly Report", output)
+
+    def test_voice_internal_agent_structures_and_falls_back(self):
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):
+            with mock.patch(
+                "reports_app.internal_agent.internal_voice_todo_items",
+                return_value=[{"title": "买牛奶", "description": "两盒"}],
+            ) as items_fn:
+                result = create_todos_from_voice(self.conn, "买牛奶 两盒", "internal")
+        self.assertFalse(result["fallback"])
+        self.assertEqual(result["error"], "")
+        self.assertEqual(len(result["ids"]), 1)
+        items_fn.assert_called_once_with("买牛奶 两盒", timeout=120)
+
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):
+            with mock.patch(
+                "reports_app.internal_agent.internal_voice_todo_items",
+                side_effect=RuntimeError("internal agent LLM call failed: boom"),
+            ):
+                result = create_todos_from_voice(self.conn, "买牛奶 两盒", "internal")
+        self.assertTrue(result["fallback"])
+        self.assertIn("boom", result["error"])
+        titles = [row["title"] for row in todo_rows(self.conn)]
+        self.assertIn("买牛奶 两盒", titles)
+
+    def test_internal_agent_end_to_end_with_local_openai_compatible_server(self):
+        try:
+            import langchain_core  # noqa: F401
+            import langchain_openai  # noqa: F401
+        except ImportError:
+            self.skipTest("langchain is not installed")
+
+        seen_requests = []
+
+        class MockOpenAIHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length))
+                seen_requests.append({"path": self.path, "model": body.get("model"), "messages": body.get("messages")})
+                payload = json.dumps({
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": body.get("model", "test-model"),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": '[{"title": "买牛奶", "description": "两盒"}]'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, fmt, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenAIHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            settings = {
+                "provider": "openai",
+                "base_url": f"http://127.0.0.1:{server.server_port}/v1",
+                "api_key": "sk-test",
+                "model": "test-model",
+            }
+            # httpx reads proxy variables when the client is built; keep
+            # loopback traffic direct even on proxied dev machines.
+            with mock.patch.dict(os.environ), mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value=settings):
+                for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
+                    os.environ.pop(var, None)
+                os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+                items = internal_voice_todo_items("买牛奶 两盒", timeout=20)
+            self.assertEqual(items, [{"title": "买牛奶", "description": "两盒"}])
+            self.assertEqual(seen_requests[0]["path"], "/v1/chat/completions")
+            self.assertEqual(seen_requests[0]["model"], "test-model")
+            self.assertIn("买牛奶", seen_requests[0]["messages"][-1]["content"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_llm_provider_settings_api_round_trip(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({
+                    "voice_agent": "internal",
+                    "llm_provider": "openai",
+                    "llm_base_url": "http://127.0.0.1:1234/v1",
+                    "llm_model": "gpt-4o-mini",
+                    "llm_api_key": "sk-test-123",
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["voice_agent"], "internal")
+            self.assertEqual(payload["llm_provider"], "openai")
+            self.assertEqual(payload["llm_base_url"], "http://127.0.0.1:1234/v1")
+            self.assertEqual(payload["llm_model"], "gpt-4o-mini")
+            self.assertTrue(payload["llm_api_key_set"])
+            self.assertNotIn("llm_api_key", payload)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({
+                    "voice_agent": "codex",
+                    "llm_provider": "anthropic",
+                    "llm_base_url": "",
+                    "llm_model": "claude-opus-5",
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["llm_provider"], "anthropic")
+            self.assertEqual(payload["llm_base_url"], DEFAULT_LLM_BASE_URLS["anthropic"])
+            self.assertTrue(payload["llm_api_key_set"], "empty llm_api_key must keep the stored key")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"voice_agent": "codex", "llm_provider": "gpt"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"voice_agent": "codex", "llm_base_url": "http://"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/state")
+            response = client.getresponse()
+            state_payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(state_payload["llm_provider"], "anthropic")
+            self.assertEqual(state_payload["llm_model"], "claude-opus-5")
+            self.assertTrue(state_payload["llm_api_key_set"])
+            self.assertNotIn("llm_api_key", state_payload)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

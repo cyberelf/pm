@@ -251,6 +251,10 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
 
 
 def invoke_provider(provider, context, timeout=300):
+    if provider == "internal" and not fake_provider_enabled():
+        from .internal_agent import generate_internal_report
+
+        return generate_internal_report(context, timeout=timeout)
     with tempfile.TemporaryDirectory(prefix="weekly-report-") as tmp:
         tmp_path = Path(tmp)
         output_path = (tmp_path / "report.md").resolve()
@@ -412,6 +416,29 @@ def build_claude_evidence_prompt(context):
         "Claude Code CLI tool execution is disabled for this provider path. "
         "The application has retrieved the following bounded evidence through its read-only platform context CLI. "
         "Use only this evidence. Do not read application files, uploaded files, SQLite databases, or git hosting services directly. Do not run `gh` or `glab`.\n\n"
+        "Use project profile and plan to understand description, background, objectives, constraints, milestones, and deliverables. "
+        "Evaluate this week's progress against plan and weekly planned outcomes. "
+        "Use repository notes to interpret what each repo means in this project. "
+        "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
+        "For every connected repository, include a short per-repo section. "
+        "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "
+        "If there are no new materials, say so explicitly. "
+        "The risk section must include observed risks plus your forecast from the evidence.\n\n"
+        "Required Markdown structure:\n\n"
+        f"{context['report_template']}\n\n"
+        "Evidence JSON:\n\n"
+        f"```json\n{json.dumps(evidence, ensure_ascii=False, indent=2)}\n```"
+    )
+
+
+def build_internal_evidence_prompt(context):
+    evidence = compact_evidence(context)
+    return (
+        f"{context['system_prompt']}\n\n"
+        "You are generating a weekly project report. Return Markdown only. Do not describe your process.\n\n"
+        "This report is generated in-process without tool execution. "
+        "The application has retrieved the following bounded evidence from the local workspace. "
+        "Use only this evidence. Do not invent facts.\n\n"
         "Use project profile and plan to understand description, background, objectives, constraints, milestones, and deliverables. "
         "Evaluate this week's progress against plan and weekly planned outcomes. "
         "Use repository notes to interpret what each repo means in this project. "

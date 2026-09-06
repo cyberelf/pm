@@ -38,9 +38,26 @@ def load_env_file(path=None):
     return applied
 
 WORKSPACE_USER = "local-user"
-SUPPORTED_PROVIDERS = {"codex", "claude"}
+SUPPORTED_PROVIDERS = {"codex", "claude", "internal"}
+INTERNAL_AGENT = "internal"
 VOICE_AGENT_SETTING = "voice_agent"
 DEFAULT_VOICE_AGENT = "codex"
+SUPPORTED_LLM_PROVIDERS = {"openai", "anthropic"}
+LLM_PROVIDER_SETTING = "llm_provider"
+LLM_BASE_URL_SETTING = "llm_base_url"
+LLM_API_KEY_SETTING = "llm_api_key"
+LLM_MODEL_SETTING = "llm_model"
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_LLM_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+}
+LLM_API_KEY_ENV_VARS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+LLM_REPORT_MAX_TOKENS = 16000
+LLM_VOICE_MAX_TOKENS = 4096
 ASR_ENDPOINT_SETTING = "asr_endpoint"
 ASR_MODEL_SETTING = "asr_model"
 DEFAULT_ASR_ENDPOINT = "http://127.0.0.1:8766/inference"

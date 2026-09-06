@@ -7,6 +7,7 @@ from .config import (
     GIT_MODE_GITHUB,
     GIT_MODE_GITLAB,
     SUPPORTED_GIT_MODES,
+    SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_MATERIAL_EXTENSIONS,
     SUPPORTED_PROJECT_STATUSES,
     SUPPORTED_PROVIDERS,
@@ -33,6 +34,22 @@ def require_project_name(data):
 def validate_provider(provider):
     if provider not in SUPPORTED_PROVIDERS:
         raise ValidationError("unsupported report provider")
+
+
+def validate_llm_provider(provider):
+    if provider not in SUPPORTED_LLM_PROVIDERS:
+        raise ValidationError("unsupported LLM provider; use openai or anthropic")
+    return provider
+
+
+def validate_llm_base_url(url):
+    value = (url or "").strip()
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValidationError("invalid LLM base URL; use http(s)://host[:port][/path]")
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
 
 
 def validate_project_status(status):

@@ -177,6 +177,13 @@ def convert_transcript_to_todos(transcript, provider, timeout=120):
 
     if fake_provider_enabled():
         return fallback_voice_items(transcript), ""
+    if provider == "internal":
+        from .internal_agent import internal_voice_todo_items
+
+        try:
+            return internal_voice_todo_items(transcript, timeout=timeout), ""
+        except Exception as exc:
+            return fallback_voice_items(transcript), str(exc)[:2000]
     prompt = build_voice_todo_prompt(transcript)
     try:
         with tempfile.TemporaryDirectory(prefix="voice-todo-") as tmp:
