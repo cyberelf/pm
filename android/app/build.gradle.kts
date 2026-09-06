@@ -18,6 +18,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Enables the createDebugUnitTestCoverageReport task (JaCoCo).
+            enableUnitTestCoverage = true
+        }
         release {
             isMinifyEnabled = false
         }

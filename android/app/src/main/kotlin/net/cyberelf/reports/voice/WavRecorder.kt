@@ -8,6 +8,15 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import kotlin.math.abs
 
+/** Recording surface consumed by the ViewModel; lets tests substitute a
+ *  fake recorder instead of touching AudioRecord on the JVM. */
+interface VoiceRecorder {
+    val isRecording: Boolean
+    val recordedBytes: Int
+    fun start()
+    fun stop(): ByteArray
+}
+
 /** Captures mono 16 kHz 16-bit PCM with AudioRecord and produces a complete
  *  WAV file's bytes on stop. Runs the capture loop on a dedicated thread and
  *  reports peak amplitude (0..100) roughly 30x per second for UI metering.
@@ -17,7 +26,7 @@ import kotlin.math.abs
 class WavRecorder(
     private val sampleRate: Int = 16_000,
     private val onAmplitude: (Int) -> Unit = {},
-) {
+) : VoiceRecorder {
 
     private var audioRecord: AudioRecord? = null
     private var captureThread: Thread? = null
@@ -26,13 +35,13 @@ class WavRecorder(
     @Volatile
     private var capturing = false
 
-    val isRecording: Boolean get() = capturing
+    override val isRecording: Boolean get() = capturing
 
-    val recordedBytes: Int
+    override val recordedBytes: Int
         get() = synchronized(pcmBuffer) { pcmBuffer.size() }
 
     @SuppressLint("MissingPermission") // the record screen gates on the runtime grant
-    fun start() {
+    override fun start() {
         check(!capturing) { "recorder already running" }
         val minBuffer = AudioRecord.getMinBufferSize(
             sampleRate,
@@ -83,7 +92,7 @@ class WavRecorder(
     }
 
     /** Stops capture and returns the full WAV bytes recorded so far. */
-    fun stop(): ByteArray {
+    override fun stop(): ByteArray {
         if (!capturing) throw IOException("recorder is not running")
         capturing = false
         captureThread?.join(2_000)

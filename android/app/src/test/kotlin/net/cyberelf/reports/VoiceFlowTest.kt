@@ -33,7 +33,7 @@ class VoiceFlowTest {
             CertTrust.okHttpClient(null), // http MockWebServer bypasses TLS
             server.url("/").toString(),
         )
-        return VoiceRepository(apiProvider = { api }) { slept += it }
+        return VoiceRepository(apiProvider = { api }, pollSleep = { slept += it })
     }
 
     @Before

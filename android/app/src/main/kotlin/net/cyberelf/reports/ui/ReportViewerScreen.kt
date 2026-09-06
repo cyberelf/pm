@@ -31,6 +31,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -122,12 +123,12 @@ fun ReportViewerScreen(
 
 @Composable
 private fun ReportWebView(html: String, palette: ViewerPalette) {
-    val wrapped = wrapReportHtml(html, palette)
+    val wrapped = wrapReportHtml(html, isSystemInDarkTheme())
     AndroidView(
         factory = { context ->
             WebView(context).apply {
                 webViewClient = WebViewClient()
-                setBackgroundColor(palette.background.hashCode())
+                setBackgroundColor(palette.background.toArgb())
             }
         },
         update = { webView ->
@@ -141,7 +142,24 @@ private fun ReportWebView(html: String, palette: ViewerPalette) {
 }
 
 /** Wraps the server-rendered fragment with viewport + theme CSS. */
-private fun wrapReportHtml(contentHtml: String, palette: ViewerPalette): String {
+internal fun wrapReportHtml(contentHtml: String, dark: Boolean): String {
+    val palette = if (dark) {
+        ViewerPalette(
+            background = ReportsTokens.surfaceDark,
+            foreground = "#ffffff",
+            muted = "#a1a1aa",
+            line = "#2a2a2a",
+            codeBackground = "#1a1a1a",
+        )
+    } else {
+        ViewerPalette(
+            background = ReportsTokens.canvas,
+            foreground = "#111111",
+            muted = "#6b7280",
+            line = "#e5e7eb",
+            codeBackground = "#f5f5f5",
+        )
+    }
     val backgroundHex = hexOf(palette.background)
     return """
         <!DOCTYPE html>

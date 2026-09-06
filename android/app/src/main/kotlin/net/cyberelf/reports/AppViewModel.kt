@@ -1,6 +1,6 @@
 package net.cyberelf.reports
 
-import android.app.Application
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -21,6 +21,7 @@ import net.cyberelf.reports.data.BoardResult
 import net.cyberelf.reports.data.CertTrust
 import net.cyberelf.reports.data.ConnResult
 import net.cyberelf.reports.data.ProjectDto
+import net.cyberelf.reports.data.ReportsBackend
 import net.cyberelf.reports.data.ReportsRepository
 import net.cyberelf.reports.data.ServerUrl
 import net.cyberelf.reports.data.SettingsStore
@@ -29,6 +30,7 @@ import net.cyberelf.reports.data.WorkspaceDto
 import net.cyberelf.reports.data.VoiceRepository
 import net.cyberelf.reports.data.VoiceSubmitResult
 import net.cyberelf.reports.data.friendlyMessage
+import net.cyberelf.reports.voice.VoiceRecorder
 import net.cyberelf.reports.voice.WavRecorder
 import android.content.Intent
 import android.net.Uri
@@ -75,11 +77,20 @@ data class ReportViewerUi(
     val error: String? = null,
 )
 
+/** Pure so the URL rule is testable without touching android.net.Uri. */
+internal fun reportPdfUrl(serverUrl: String, projectId: Long, weekKey: String): String =
+    ServerUrl.normalize(serverUrl) + "api/projects/$projectId/reports/$weekKey/pdf"
+
 class AppViewModel(
-    private val app: Application,
-    private val repository: ReportsRepository,
+    private val backend: ReportsBackend,
     private val voiceRepository: VoiceRepository,
     private val boardRepository: BoardRepository,
+    /** Cache dir for failed-recording retries; null disables persistence. */
+    private val cacheDir: File? = null,
+    private val startActivity: (Intent) -> Unit = {},
+    private val recorderFactory: ((Int) -> Unit) -> VoiceRecorder = { onAmplitude ->
+        WavRecorder(onAmplitude = onAmplitude)
+    },
 ) : ViewModel() {
 
     enum class Tab { Reports, Board }
@@ -118,14 +129,14 @@ class AppViewModel(
     private val mutableState = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = mutableState.asStateFlow()
 
-    private var wavRecorder: WavRecorder? = null
+    private var wavRecorder: VoiceRecorder? = null
     private var recordingTimer: Job? = null
     private var pollJob: Job? = null
     private var lastRecording: ByteArray? = null
 
     init {
         viewModelScope.launch {
-            val saved = repository.currentSettings()
+            val saved = backend.currentSettings()
             mutableState.update { it.copy(settings = saved, ready = true) }
             // Silent reconnect on launch when a fingerprint is already stored.
             if (saved.certSha256.isNotBlank()) {
@@ -224,7 +235,7 @@ class AppViewModel(
     fun loadWorkspace(projectId: Long) {
         viewModelScope.launch {
             mutableState.update { it.copy(workspaceLoading = true, workspaceError = null) }
-            val result = repository.workspace(projectId)
+            val result = backend.workspace(projectId)
             mutableState.update { s ->
                 if (s.selectedProjectId != projectId) return@update s // selection moved on; drop stale payload
                 result.fold(
@@ -258,7 +269,7 @@ class AppViewModel(
             it.copy(reportViewer = ReportViewerUi(weekKey, html = null, isCurrent = false, loading = true))
         }
         viewModelScope.launch {
-            val result = repository.archivedReport(projectId, weekKey)
+            val result = backend.archivedReport(projectId, weekKey)
             mutableState.update { s ->
                 val viewer = s.reportViewer ?: return@update s
                 if (viewer.weekKey != weekKey) return@update s
@@ -280,12 +291,8 @@ class AppViewModel(
         val current = mutableState.value
         val viewer = current.reportViewer ?: return
         val project = current.workspace?.project ?: return
-        val url = ServerUrl.normalize(current.settings.serverUrl) +
-            "api/projects/${project.id}/reports/${viewer.weekKey}/pdf"
         try {
-            app.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(reportPdfUrl(current.settings.serverUrl, project.id, viewer.weekKey))))
         } catch (e: Exception) {
             mutableState.update { it.copy(finishedJobNotice = "无法打开 PDF：${e.message ?: "没有可用的浏览器"}") }
         }
@@ -296,11 +303,11 @@ class AppViewModel(
         if (mutableState.value.connection is ConnectionUi.Testing) return
         mutableState.update { it.copy(connection = ConnectionUi.Testing) }
         viewModelScope.launch {
-            when (val result = repository.connect(serverUrl, certSha256)) {
+            when (val result = backend.connect(serverUrl, certSha256)) {
                 is ConnResult.Online -> {
                     val url = ServerUrl.normalize(serverUrl)
                     val fingerprint = normalizedFingerprint(certSha256)
-                    repository.save(url, fingerprint)
+                    backend.save(url, fingerprint)
                     mutableState.update {
                         it.copy(
                             settings = it.settings.copy(
@@ -324,7 +331,7 @@ class AppViewModel(
     fun probeFingerprint(serverUrl: String) {
         mutableState.update { it.copy(fingerprintProbe = FingerprintProbe.Probing) }
         viewModelScope.launch {
-            val result = repository.probeCertificateFingerprint(serverUrl)
+            val result = backend.probeCertificateFingerprint(serverUrl)
             mutableState.update {
                 it.copy(
                     fingerprintProbe = result.fold(
@@ -365,7 +372,7 @@ class AppViewModel(
 
     fun startRecording() {
         if (mutableState.value.voice !is VoiceUi.Ready) return
-        val recorder = WavRecorder { amplitude ->
+        val recorder = recorderFactory { amplitude ->
             val voice = mutableState.value.voice
             if (voice is VoiceUi.Recording && voice.amplitude != amplitude) {
                 mutableState.update { s ->
@@ -414,7 +421,7 @@ class AppViewModel(
         lastRecording = wav
         viewModelScope.launch {
             // Best-effort persistence so a retry survives the sheet closing.
-            runCatching { File(app.cacheDir, CACHE_FILE_NAME).writeBytes(wav) }
+            cacheDir?.let { dir -> runCatching { File(dir, CACHE_FILE_NAME).writeBytes(wav) } }
         }
         upload { voiceRepository.submitAudio(wav) }
     }
@@ -429,7 +436,9 @@ class AppViewModel(
 
     fun retryUpload() {
         val wav = lastRecording
-            ?: runCatching { File(app.cacheDir, CACHE_FILE_NAME).takeIf { it.exists() }?.readBytes() }.getOrNull()
+            ?: cacheDir?.let { dir ->
+                runCatching { File(dir, CACHE_FILE_NAME).takeIf { it.exists() }?.readBytes() }.getOrNull()
+            }
             ?: return
         upload { voiceRepository.submitAudio(wav) }
     }
@@ -532,7 +541,7 @@ class AppViewModel(
         if (mutableState.value.connection is ConnectionUi.Testing) return
         if (!silent) mutableState.update { it.copy(connection = ConnectionUi.Testing) }
         viewModelScope.launch {
-            when (val result = repository.connect(serverUrl, certSha256)) {
+            when (val result = backend.connect(serverUrl, certSha256)) {
                 is ConnResult.Online -> {
                     mutableState.update {
                         it.copy(
@@ -571,10 +580,14 @@ class AppViewModel(
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]!!
                 val store = SettingsStore(app)
                 AppViewModel(
-                    app,
-                    ReportsRepository(store),
-                    VoiceRepository.fromSettings(store),
-                    BoardRepository.fromSettings(store),
+                    backend = ReportsRepository(store),
+                    voiceRepository = VoiceRepository.fromSettings(store),
+                    boardRepository = BoardRepository.fromSettings(store),
+                    cacheDir = app.cacheDir,
+                    // NEW_TASK lives here so the ViewModel stays context-free.
+                    startActivity = { intent ->
+                        app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    },
                 )
             }
         }
