@@ -1936,6 +1936,33 @@ function attachSwipeNav(el, options = {}) {
     lastX = event.touches[0].clientX;
     el.scrollLeft = startLeft - (lastX - startX);
   }, { passive: false });
+  let watchdogLast = -1;
+  let watchdogRetries = 0;
+  const watchSnap = (target, deadline) => {
+    if (el._pageSnapPending !== target) return;
+    if (Math.abs(el.scrollLeft - target) <= 2) {
+      el._pageSnapPending = undefined;
+      return;
+    }
+    if (el.scrollLeft !== watchdogLast && Date.now() < deadline) {
+      watchdogLast = el.scrollLeft;
+      setTimeout(() => watchSnap(target, deadline), 100);
+      return;
+    }
+    // The smooth snap was canceled or overridden by native momentum (iOS
+    // ignores scroll writes mid-momentum); realign once scrolling is idle.
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (watchdogRetries < 2 && Math.abs(el.scrollLeft - target) > 40) {
+      watchdogRetries += 1;
+      watchdogLast = -1;
+      el.scrollTo({ left: target, behavior: reduce ? "auto" : "smooth" });
+      setTimeout(() => watchSnap(target, Date.now() + 700), 100);
+      return;
+    }
+    el.scrollLeft = target;
+    el._pageSnapPending = undefined;
+    watchdogRetries = 0;
+  };
   const settle = () => {
     const width = el.clientWidth || 1;
     const dx = lastX - startX;
@@ -1953,14 +1980,10 @@ function attachSwipeNav(el, options = {}) {
     const target = index * width;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     el._pageSnapPending = target;
+    watchdogRetries = 0;
+    watchdogLast = -1;
     el.scrollTo({ left: target, behavior: reduce ? "auto" : "smooth" });
-    setTimeout(() => {
-      // a re-render or native momentum can interrupt the smooth snap; force the page-aligned position
-      if (el._pageSnapPending === target && Math.abs(el.scrollLeft - target) > 2) {
-        el.scrollLeft = target;
-      }
-      if (el._pageSnapPending === target) el._pageSnapPending = undefined;
-    }, reduce ? 80 : 440);
+    setTimeout(() => watchSnap(target, Date.now() + 2000), 100);
     if (options.onPage) options.onPage(index);
     gesture = "idle";
   };
