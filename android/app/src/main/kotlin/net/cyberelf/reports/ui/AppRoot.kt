@@ -1,7 +1,13 @@
 package net.cyberelf.reports.ui
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.ViewKanban
@@ -15,16 +21,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import net.cyberelf.reports.AppViewModel
+import net.cyberelf.reports.VoiceUi
 import net.cyberelf.reports.ui.theme.ReportsTokens
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -47,6 +57,19 @@ fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory))
     }
 
     val context = LocalContext.current
+    if (state.voice != VoiceUi.Hidden) {
+        RecordScreen(
+            voice = state.voice,
+            onStartRecording = viewModel::startRecording,
+            onStopRecording = viewModel::stopRecording,
+            onSubmitText = viewModel::submitText,
+            onRetryUpload = viewModel::retryUpload,
+            onCancelJob = viewModel::cancelJob,
+            onClose = viewModel::closeVoice,
+        )
+        return
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -80,9 +103,8 @@ fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory))
         },
         floatingActionButtonPosition = FabPosition.Center,
         floatingActionButton = {
-            // M1 wires recording; until then the FAB renders as a disabled placeholder.
             FloatingActionButton(
-                onClick = {},
+                onClick = viewModel::openVoice,
                 containerColor = ReportsTokens.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
             ) {
@@ -90,19 +112,46 @@ fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory))
             }
         },
     ) { padding ->
-        when (state.tab) {
-            AppViewModel.Tab.Reports -> HomeScreen(
-                connection = state.connection,
-                projects = state.projects,
-                selectedProjectId = state.selectedProject?.id,
-                onSelectProject = viewModel::selectProject,
-                onRetry = viewModel::refresh,
-                onOpenSettings = viewModel::openSettings,
-                modifier = Modifier.padding(padding),
+        Column(Modifier.padding(padding)) {
+            state.finishedJobNotice?.let { notice ->
+                JobNoticeBar(notice, onDismiss = viewModel::dismissFinishedNotice)
+            }
+            when (state.tab) {
+                AppViewModel.Tab.Reports -> HomeScreen(
+                    connection = state.connection,
+                    projects = state.projects,
+                    selectedProjectId = state.selectedProject?.id,
+                    onSelectProject = viewModel::selectProject,
+                    onRetry = viewModel::refresh,
+                    onOpenSettings = viewModel::openSettings,
+                )
+                AppViewModel.Tab.Board -> BoardScreen()
+            }
+        }
+    }
+}
+
+@Composable
+private fun JobNoticeBar(notice: String, onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 14.dp),
+        ) {
+            Text(
+                notice,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
             )
-            AppViewModel.Tab.Board -> BoardScreen(
-                modifier = Modifier.padding(padding),
-            )
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Filled.Close, contentDescription = "关闭提示", modifier = Modifier.size(18.dp))
+            }
         }
     }
 }

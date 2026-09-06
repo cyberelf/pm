@@ -1,15 +1,19 @@
 package net.cyberelf.reports
 
+import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.CreationExtras
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import net.cyberelf.reports.data.AppSettings
 import net.cyberelf.reports.data.CertTrust
@@ -17,6 +21,13 @@ import net.cyberelf.reports.data.ConnResult
 import net.cyberelf.reports.data.ProjectDto
 import net.cyberelf.reports.data.ReportsRepository
 import net.cyberelf.reports.data.ServerUrl
+import net.cyberelf.reports.data.SettingsStore
+import net.cyberelf.reports.data.TodoDto
+import net.cyberelf.reports.data.VoiceRepository
+import net.cyberelf.reports.data.VoiceSubmitResult
+import net.cyberelf.reports.data.friendlyMessage
+import net.cyberelf.reports.voice.WavRecorder
+import java.io.File
 
 sealed interface ConnectionUi {
     data object Idle : ConnectionUi
@@ -32,7 +43,30 @@ sealed interface FingerprintProbe {
     data class Failed(val message: String) : FingerprintProbe
 }
 
-class AppViewModel(private val repository: ReportsRepository) : ViewModel() {
+/** Full-screen voice sheet state machine. The server runs one voice job at a
+ *  time; a 409 on submit adopts the active job's progress instead of failing. */
+sealed interface VoiceUi {
+    data object Hidden : VoiceUi
+    data object Ready : VoiceUi
+    data class Recording(val seconds: Long, val amplitude: Int) : VoiceUi
+    data object Uploading : VoiceUi
+    data class Running(val jobId: Long, val stage: String, val adopted: Boolean) : VoiceUi
+    data class Completed(
+        val transcript: String,
+        val newTodos: List<TodoDto>,
+        val fallback: Boolean,
+        val structuringError: String,
+    ) : VoiceUi
+
+    data object Cancelled : VoiceUi
+    data class Failed(val message: String, val canRetryUpload: Boolean) : VoiceUi
+}
+
+class AppViewModel(
+    private val app: Application,
+    private val repository: ReportsRepository,
+    private val voiceRepository: VoiceRepository,
+) : ViewModel() {
 
     enum class Tab { Reports, Board }
 
@@ -50,6 +84,8 @@ class AppViewModel(private val repository: ReportsRepository) : ViewModel() {
         val projects: List<ProjectDto> = emptyList(),
         val selectedProjectId: Long? = null,
         val fingerprintProbe: FingerprintProbe = FingerprintProbe.Idle,
+        val voice: VoiceUi = VoiceUi.Hidden,
+        val finishedJobNotice: String? = null,
     ) {
         val selectedProject: ProjectDto?
             get() = projects.firstOrNull { it.id == selectedProjectId }
@@ -58,6 +94,11 @@ class AppViewModel(private val repository: ReportsRepository) : ViewModel() {
 
     private val mutableState = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = mutableState.asStateFlow()
+
+    private var wavRecorder: WavRecorder? = null
+    private var recordingTimer: Job? = null
+    private var pollJob: Job? = null
+    private var lastRecording: ByteArray? = null
 
     init {
         viewModelScope.launch {
@@ -133,6 +174,193 @@ class AppViewModel(private val repository: ReportsRepository) : ViewModel() {
         if (saved.certSha256.isNotBlank()) connect(saved.serverUrl, saved.certSha256, silent = true)
     }
 
+    // ---- Voice sheet ----
+
+    fun openVoice() {
+        if (mutableState.value.voice != VoiceUi.Hidden) return
+        mutableState.update { it.copy(voice = VoiceUi.Ready, finishedJobNotice = null) }
+    }
+
+    fun closeVoice() {
+        // Recording: discard the take. A running server job keeps processing
+        // remotely; its outcome lands in finishedJobNotice.
+        runCatching {
+            if (wavRecorder?.isRecording == true) wavRecorder?.stop()
+        }
+        wavRecorder = null
+        recordingTimer?.cancel()
+        recordingTimer = null
+        lastRecording = null
+        mutableState.update { it.copy(voice = VoiceUi.Hidden) }
+    }
+
+    fun dismissFinishedNotice() = mutableState.update { it.copy(finishedJobNotice = null) }
+
+    fun startRecording() {
+        if (mutableState.value.voice !is VoiceUi.Ready) return
+        val recorder = WavRecorder { amplitude ->
+            val voice = mutableState.value.voice
+            if (voice is VoiceUi.Recording && voice.amplitude != amplitude) {
+                mutableState.update { s ->
+                    (s.voice as? VoiceUi.Recording)?.let { s.copy(voice = it.copy(amplitude = amplitude)) } ?: s
+                }
+            }
+        }
+        try {
+            recorder.start()
+        } catch (e: Exception) {
+            mutableState.update { it.copy(voice = VoiceUi.Failed("无法开始录音：${e.message}", canRetryUpload = false)) }
+            return
+        }
+        wavRecorder = recorder
+        mutableState.update { it.copy(voice = VoiceUi.Recording(seconds = 0, amplitude = 0)) }
+        recordingTimer = viewModelScope.launch {
+            var seconds = 0L
+            while (isActive) {
+                delay(1_000)
+                seconds += 1
+                val voice = mutableState.value.voice
+                if (voice !is VoiceUi.Recording) break
+                if (seconds >= MAX_RECORDING_SECONDS) {
+                    stopRecording()
+                    break
+                }
+                mutableState.update { s ->
+                    (s.voice as? VoiceUi.Recording)?.let { s.copy(voice = it.copy(seconds = seconds)) } ?: s
+                }
+            }
+        }
+    }
+
+    fun stopRecording() {
+        val recorder = wavRecorder ?: return
+        recordingTimer?.cancel()
+        recordingTimer = null
+        val wav = try {
+            recorder.stop()
+        } catch (e: Exception) {
+            mutableState.update { it.copy(voice = VoiceUi.Failed("录音失败：${e.message}", canRetryUpload = false)) }
+            return
+        } finally {
+            wavRecorder = null
+        }
+        lastRecording = wav
+        viewModelScope.launch {
+            // Best-effort persistence so a retry survives the sheet closing.
+            runCatching { File(app.cacheDir, CACHE_FILE_NAME).writeBytes(wav) }
+        }
+        upload { voiceRepository.submitAudio(wav) }
+    }
+
+    /** Text-only path ({"text": ...}) when the mic is unavailable. */
+    fun submitText(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        lastRecording = null
+        upload { voiceRepository.submitText(trimmed) }
+    }
+
+    fun retryUpload() {
+        val wav = lastRecording
+            ?: runCatching { File(app.cacheDir, CACHE_FILE_NAME).takeIf { it.exists() }?.readBytes() }.getOrNull()
+            ?: return
+        upload { voiceRepository.submitAudio(wav) }
+    }
+
+    private fun upload(call: suspend () -> VoiceSubmitResult) {
+        mutableState.update { it.copy(voice = VoiceUi.Uploading) }
+        viewModelScope.launch {
+            when (val result = call()) {
+                is VoiceSubmitResult.Submitted -> watchJob(result.jobId, adopted = false)
+                is VoiceSubmitResult.Conflict -> {
+                    val activeId = result.activeJobId
+                    if (activeId != null && activeId > 0) {
+                        watchJob(activeId, adopted = true)
+                    } else {
+                        mutableState.update { it.copy(voice = VoiceUi.Failed(result.message, canRetryUpload = lastRecording != null)) }
+                    }
+                }
+                is VoiceSubmitResult.Rejected ->
+                    mutableState.update { it.copy(voice = VoiceUi.Failed(result.message, canRetryUpload = lastRecording != null)) }
+            }
+        }
+    }
+
+    /** Adopts an in-flight server job (409 takeover or re-open). */
+    fun watchActiveJob() {
+        viewModelScope.launch {
+            try {
+                val active = voiceRepository.activeJob()
+                if (active != null) watchJob(active.id, adopted = true)
+                else mutableState.update { it.copy(voice = VoiceUi.Ready) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                mutableState.update { it.copy(voice = VoiceUi.Failed(friendlyMessage(e), canRetryUpload = false)) }
+            }
+        }
+    }
+
+    fun cancelJob() {
+        val voice = mutableState.value.voice
+        val jobId = (voice as? VoiceUi.Running)?.jobId ?: return
+        viewModelScope.launch {
+            voiceRepository.cancel(jobId)
+            // Polling observes the cancelled terminal state; if the job had
+            // already completed the poll surfaces that instead.
+        }
+    }
+
+    private fun watchJob(jobId: Long, adopted: Boolean) {
+        pollJob?.cancel()
+        mutableState.update { it.copy(voice = VoiceUi.Running(jobId, stage = "transcribing", adopted = adopted)) }
+        pollJob = viewModelScope.launch {
+            val job = voiceRepository.pollUntilDone(jobId) { stage ->
+                mutableState.update { s ->
+                    (s.voice as? VoiceUi.Running)?.let { s.copy(voice = it.copy(stage = stage)) } ?: s
+                }
+            }
+            when (job.status) {
+                "completed" -> showCompleted(job.transcript, job.didFallback, job.error, job.todoIds)
+                "failed" -> {
+                    val message = job.error.ifBlank { "服务端处理失败" }
+                    if (mutableState.value.voice == VoiceUi.Hidden) {
+                        mutableState.update { it.copy(finishedJobNotice = "语音任务失败：$message") }
+                    } else {
+                        mutableState.update {
+                            it.copy(voice = VoiceUi.Failed(message, canRetryUpload = lastRecording != null))
+                        }
+                    }
+                }
+                else -> if (mutableState.value.voice != VoiceUi.Hidden) {
+                    mutableState.update { it.copy(voice = VoiceUi.Cancelled) }
+                }
+            }
+        }
+    }
+
+    private suspend fun showCompleted(transcript: String, fallback: Boolean, structuringError: String, todoIds: List<Long>) {
+        val newTodos = try {
+            val all = voiceRepository.todos()
+            if (todoIds.isEmpty()) emptyList() else all.filter { it.id in todoIds }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
+        mutableState.update {
+            if (it.voice == VoiceUi.Hidden) {
+                // The sheet was closed while the job ran; surface a banner.
+                it.copy(finishedJobNotice = "语音任务完成：生成 ${newTodos.size} 条 TODO")
+            } else {
+                it.copy(
+                    voice = VoiceUi.Completed(transcript, newTodos, fallback, structuringError),
+                    finishedJobNotice = null,
+                )
+            }
+        }
+    }
+
     private fun connect(serverUrl: String, certSha256: String, silent: Boolean) {
         if (mutableState.value.connection is ConnectionUi.Testing) return
         if (!silent) mutableState.update { it.copy(connection = ConnectionUi.Testing) }
@@ -156,10 +384,14 @@ class AppViewModel(private val repository: ReportsRepository) : ViewModel() {
     private fun normalizedFingerprint(raw: String): String = CertTrust.normalizeFingerprint(raw) ?: raw.trim()
 
     companion object {
+        const val MAX_RECORDING_SECONDS = 600L // ~13 min is the server cap; stop earlier
+        const val CACHE_FILE_NAME = "last_recording.wav"
+
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]!!
-                AppViewModel(ReportsRepository(net.cyberelf.reports.data.SettingsStore(app)))
+                val store = SettingsStore(app)
+                AppViewModel(app, ReportsRepository(store), VoiceRepository.fromSettings(store))
             }
         }
     }
