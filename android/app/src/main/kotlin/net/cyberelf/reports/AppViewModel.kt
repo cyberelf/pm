@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import net.cyberelf.reports.data.AppSettings
+import net.cyberelf.reports.data.BoardRepository
+import net.cyberelf.reports.data.BoardResult
 import net.cyberelf.reports.data.CertTrust
 import net.cyberelf.reports.data.ConnResult
 import net.cyberelf.reports.data.ProjectDto
@@ -66,6 +68,7 @@ class AppViewModel(
     private val app: Application,
     private val repository: ReportsRepository,
     private val voiceRepository: VoiceRepository,
+    private val boardRepository: BoardRepository,
 ) : ViewModel() {
 
     enum class Tab { Reports, Board }
@@ -86,6 +89,11 @@ class AppViewModel(
         val fingerprintProbe: FingerprintProbe = FingerprintProbe.Idle,
         val voice: VoiceUi = VoiceUi.Hidden,
         val finishedJobNotice: String? = null,
+        val todos: List<TodoDto> = emptyList(),
+        val todosLoaded: Boolean = false,
+        val boardBusy: Boolean = false,
+        val boardError: String? = null,
+        val closingTodo: TodoDto? = null,
     ) {
         val selectedProject: ProjectDto?
             get() = projects.firstOrNull { it.id == selectedProjectId }
@@ -121,7 +129,75 @@ class AppViewModel(
         mutableState.update { it.copy(destination = Destination.Main) }
     }
 
-    fun selectTab(tab: Tab) = mutableState.update { it.copy(tab = tab) }
+    fun selectTab(tab: Tab) {
+        mutableState.update { it.copy(tab = tab) }
+        if (tab == Tab.Board && !mutableState.value.todosLoaded) loadTodos()
+    }
+
+    // ---- Board ----
+
+    fun loadTodos() {
+        viewModelScope.launch {
+            mutableState.update { it.copy(boardBusy = true) }
+            try {
+                val list = boardRepository.todos()
+                mutableState.update { it.copy(todos = list, todosLoaded = true, boardBusy = false, boardError = null) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                mutableState.update { it.copy(boardBusy = false, boardError = friendlyMessage(e)) }
+            }
+        }
+    }
+
+    fun addTodo(title: String) {
+        if (title.isBlank()) return
+        boardAction { boardRepository.create(title) }
+    }
+
+    /** Moving into closed routes through the reason sheet; closing is final
+     *  server-side and the reason is mandatory. */
+    fun moveTodo(todo: TodoDto, toStatus: String) {
+        if (toStatus == todo.status) return
+        if (toStatus == "closed") {
+            mutableState.update { it.copy(closingTodo = todo) }
+        } else {
+            boardAction { boardRepository.move(todo.id, toStatus) }
+        }
+    }
+
+    fun confirmClose(reason: String, projectId: Long?) {
+        val todo = mutableState.value.closingTodo ?: return
+        if (reason.isBlank()) return
+        boardAction { boardRepository.close(todo.id, reason.trim(), projectId) }
+    }
+
+    fun dismissCloseSheet() = mutableState.update { it.copy(closingTodo = null) }
+
+    fun deleteTodo(todo: TodoDto) = boardAction { boardRepository.delete(todo.id) }
+
+    fun clearBoardError() = mutableState.update { it.copy(boardError = null) }
+
+    private fun boardAction(call: suspend () -> BoardResult) {
+        if (mutableState.value.boardBusy) return
+        mutableState.update { it.copy(boardBusy = true) }
+        viewModelScope.launch {
+            when (val result = call()) {
+                is BoardResult.Success -> mutableState.update {
+                    it.copy(
+                        todos = result.todos,
+                        todosLoaded = true,
+                        boardBusy = false,
+                        boardError = null,
+                        closingTodo = null,
+                    )
+                }
+                is BoardResult.Error -> mutableState.update {
+                    it.copy(boardBusy = false, boardError = result.message)
+                }
+            }
+        }
+    }
 
     fun selectProject(id: Long) = mutableState.update { it.copy(selectedProjectId = id) }
 
@@ -391,7 +467,12 @@ class AppViewModel(
             initializer {
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]!!
                 val store = SettingsStore(app)
-                AppViewModel(app, ReportsRepository(store), VoiceRepository.fromSettings(store))
+                AppViewModel(
+                    app,
+                    ReportsRepository(store),
+                    VoiceRepository.fromSettings(store),
+                    BoardRepository.fromSettings(store),
+                )
             }
         }
     }

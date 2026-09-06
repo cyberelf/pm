@@ -125,7 +125,21 @@ fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory))
                     onRetry = viewModel::refresh,
                     onOpenSettings = viewModel::openSettings,
                 )
-                AppViewModel.Tab.Board -> BoardScreen()
+                AppViewModel.Tab.Board -> BoardScreen(
+                    todos = state.todos,
+                    projects = state.projects,
+                    loaded = state.todosLoaded,
+                    busy = state.boardBusy,
+                    error = state.boardError,
+                    closingTodo = state.closingTodo,
+                    onRefresh = viewModel::loadTodos,
+                    onAdd = viewModel::addTodo,
+                    onMove = viewModel::moveTodo,
+                    onDelete = viewModel::deleteTodo,
+                    onCloseConfirm = viewModel::confirmClose,
+                    onCloseSheetDismiss = viewModel::dismissCloseSheet,
+                    onDismissError = viewModel::clearBoardError,
+                )
             }
         }
     }
