@@ -61,7 +61,10 @@ function applyTheme(themeId, persist = true) {
   const root = document.documentElement;
   if (root) root.dataset.theme = themeId;
   document.querySelectorAll(".theme-swatch").forEach((btn) => btn.classList.toggle("active", btn.dataset.themeId === themeId));
-  if (persist) localStorage.setItem("appTheme", themeId);
+  if (persist) {
+    localStorage.setItem("appTheme", themeId);
+    syncUiPreferencesToServer();
+  }
   updateThemeColorSurface();
 }
 
@@ -71,11 +74,31 @@ function applyAppearance(mode, persist = true) {
   const root = document.documentElement;
   if (root) root.dataset.mode = normalized;
   document.querySelectorAll(".mode-option").forEach((btn) => btn.classList.toggle("active", btn.dataset.modeOption === normalized));
-  if (persist) localStorage.setItem("appAppearance", normalized);
+  if (persist) {
+    localStorage.setItem("appAppearance", normalized);
+    syncUiPreferencesToServer();
+  }
   updateThemeColorSurface();
 }
+
 applyTheme(localStorage.getItem("appTheme") || "blue", false);
 applyAppearance(localStorage.getItem("appAppearance") || "light", false);
+
+let uiPreferencesSyncInFlight = false;
+
+async function syncUiPreferencesToServer() {
+  if (uiPreferencesSyncInFlight) return;
+  uiPreferencesSyncInFlight = true;
+  try {
+    await api("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ ui_theme: state.theme, ui_mode: state.appearance }),
+    });
+  } catch {
+    // 主题留在本机，下次修改时再同步
+  }
+  uiPreferencesSyncInFlight = false;
+}
 
 function renderAppearanceSettings() {
   const swatches = $("appearance-swatches");
@@ -151,6 +174,8 @@ async function loadState() {
   state.llmBaseUrl = data.llm_base_url || "";
   state.llmModel = data.llm_model || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
+  if (data.ui_theme && THEMES.some((theme) => theme.id === data.ui_theme)) applyTheme(data.ui_theme, false);
+  if (data.ui_mode) applyAppearance(data.ui_mode, false);
   renderVoiceSettings();
   renderLlmSettings();
   if (!state.projectId && state.projects.length) state.projectId = state.projects[0].id;
@@ -482,6 +507,7 @@ function setupVoiceTodoFab() {
   fab.addEventListener("pointercancel", cancelVoiceHold);
   fab.addEventListener("contextmenu", (event) => event.preventDefault());
   fab.addEventListener("click", () => {
+    if (Date.now() < voiceFabSuppressClickUntil) return;
     if (activeVoiceJobId() !== null) cancelActiveVoiceJob();
   });
 }
@@ -558,6 +584,9 @@ function endVoiceHold() {
   voiceCapture.pressActive = false;
   if (!voiceCapture.holding) return;
   voiceCapture.holding = false;
+  // the browser still fires a click after this release; it must not be
+  // mistaken for a stop-button press on the job this release submits
+  voiceFabSuppressClickUntil = Date.now() + 600;
   stopVoiceRecordingUi();
   const recorder = voiceCapture.recorder;
   if (!recorder || recorder.state === "inactive") {
@@ -572,6 +601,7 @@ function cancelVoiceHold() {
   voiceCapture.pressActive = false;
   if (!voiceCapture.holding) return;
   voiceCapture.holding = false;
+  voiceFabSuppressClickUntil = Date.now() + 600;
   stopVoiceRecordingUi();
   const recorder = voiceCapture.recorder;
   voiceCapture.recorder = null;
@@ -681,6 +711,7 @@ function updateVoiceFabMode() {
 }
 
 let voiceCancelInFlight = false;
+let voiceFabSuppressClickUntil = 0;
 
 async function cancelActiveVoiceJob() {
   if (voiceCancelInFlight) return;
@@ -806,8 +837,8 @@ function renderVoiceSettings() {
   if (endpoint) endpoint.value = state.asrEndpoint || "";
   const model = $("asr-model-input");
   if (model) model.value = state.asrModel || "";
-  const language = $("asr-language-input");
-  if (language) language.value = state.asrLanguage || "zh";
+  const language = $("asr-language-select");
+  if (language) language.value = ["zh", "en", "auto"].includes(state.asrLanguage) ? state.asrLanguage : "zh";
 }
 
 async function saveVoiceSettings() {
@@ -819,7 +850,7 @@ async function saveVoiceSettings() {
       voice_agent: select.value,
       asr_endpoint: $("asr-endpoint-input")?.value || "",
       asr_model: $("asr-model-input")?.value || "",
-      asr_language: $("asr-language-input")?.value || "",
+      asr_language: $("asr-language-select")?.value || "",
     }),
   });
   state.voiceAgent = data.voice_agent;

@@ -62,7 +62,8 @@ The first release is local-only: the backend must run on the same machine as the
 - A floating microphone button at the bottom right records while held. The browser only captures audio and converts it to a 16 kHz mono WAV locally (no speech leaves the machine at this stage); Safari and Chrome are supported. Microphone access requires a secure context: use `localhost` or the HTTPS listener (`https://<host>:8443`) from phones.
 - On release, the WAV goes to `POST /api/todos/voice`, which starts a background voice job and returns immediately. Only one voice job runs at a time; while one is active the mic button becomes a stop button that cancels it (`POST /api/voice-jobs/{id}/cancel`), and the progress bubble with the transcript survives page reloads (`GET /api/voice-jobs/active`). The configured agent (`codex` CLI, `claude` CLI, or the `internal` agent backed by the LLM provider settings) structures the transcript into one or more TODO items.
 - The ASR service is any OpenAI-compatible transcription endpoint. The default is the bundled whisper.cpp server (`/inference` on port 8766, large-v3-turbo model); install it with `scripts/install_asr_service.sh` after `brew install whisper-cpp` and placing a GGML model under `data/models/`.
-- Transcription requests carry a `language` hint from the 识别语言 setting, defaulting to `zh` so short Chinese clips are not mis-detected as English. Clearing the field lets the service decide.
+- Transcription requests carry a `language` hint from the 识别语言 dropdown, defaulting to 中文 (`zh`) so short Chinese clips are not mis-detected as English. `自动检测` omits the field so the service decides.
+- Appearance (theme color and light/dark mode) is stored server-side and synced across browsers; `PUT /api/settings` is a partial update, so each settings panel only writes the keys it manages.
 - If the configured agent fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
 
 ## Uploads

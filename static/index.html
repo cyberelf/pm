@@ -122,7 +122,11 @@
                   <input id="asr-model-input" placeholder="whisper">
                 </label>
                 <label>识别语言
-                  <input id="asr-language-input" placeholder="zh（留空由服务决定）">
+                  <select id="asr-language-select">
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                    <option value="auto">自动检测</option>
+                  </select>
                 </label>
                 <label>转换 Agent
                   <select id="voice-agent-select">
