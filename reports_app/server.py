@@ -1,4 +1,5 @@
 import base64
+import gzip
 import json
 import os
 import ssl
@@ -230,6 +231,41 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self.handle_write("DELETE")
 
+    def wants_gzip(self):
+        accept = self.headers.get("Accept-Encoding") or ""
+        return "gzip" in (part.strip().lower() for part in accept.split(","))
+
+    def _send_bytes(self, data, content_type, status=HTTPStatus.OK, extra_headers=None):
+        # The service answers on a VPN interface (utun, MTU 1420) where bulk
+        # transfers dominate request time; compress text payloads on the way
+        # out when the client accepts it.
+        if (
+            len(data) > 1024
+            and content_type.split(";")[0].strip() in {"application/json", "application/javascript", "text/css", "text/html"}
+            and self.wants_gzip()
+        ):
+            data = gzip.compress(data, 6)
+            gzipped = True
+        else:
+            gzipped = False
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Cache-Control", "no-store")
+        for name, value in extra_headers or []:
+            self.send_header(name, value)
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except OSError:
+            # a truncated keep-alive response would poison the next request
+            # parsed from this connection; close it instead
+            self.close_connection = True
+
     def handle_write(self, method):
         try:
             # Drain the body for every write request, even for handlers that
@@ -396,6 +432,13 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 6 and parts[3] == "materials" and parts[5] == "content" and method == "GET":
                     self.material_content(conn, project_id, int(parts[4]))
                     return
+                if len(parts) == 5 and parts[3] == "reports" and method == "GET":
+                    archived = report_archive(conn, project_id, parts[4])
+                    if not archived:
+                        self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
+                        return
+                    self.json(archived)
+                    return
                 if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
                     self.report_pdf(conn, project_id, parts[4])
                     return
@@ -525,42 +568,15 @@ class Handler(BaseHTTPRequestHandler):
         elif file_path.suffix == ".css":
             content_type = "text/css"
         data = file_path.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "keep-alive")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(data)
+        self._send_bytes(data, content_type)
 
     def json(self, payload, status=HTTPStatus.OK):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "keep-alive")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        try:
-            self.wfile.write(data)
-        except OSError:
-            # a truncated keep-alive response would poison the next request
-            # parsed from this connection; close it instead
-            self.close_connection = True
+        self._send_bytes(data, "application/json; charset=utf-8", status=status)
 
     def bytes_response(self, data, content_type, filename=None, status=HTTPStatus.OK):
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "keep-alive")
-        self.send_header("Cache-Control", "no-store")
-        if filename:
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-        self.end_headers()
-        try:
-            self.wfile.write(data)
-        except OSError:
-            self.close_connection = True
+        extra = [("Content-Disposition", f'attachment; filename="{filename}"')] if filename else None
+        self._send_bytes(data, content_type, status=status, extra_headers=extra)
 
     def report_pdf(self, conn, project_id, week_key):
         project = dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
@@ -626,7 +642,10 @@ def workspace(conn, project_id):
     ):
         item = dict(row)
         item["is_current_week"] = item["week_key"] == week_key
-        item["content_html"] = render_markdown(item["content_md"])
+        # Archived bodies load on demand through
+        # /api/projects/{id}/reports/{week_key}; rendering every old report
+        # here dominated project switch time.
+        item.pop("content_md")
         report_history.append(item)
     return {
         "project": project,
@@ -644,6 +663,22 @@ def workspace(conn, project_id):
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "progress_status": progress_status(conn, project_id),
     }
+
+
+def report_archive(conn, project_id, week_key):
+    row = conn.execute(
+        """
+        SELECT week_key, content_md, updated_at
+        FROM weekly_reports
+        WHERE project_id = ? AND week_key = ?
+        """,
+        (project_id, week_key),
+    ).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["content_html"] = render_markdown(item.pop("content_md"))
+    return item
 
 
 def source_diagnostics(conn, project_id, week_key):

@@ -1,4 +1,5 @@
 import base64
+import gzip
 import io
 import json
 import os
@@ -1627,6 +1628,33 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM weekly_reports").fetchone()["n"], 1)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM generation_jobs WHERE status = 'success'").fetchone()["n"], 2)
 
+    def test_api_responses_are_gzipped_only_when_client_accepts(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            # app.js is large enough to cross the compression threshold
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/app.js", headers={"Accept-Encoding": "gzip"})
+            response = client.getresponse()
+            body = response.read()
+            client.close()
+            self.assertEqual(response.headers.get("Content-Encoding"), "gzip")
+            self.assertGreater(len(gzip.decompress(body)), 1024)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/app.js")
+            response = client.getresponse()
+            body = response.read()
+            client.close()
+            self.assertIsNone(response.headers.get("Content-Encoding"))
+            self.assertGreater(len(body), 1024)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_workspace_includes_read_only_report_history(self):
         now_week = current_week_key("Asia/Shanghai")
         self.conn.execute(
@@ -1648,7 +1676,8 @@ class CoreTest(unittest.TestCase):
         self.assertEqual([item["week_key"] for item in data["report_history"]], [now_week, "2026-W25"])
         self.assertTrue(data["report_history"][0]["is_current_week"])
         self.assertFalse(data["report_history"][1]["is_current_week"])
-        self.assertIn("<h1>Old Report</h1>", data["report_history"][1]["content_html"])
+        self.assertNotIn("content_html", data["report_history"][1], "archived bodies must load on demand")
+        self.assertNotIn("content_md", data["report_history"][1])
 
     def test_scheduled_duplicate_skip_but_manual_forces(self):
         save_weekly_update(self.conn, self.project_id, {"completed": "A"})
@@ -2323,6 +2352,42 @@ class InternalAgentTest(unittest.TestCase):
             client.close()
             self.assertEqual(state_payload["ui_theme"], "green")
             self.assertEqual(state_payload["ui_mode"], "dark")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+    def test_archived_report_endpoint_renders_body_on_demand(self):
+        self.conn.execute(
+            """
+            INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
+            VALUES (?, '2026-W25', '# Old Report\n\n归档正文', 1, '2026-06-21T00:00:00+00:00', '2026-06-21T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", f"/api/projects/{self.project_id}/reports/2026-W25")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["week_key"], "2026-W25")
+            self.assertIn("<h1>Old Report</h1>", payload["content_html"])
+            self.assertNotIn("content_md", payload)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", f"/api/projects/{self.project_id}/reports/1999-W01")
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 404)
         finally:
             server.shutdown()
             server.server_close()

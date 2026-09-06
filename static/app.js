@@ -191,6 +191,22 @@ async function loadWorkspace() {
   updateWorkspace(await api(`/api/projects/${state.projectId}/workspace`));
 }
 
+async function loadWorkspaceBusy(title) {
+  // Only surface the overlay when the load actually takes a while, so
+  // quick switches stay snappy.
+  let shown = false;
+  const timer = setTimeout(() => {
+    shown = true;
+    setBusy(true, title, "正在加载项目数据…");
+  }, 150);
+  try {
+    await loadWorkspace();
+  } finally {
+    clearTimeout(timer);
+    if (shown) setBusy(false);
+  }
+}
+
 function updateWorkspace(workspace) {
   state.workspace = workspace;
   render();
@@ -929,8 +945,8 @@ function renderProjects() {
       closeProjectSheet();
       state.projectId = Number(btn.dataset.project);
       localStorage.setItem("currentProjectId", String(state.projectId));
-      await loadWorkspace();
       renderProjects();
+      await loadWorkspaceBusy("切换项目");
     };
   });
   document.querySelectorAll("[data-project-settings]").forEach(btn => {
@@ -940,7 +956,8 @@ function renderProjects() {
       if (state.projectId !== projectId) {
         state.projectId = projectId;
         localStorage.setItem("currentProjectId", String(state.projectId));
-        await loadWorkspace();
+        renderProjects();
+        await loadWorkspaceBusy("切换项目");
       }
       switchTab("settings");
       renderProjects();
@@ -1585,11 +1602,26 @@ function renderReport(ws) {
 
 function renderHistoryReport(report) {
   return `
-    <details class="history-report">
+    <details class="history-report" data-history-week="${escapeAttr(report.week_key)}" ontoggle="onHistoryReportToggle(this)">
       <summary><strong>${escapeHtml(report.week_key)}</strong><span>${escapeHtml(formatChinaTime(report.updated_at))}</span><span class="status">read-only</span><button onclick="event.preventDefault(); exportReportPdf('${escapeAttr(report.week_key)}')">导出 PDF</button></summary>
-      <article class="report">${report.content_html}</article>
+      <article class="report history-report-body"><p>展开时加载正文…</p></article>
     </details>
   `;
+}
+
+async function onHistoryReportToggle(details) {
+  if (!details.open) return;
+  const body = details.querySelector(".history-report-body");
+  if (!body || body.dataset.loaded === "1") return;
+  body.dataset.loaded = "1";
+  const weekKey = details.dataset.historyWeek;
+  try {
+    const data = await api(`/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}`);
+    body.innerHTML = data.content_html;
+  } catch (error) {
+    body.dataset.loaded = "";
+    body.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+  }
 }
 
 function exportReportPdf(weekKey) {
