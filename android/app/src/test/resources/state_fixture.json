@@ -1,0 +1,45 @@
+{
+  "projects": [
+    {
+      "id": 1,
+      "name": "周报工作台",
+      "description": "本地个人项目管理",
+      "owner": "local-user",
+      "start_date": "2026-08-03",
+      "end_date": null,
+      "status": "active",
+      "timezone": "Asia/Shanghai",
+      "report_provider": "codex",
+      "system_prompt": "",
+      "report_template": "",
+      "manual_background": "",
+      "manual_objectives": "",
+      "manual_constraints": "",
+      "updated_at": "2026-09-06T10:00:00+08:00",
+      "progress_status": "on track"
+    },
+    {
+      "id": 2,
+      "name": "另一个项目",
+      "description": "",
+      "owner": "local-user",
+      "start_date": "2026-09-01",
+      "end_date": null,
+      "status": "paused",
+      "timezone": "Asia/Shanghai",
+      "report_provider": "claude",
+      "updated_at": "2026-09-05T18:30:00+08:00",
+      "progress_status": "blocked"
+    }
+  ],
+  "workspace_user": "cyberelf",
+  "voice_agent": "codex",
+  "asr_endpoint": "http://127.0.0.1:8766/v1",
+  "asr_model": "base",
+  "asr_language": "zh",
+  "ui_theme": "",
+  "ui_mode": "",
+  "llm_provider": "openai",
+  "llm_base_url": "http://127.0.0.1:1234/v1",
+  "llm_model": ""
+}
