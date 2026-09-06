@@ -39,9 +39,20 @@ import net.cyberelf.reports.ui.theme.ReportsTokens
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory)) {
+fun AppRoot(
+    openVoiceOnStart: Boolean = false,
+    onVoiceStarted: () -> Unit = {},
+    viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     if (!state.ready) return
+
+    androidx.compose.runtime.LaunchedEffect(openVoiceOnStart) {
+        if (openVoiceOnStart) {
+            viewModel.openVoice()
+            onVoiceStarted()
+        }
+    }
 
     if (state.destination == AppViewModel.Destination.Settings) {
         SettingsScreen(

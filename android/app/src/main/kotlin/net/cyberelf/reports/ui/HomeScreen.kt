@@ -69,9 +69,20 @@ fun HomeScreen(
     when (connection) {
         is ConnectionUi.Offline -> OfflinePane(connection, onRetry, onOpenSettings, modifier)
         ConnectionUi.Idle, ConnectionUi.Testing -> ConnectingPane(modifier)
-        is ConnectionUi.Online -> Column(modifier.fillMaxSize()) {
-            ProjectSelector(projects, selectedProjectId, onSelectProject)
-            WorkspaceArea(workspace, workspaceLoading, workspaceError, onOpenReport, onRetry)
+        is ConnectionUi.Online -> {
+            if (projects.isEmpty()) {
+                Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "还没有项目，先到网页端创建",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Column(modifier.fillMaxSize()) {
+                    ProjectSelector(projects, selectedProjectId, onSelectProject)
+                    WorkspaceArea(workspace, workspaceLoading, workspaceError, onOpenReport, onRetry)
+                }
+            }
         }
     }
 }
