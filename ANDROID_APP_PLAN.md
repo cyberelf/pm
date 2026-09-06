@@ -126,9 +126,10 @@ android/
 
 ## 8. 测试策略
 
-- 单元测试：`VoiceJobPoller` 状态机（含 409/超时/取消）、WAV 头字节、repository 用 MockWebServer 对齐真实接口形状
+- 单元测试：ViewModel 状态机（FakeApi + 虚拟时间，覆盖语音任务生命周期/看板操作/周报查看/设置流转）、轮询退避与 409 互斥、WAV 头字节、repository 用 MockWebServer 对齐真实接口形状
+- 覆盖率：`./gradlew createDebugUnitTestCoverageReport`（JaCoCo XML/HTML 在 `app/build/reports/coverage/test/debug/`）；JVM 可测面（ViewModel + data 层）是覆盖重点
 - 契约保障：后端 `tests/` 已覆盖 API；App 侧以快照式 fixture（真实响应 JSON 存 `src/test/resources`）防字段漂移
-- 真机验收走各里程碑清单（本机无模拟器依赖）
+- 真机项（Compose UI、AudioRecord 录音循环、QS 磁贴）无法 JVM 单测，走真机验收清单
 
 ## 9. 风险与对策
 
