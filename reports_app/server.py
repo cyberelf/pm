@@ -467,7 +467,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except OSError:
+            # a truncated keep-alive response would poison the next request
+            # parsed from this connection; close it instead
+            self.close_connection = True
 
     def bytes_response(self, data, content_type, filename=None, status=HTTPStatus.OK):
         self.send_response(status)
@@ -478,7 +483,10 @@ class Handler(BaseHTTPRequestHandler):
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except OSError:
+            self.close_connection = True
 
     def report_pdf(self, conn, project_id, week_key):
         project = dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())

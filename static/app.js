@@ -81,13 +81,26 @@ function renderAppearanceSettings() {
 renderAppearanceSettings();
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    cache: "no-store",
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "request failed");
+  let res;
+  try {
+    res = await fetch(path, {
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...options,
+    });
+  } catch {
+    throw new Error("网络请求失败，请检查网络连接后重试");
+  }
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // Chrome's JSON parse error embeds the raw body head (e.g. "<html>…");
+    // surface a clear message with the status and body head instead.
+    throw new Error(`服务响应异常（HTTP ${res.status}）: ${text.slice(0, 100) || "空响应"}`);
+  }
+  if (!res.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
   return data;
 }
 
@@ -656,9 +669,13 @@ function updateVoiceFabMode() {
   fab.innerHTML = stopping ? VOICE_FAB_STOP_SVG : VOICE_FAB_MIC_SVG;
 }
 
+let voiceCancelInFlight = false;
+
 async function cancelActiveVoiceJob() {
+  if (voiceCancelInFlight) return;
   const id = activeVoiceJobId();
   if (id === null) return;
+  voiceCancelInFlight = true;
   try {
     await api(`/api/voice-jobs/${id}/cancel`, { method: "POST", body: "{}" });
     voiceJobs.delete(id);
@@ -667,6 +684,8 @@ async function cancelActiveVoiceJob() {
     // the job finished before the cancel landed; sync its final state instead
     pollVoiceJobs();
     return;
+  } finally {
+    voiceCancelInFlight = false;
   }
   renderVoiceJobProgress();
   updateVoiceFabMode();
@@ -712,7 +731,7 @@ async function submitVoiceTodo(blob) {
     updateVoiceFabMode();
     toast("语音已提交，后台转写整理中");
   } catch (error) {
-    toast(error.message);
+    toast(error.message === "another voice job is already running" ? "已有语音任务正在进行，请稍候" : error.message);
   }
 }
 

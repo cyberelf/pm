@@ -77,6 +77,9 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("window.isSecureContext", source)
         self.assertIn('`https://${location.hostname}:8443`', source)
         self.assertIn('"/api/todos/voice"', source)
+        self.assertIn('throw new Error(`服务响应异常（HTTP ${res.status}）: ${text.slice(0, 100) || "空响应"}`);', source)
+        self.assertIn('throw new Error("网络请求失败，请检查网络连接后重试");', source)
+        self.assertIn("voiceCancelInFlight", source)
         self.assertIn("`/api/voice-jobs/${id}`", source)
         self.assertIn('"/api/voice-jobs/active"', source)
         self.assertIn("`/api/voice-jobs/${id}/cancel`", source)
@@ -295,10 +298,12 @@ const fetchCalls = [];
 globalThis.fetch = async (path, options) => {
   fetchCalls.push({ path, options });
   const payload = JSON.parse(options.body);
+  const body = { todos: [{ id: 7, title: payload.title, description: payload.description, status: payload.status || "todo" }] };
   return {
     ok: true,
+    text: async () => JSON.stringify(body),
     async json() {
-      return { todos: [{ id: 7, title: payload.title, description: payload.description, status: payload.status || "todo" }] };
+      return body;
     },
   };
 };
@@ -372,7 +377,11 @@ const returnedWorkspace = {
 const fetchCalls = [];
 globalThis.fetch = async (path, options) => {
   fetchCalls.push({ path, options });
-  return { ok: true, async json() { return returnedWorkspace; } };
+  return {
+    ok: true,
+    text: async () => JSON.stringify(returnedWorkspace),
+    async json() { return returnedWorkspace; },
+  };
 };
 """
         assertions = r"""
@@ -389,8 +398,12 @@ globalThis.fetch = async (path, options) => {
 
   await generateReport();
 
-  if (state.workspace !== returnedWorkspace || renderedWorkspace !== returnedWorkspace) {
+  if (!state.workspace || !renderedWorkspace) {
     throw new Error("generateReport did not render the workspace returned by POST");
+  }
+  if (state.workspace.report.content_html !== returnedWorkspace.report.content_html
+    || renderedWorkspace.report.content_html !== returnedWorkspace.report.content_html) {
+    throw new Error("generateReport rendered a workspace other than the POST response");
   }
   if (fetchCalls.length !== 1) {
     throw new Error(`expected one generation request, received ${fetchCalls.length}`);
