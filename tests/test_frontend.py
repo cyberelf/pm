@@ -93,11 +93,11 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('throw new Error("网络请求失败，请检查网络连接后重试");', source)
         self.assertIn("voiceCancelInFlight", source)
         self.assertIn("`/api/voice-jobs/${id}`", source)
-        self.assertIn('"/api/voice-jobs/active"', source)
+        self.assertIn('"/api/task-queue"', source)
         self.assertIn("`/api/voice-jobs/${id}/cancel`", source)
         self.assertIn("function updateVoiceFabMode()", source)
-        self.assertIn("function restoreVoiceJobs()", source)
-        self.assertIn("restoreVoiceJobs();", source)
+        self.assertIn("function restoreQueues()", source)
+        self.assertIn("restoreQueues();", source)
         self.assertIn("VOICE_FAB_STOP_SVG", source)
         self.assertIn("function truncateVoiceTranscript", source)
         self.assertIn("cleaned.slice(0, 64)", source)
@@ -380,7 +380,7 @@ globalThis.fetch = async (path, options) => {
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
-    def test_generate_report_renders_returned_workspace_without_second_request(self):
+    def test_generate_report_submits_async_and_polls_task_queue(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
         harness = r"""
@@ -388,6 +388,7 @@ const testElements = new Map();
 function testElement() {
   return {
     textContent: "",
+    innerHTML: "",
     disabled: false,
     dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
@@ -404,18 +405,20 @@ globalThis.document = {
   querySelectorAll() { return []; },
 };
 globalThis.setTimeout = () => 0;
+globalThis.setInterval = () => 7;
+globalThis.clearInterval = () => {};
 globalThis.window = { confirm() { return false; } };
-const returnedWorkspace = {
-  project: { id: 1, name: "Demo" },
-  report: { content_html: "<h1>Fresh report</h1>" },
-};
+const responses = [];
 const fetchCalls = [];
 globalThis.fetch = async (path, options) => {
   fetchCalls.push({ path, options });
+  const body = responses.shift();
+  if (body === undefined) throw new Error(`unexpected fetch: ${path}`);
+  const payload = typeof body === "function" ? body() : body;
   return {
     ok: true,
-    text: async () => JSON.stringify(returnedWorkspace),
-    async json() { return returnedWorkspace; },
+    text: async () => JSON.stringify(payload),
+    async json() { return payload; },
   };
 };
 """
@@ -427,39 +430,74 @@ globalThis.fetch = async (path, options) => {
   if (extractedSummary !== "完成核心流程，并修复预览问题。") {
     throw new Error(`unexpected report summary: ${extractedSummary}`);
   }
-  let renderedWorkspace = null;
-  render = () => { renderedWorkspace = state.workspace; };
+  render = () => {};
+  toast = () => {};
   state.projectId = 1;
+  const runningQueue = {
+    capacity: 5,
+    parallelism: 2,
+    active: 1,
+    tasks: [{ kind: "report", id: 9, project_id: 1, project_name: "Demo", week_key: "2026-W36", trigger_type: "manual", status: "running" }],
+  };
+  const emptyQueue = { capacity: 5, parallelism: 2, active: 0, tasks: [] };
+  const finishedWorkspace = {
+    project: { id: 1, name: "Demo" },
+    jobs: [{ id: 9, status: "success" }],
+    report: { content_html: "<h1>Fresh report</h1>" },
+  };
+  responses.push(
+    { id: 9, status: "queued" },
+    runningQueue,
+    emptyQueue,
+    finishedWorkspace,
+  );
 
   await generateReport();
 
-  if (!state.workspace || !renderedWorkspace) {
-    throw new Error("generateReport did not render the workspace returned by POST");
+  if (fetchCalls[0].path !== "/api/projects/1/generate" || fetchCalls[0].options.method !== "POST") {
+    throw new Error("generation did not POST to the generate endpoint");
   }
-  if (state.workspace.report.content_html !== returnedWorkspace.report.content_html
-    || renderedWorkspace.report.content_html !== returnedWorkspace.report.content_html) {
-    throw new Error("generateReport rendered a workspace other than the POST response");
+  if (!reportJobs.get(9) || reportJobs.get(9).projectId !== 1) {
+    throw new Error("submitting generation did not track the queued job");
   }
-  if (fetchCalls.length !== 1) {
-    throw new Error(`expected one generation request, received ${fetchCalls.length}`);
+  if (queuePollTimer === 0) {
+    throw new Error("submitting generation did not start queue polling");
   }
-  if (fetchCalls[0].path !== "/api/projects/1/generate") {
-    throw new Error(`unexpected request path: ${fetchCalls[0].path}`);
+
+  await pollTaskQueue();
+  if (reportJobs.get(9).status !== "running") {
+    throw new Error("polling did not adopt the running status");
   }
-  if (fetchCalls[0].options.method !== "POST" || fetchCalls[0].options.cache !== "no-store") {
-    throw new Error("generation request did not use POST with cache disabled");
+  if (fetchCalls.length !== 2) {
+    throw new Error("a running task must not trigger a workspace refresh");
+  }
+
+  await pollTaskQueue();
+  if (reportJobs.size !== 0) {
+    throw new Error("the completed job stayed tracked after leaving the queue");
+  }
+  if (fetchCalls.length !== 4) {
+    throw new Error(`expected task-queue poll then workspace refresh, saw ${fetchCalls.map((c) => c.path).join(",")}`);
+  }
+  if (fetchCalls[3].path !== "/api/projects/1/workspace") {
+    throw new Error(`unexpected completion request: ${fetchCalls[3].path}`);
+  }
+  if (!state.workspace || state.workspace.project.id !== 1 || state.workspace.report.content_html !== finishedWorkspace.report.content_html) {
+    throw new Error("the finished workspace was not adopted");
+  }
+  if (queuePollTimer !== 0) {
+    throw new Error("polling did not stop after the queue drained");
   }
 
   state.projects = [{ id: 1, name: "Demo" }];
   confirmProjectGeneration(1);
-  if (fetchCalls.length !== 1) {
-    throw new Error("opening the message box started generation prematurely");
-  }
   if (state.pendingReportProjectId !== 1 || !$("report-confirm-dialog").open) {
     throw new Error("project-row generation did not open the app message box");
   }
+  responses.push({ id: 10, status: "queued" });
   await runConfirmedProjectGeneration();
-  if (fetchCalls.length !== 2 || fetchCalls[1].path !== "/api/projects/1/generate") {
+  const generateCalls = fetchCalls.filter((call) => call.path === "/api/projects/1/generate");
+  if (generateCalls.length !== 2) {
     throw new Error("confirmed project-row generation did not start");
   }
 })().catch((error) => {
@@ -476,6 +514,34 @@ globalThis.fetch = async (path, options) => {
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_task_queue_settings_and_progress_bubble(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        html = (ROOT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('id="queue-capacity-input"', html)
+        self.assertIn('id="queue-parallelism-input"', html)
+        self.assertIn('id="save-queue-settings"', html)
+        self.assertIn('id="task-queue-progress"', html)
+        self.assertIn("function renderQueueSettings()", source)
+        self.assertIn("async function saveQueueSettings()", source)
+        self.assertIn('queue_capacity: Number($("queue-capacity-input")?.value)', source)
+        self.assertIn('queue_parallelism: Number($("queue-parallelism-input")?.value)', source)
+        self.assertIn("state.queueCapacity = data.queue_capacity;", source)
+        self.assertIn("state.queueParallelism = data.queue_parallelism;", source)
+        self.assertIn("state.queueCapacity = data.queue_capacity || 5;", source)
+        self.assertIn("state.queueParallelism = data.queue_parallelism || 2;", source)
+        self.assertIn("renderQueueSettings();", source)
+        self.assertIn('$("save-queue-settings").onclick', source)
+        self.assertIn("function renderQueueProgress(data)", source)
+        self.assertIn("排队等待中…", source)
+        self.assertIn("task queue is full", source)
+        self.assertIn("排队中", source)
+        self.assertIn("已跳过", source)
+        self.assertIn(".task-queue-progress {", styles)
+        self.assertIn(".queue-task-line {", styles)
+        self.assertIn(".status.queued {", styles)
+        self.assertIn(".status.running {", styles)
 
 
 if __name__ == "__main__":

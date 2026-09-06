@@ -29,6 +29,8 @@ const state = {
   llmBaseUrl: "",
   llmModel: "",
   llmApiKeySet: false,
+  queueCapacity: 5,
+  queueParallelism: 2,
   theme: "blue",
   appearance: "light",
   branchOptions: {},
@@ -174,10 +176,13 @@ async function loadState() {
   state.llmBaseUrl = data.llm_base_url || "";
   state.llmModel = data.llm_model || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
+  state.queueCapacity = data.queue_capacity || 5;
+  state.queueParallelism = data.queue_parallelism || 2;
   if (data.ui_theme && THEMES.some((theme) => theme.id === data.ui_theme)) applyTheme(data.ui_theme, false);
   if (data.ui_mode) applyAppearance(data.ui_mode, false);
   renderVoiceSettings();
   renderLlmSettings();
+  renderQueueSettings();
   if (!state.projectId && state.projects.length) state.projectId = state.projects[0].id;
   if (state.projectId && !state.projects.some((p) => p.id === state.projectId)) {
     state.projectId = state.projects.length ? state.projects[0].id : null;
@@ -749,13 +754,24 @@ async function cancelActiveVoiceJob() {
   updateVoiceFabMode();
 }
 
-async function restoreVoiceJobs() {
+async function restoreQueues() {
   try {
-    const data = await api("/api/voice-jobs/active");
-    if (data.job) {
-      voiceJobs.set(data.job.id, { status: data.job.status, transcript: data.job.transcript || "" });
+    const data = await api("/api/task-queue");
+    const tasks = data.tasks || [];
+    for (const task of tasks) {
+      if (task.kind === "voice") {
+        voiceJobs.set(task.id, { status: task.status, transcript: "" });
+      } else if (task.kind === "report") {
+        reportJobs.set(task.id, { projectId: task.project_id, status: task.status });
+      }
+    }
+    if (voiceJobs.size) {
       renderVoiceJobProgress();
       startVoiceJobPolling();
+    }
+    if (reportJobs.size) {
+      renderQueueProgress(data);
+      startQueuePolling();
     }
   } catch {
     // transient error on load; polling can be restarted by the next submission
@@ -783,13 +799,15 @@ async function submitVoiceTodo(blob) {
   }
   try {
     const data = await api("/api/todos/voice", { method: "POST", body: JSON.stringify(payload) });
-    voiceJobs.set(data.id, { status: data.status || "transcribing", transcript: "" });
+    voiceJobs.set(data.id, { status: data.status || "queued", transcript: "" });
     renderVoiceJobProgress();
     startVoiceJobPolling();
     updateVoiceFabMode();
     toast("语音已提交，后台转写整理中");
   } catch (error) {
-    toast(error.message === "another voice job is already running" ? "已有语音任务正在进行，请稍候" : error.message);
+    toast(error.message.startsWith("task queue is full")
+      ? `任务队列已满（并行 ${state.queueParallelism}，容量 ${state.queueCapacity}），请稍后再试`
+      : error.message);
   }
 }
 
@@ -838,7 +856,11 @@ function renderVoiceJobProgress() {
   }
   const job = jobs[jobs.length - 1];
   bubble.classList.remove("hidden");
-  const stage = job.status === "structuring" ? "转写完成，正在整理 TODO…" : "正在转写语音…";
+  const stage = job.status === "structuring"
+    ? "转写完成，正在整理 TODO…"
+    : job.status === "queued"
+      ? "排队等待中…"
+      : "正在转写语音…";
   const transcript = truncateVoiceTranscript(job.transcript);
   bubble.innerHTML = `<small>${escapeHtml(stage)}</small>${
     transcript ? `<span class="voice-job-transcript">${escapeHtml(transcript)}</span>` : "<span class='voice-live-empty'>等待识别结果…</span>"
@@ -908,6 +930,28 @@ async function saveLlmSettings() {
   state.llmApiKeySet = !!data.llm_api_key_set;
   renderLlmSettings();
   toast("内部 Agent 设置已保存");
+}
+
+function renderQueueSettings() {
+  const capacity = $("queue-capacity-input");
+  if (!capacity) return;
+  capacity.value = state.queueCapacity || 5;
+  const parallel = $("queue-parallelism-input");
+  if (parallel) parallel.value = state.queueParallelism || 2;
+}
+
+async function saveQueueSettings() {
+  const data = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      queue_capacity: Number($("queue-capacity-input")?.value),
+      queue_parallelism: Number($("queue-parallelism-input")?.value),
+    }),
+  });
+  state.queueCapacity = data.queue_capacity;
+  state.queueParallelism = data.queue_parallelism;
+  renderQueueSettings();
+  toast("任务队列设置已保存");
 }
 
 function projectPaused(p) {
@@ -1642,16 +1686,83 @@ function renderRisks(ws) {
   `;
 }
 
+const reportJobs = new Map();
+let queuePollTimer = 0;
+
 async function generateReport() {
-  await withBusy("正在生成周报", "正在收集本周新增资料、GitHub commits，并等待本地 CLI 返回结果...", async () => {
-    toast("已开始生成");
-    const workspace = await api(`/api/projects/${state.projectId}/generate`, {
-      method: "POST",
-      body: JSON.stringify({ force: true }),
-    });
-    updateWorkspace(workspace);
-    toast("生成完成");
+  const data = await api(`/api/projects/${state.projectId}/generate`, {
+    method: "POST",
+    body: JSON.stringify({ force: true }),
   });
+  reportJobs.set(data.id, { projectId: state.projectId, status: data.status || "queued" });
+  toast("已加入生成队列，完成后自动刷新");
+  startQueuePolling();
+}
+
+function startQueuePolling() {
+  if (queuePollTimer) return;
+  queuePollTimer = setInterval(pollTaskQueue, 1500);
+}
+
+function stopQueuePolling() {
+  if (queuePollTimer) {
+    clearInterval(queuePollTimer);
+    queuePollTimer = 0;
+  }
+}
+
+async function pollTaskQueue() {
+  let data;
+  try {
+    data = await api("/api/task-queue");
+  } catch {
+    // transient network error; the next tick retries
+    return;
+  }
+  const tasks = data.tasks || [];
+  for (const [id, job] of Array.from(reportJobs.entries())) {
+    const task = tasks.find((item) => item.kind === "report" && item.id === id);
+    if (task) {
+      job.status = task.status;
+      continue;
+    }
+    // the job left the active set: it finished, failed, or was skipped
+    reportJobs.delete(id);
+    await reportJobFinished(id, job);
+  }
+  renderQueueProgress(data);
+  if (!reportJobs.size) stopQueuePolling();
+}
+
+async function reportJobFinished(jobId, job) {
+  let finished = null;
+  try {
+    finished = await api(`/api/projects/${job.projectId}/workspace`);
+  } catch {
+    toast("周报任务已结束");
+    return;
+  }
+  if (job.projectId === state.projectId) updateWorkspace(finished);
+  const record = (finished.jobs || []).find((item) => item.id === jobId);
+  const name = (finished.project && finished.project.name) || "项目";
+  if (!record || record.status === "success") toast(`「${name}」周报生成完成`);
+  else if (record.status === "skipped") toast(`「${name}」本轮没有输入变化，已跳过生成`);
+  else toast(`「${name}」周报生成失败：${(record && record.failure_reason) || "未知错误"}`);
+}
+
+function renderQueueProgress(data) {
+  const bubble = $("task-queue-progress");
+  if (!bubble) return;
+  const tasks = ((data && data.tasks) || []).filter((task) => task.kind === "report");
+  if (!tasks.length) {
+    bubble.classList.add("hidden");
+    return;
+  }
+  const running = tasks.filter((task) => task.status === "running").length;
+  const queued = tasks.length - running;
+  bubble.classList.remove("hidden");
+  bubble.innerHTML = `<small>任务队列：${running} 生成中 · ${queued} 排队（并行 ${data.parallelism} · 上限 ${data.capacity}）</small>${tasks.map((task) =>
+    `<span class="queue-task-line">${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.project_name || "")} ${escapeHtml(task.week_key || "")}</span>`).join("")}`;
 }
 
 function confirmProjectGeneration(projectId) {
@@ -1787,9 +1898,11 @@ const STATUS_LABELS = {
   done: "已完成",
   unknown: "未知",
   pending: "等待中",
+  queued: "排队中",
   running: "生成中",
   succeeded: "已成功",
   failed: "已失败",
+  skipped: "已跳过",
   schedule: "定时",
   manual: "手动",
 };
@@ -2068,8 +2181,9 @@ document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () =
 $("open-global-settings").onclick = () => toggleSettingsView(true);
 $("save-voice-settings").onclick = () => saveVoiceSettings().catch((error) => toast(error.message));
 $("save-llm-settings").onclick = () => saveLlmSettings().catch((error) => toast(error.message));
+$("save-queue-settings").onclick = () => saveQueueSettings().catch((error) => toast(error.message));
 setupVoiceTodoFab();
-restoreVoiceJobs();
+restoreQueues();
 $("page-corner").onkeydown = (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
