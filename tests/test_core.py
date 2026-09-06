@@ -262,6 +262,8 @@ class CoreTest(unittest.TestCase):
 
             transcribe_audio(audio, "audio/wav", f"http://127.0.0.1:{server.server_port}/inference", "whisper", language="en")
             self.assertIn(b'name="language"\r\n\r\nen\r\n', captured["body"])
+            transcribe_audio(audio, "audio/wav", f"http://127.0.0.1:{server.server_port}/inference", "whisper", language="auto")
+            self.assertNotIn(b'name="language"', captured["body"], "auto must omit the field so the service decides")
             transcribe_audio(audio, "audio/wav", f"http://127.0.0.1:{server.server_port}/inference", "whisper", language="  ")
             self.assertNotIn(b'name="language"', captured["body"])
         finally:
@@ -2224,6 +2226,103 @@ class InternalAgentTest(unittest.TestCase):
             payload = json.loads(response.read())
             client.close()
             self.assertEqual(payload["asr_language"], DEFAULT_ASR_LANGUAGE, "PUT without asr_language keeps the Chinese default")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+    def test_write_request_body_is_drained_for_keep_alive_reuse(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        try:
+            # The cancel endpoint never reads its body; before the drain fix
+            # the leftover "{}" was parsed as the next request line and the
+            # browser saw 501 Unsupported method ('{}POST').
+            client.request("POST", "/api/voice-jobs/999/cancel", body="{}", headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            self.assertEqual(response.status, 400)
+
+            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "keepalive 下一条"}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            self.assertEqual(response.status, 202, "the next request on a reused connection must not see the previous body")
+            self.assertEqual(payload["status"], "transcribing")
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_settings_put_updates_only_provided_keys(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({
+                    "voice_agent": "internal",
+                    "asr_language": "zh",
+                    "llm_provider": "openai",
+                    "llm_model": "gpt-4o-mini",
+                    "llm_api_key": "sk-stored",
+                    "ui_theme": "Green",
+                    "ui_mode": "dark",
+                }),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["ui_theme"], "green", "theme names are stored lowercased")
+            self.assertEqual(payload["ui_mode"], "dark")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"asr_model": "whisper-medium"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["asr_model"], "whisper-medium")
+            self.assertEqual(payload["voice_agent"], "internal", "keys absent from the payload must not be reset")
+            self.assertEqual(payload["llm_model"], "gpt-4o-mini")
+            self.assertTrue(payload["llm_api_key_set"])
+            self.assertEqual(payload["asr_language"], "zh")
+            self.assertEqual(payload["ui_theme"], "green")
+            self.assertEqual(payload["ui_mode"], "dark")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"ui_theme": "not a theme!"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/state")
+            response = client.getresponse()
+            state_payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(state_payload["ui_theme"], "green")
+            self.assertEqual(state_payload["ui_mode"], "dark")
         finally:
             server.shutdown()
             server.server_close()

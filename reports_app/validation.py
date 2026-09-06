@@ -20,6 +20,7 @@ REPO_RE = re.compile(r"^(?:https://github\.com/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+
 GITLAB_REPO_RE = re.compile(r"^(?:https?://[^/]+/)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+){1,4}/?$")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 BRANCH_RE = re.compile(r"^[^\s~^:?*\[\\\]\x00-\x1f\x7f]+(?:/[^\s~^:?*\[\\\]\x00-\x1f\x7f]+)*$")
+UI_THEME_RE = re.compile(r"^[a-z0-9_-]{1,24}$")
 
 
 class ValidationError(ValueError):
@@ -50,6 +51,20 @@ def validate_llm_base_url(url):
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValidationError("invalid LLM base URL; use http(s)://host[:port][/path]")
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+
+def validate_ui_theme(theme):
+    value = (theme or "").strip().lower()
+    if value and not UI_THEME_RE.match(value):
+        raise ValidationError("invalid theme name")
+    return value
+
+
+def validate_ui_mode(mode):
+    value = (mode or "").strip().lower()
+    if value and value not in {"light", "dark"}:
+        raise ValidationError("invalid appearance mode; use light or dark")
+    return value
 
 
 def validate_project_status(status):

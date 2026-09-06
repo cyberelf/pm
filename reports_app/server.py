@@ -29,6 +29,8 @@ from .config import (
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
     STATIC_DIR,
+    UI_MODE_SETTING,
+    UI_THEME_SETTING,
     UPLOAD_DIR,
     VOICE_AGENT_SETTING,
     WORKSPACE_USER,
@@ -76,6 +78,8 @@ from .validation import (
     validate_schedule_item,
     validate_project_status,
     validate_timezone,
+    validate_ui_mode,
+    validate_ui_theme,
 )
 
 
@@ -91,6 +95,19 @@ def llm_state(conn):
         "llm_model": get_setting(conn, LLM_MODEL_SETTING, ""),
         "llm_api_key_set": bool(get_setting(conn, LLM_API_KEY_SETTING, "")) or bool(os.environ.get(LLM_API_KEY_ENV_VARS[provider], "")),
     }
+
+
+def settings_state(conn):
+    state = {
+        "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
+        "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
+        "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
+        "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
+        "ui_theme": get_setting(conn, UI_THEME_SETTING, ""),
+        "ui_mode": get_setting(conn, UI_MODE_SETTING, ""),
+    }
+    state.update(llm_state(conn))
+    return state
 
 
 def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
@@ -215,6 +232,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_write(self, method):
         try:
+            # Drain the body for every write request, even for handlers that
+            # never look at it (e.g. cancel). An unread body would otherwise
+            # stick to the keep-alive connection and be parsed as the next
+            # request line, surfacing as 501 Unsupported method ('{}POST').
+            self.read_body_bytes()
             parsed = urlparse(self.path)
             self.handle_api(method, parsed.path, parse_qs(parsed.query))
         except ValidationError as exc:
@@ -222,11 +244,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
-    def body_json(self):
+    def read_body_bytes(self):
         length = int(self.headers.get("Content-Length") or 0)
-        if length == 0:
+        self._raw_body = self.rfile.read(length) if length > 0 else b""
+
+    def body_json(self):
+        raw = getattr(self, "_raw_body", b"")
+        if not raw:
             return {}
-        return json.loads(self.rfile.read(length).decode("utf-8"))
+        return json.loads(raw.decode("utf-8"))
 
     def handle_api(self, method, path, query):
         parts = [p for p in path.split("/") if p]
@@ -241,11 +267,7 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "projects": projects,
                         "workspace_user": WORKSPACE_USER,
-                        "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
-                        "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
-                        "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
-                        "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
-                        **llm_state(conn),
+                        **settings_state(conn),
                     }
                 )
                 return
@@ -309,38 +331,40 @@ class Handler(BaseHTTPRequestHandler):
                 self.json(job)
                 return
             if path == "/api/settings" and method == "PUT":
+                # Partial update: only the keys present in the payload are
+                # touched, so the voice, LLM, and appearance panels never
+                # reset each other's values.
                 payload = self.body_json()
-                voice_agent = payload.get("voice_agent") or DEFAULT_VOICE_AGENT
-                validate_provider(voice_agent)
-                asr_endpoint = normalize_asr_endpoint(payload.get("asr_endpoint") or DEFAULT_ASR_ENDPOINT)
-                asr_model = (payload.get("asr_model") or "").strip() or DEFAULT_ASR_MODEL
-                asr_language = (payload.get("asr_language") or "").strip() or DEFAULT_ASR_LANGUAGE
-                llm_provider = validate_llm_provider(payload.get("llm_provider") or DEFAULT_LLM_PROVIDER)
-                llm_base_url = (payload.get("llm_base_url") or "").strip()
-                llm_base_url = validate_llm_base_url(llm_base_url) if llm_base_url else DEFAULT_LLM_BASE_URLS[llm_provider]
-                llm_model = (payload.get("llm_model") or "").strip()
-                set_setting(conn, VOICE_AGENT_SETTING, voice_agent)
-                set_setting(conn, ASR_ENDPOINT_SETTING, asr_endpoint)
-                set_setting(conn, ASR_MODEL_SETTING, asr_model)
-                set_setting(conn, ASR_LANGUAGE_SETTING, asr_language)
-                set_setting(conn, LLM_PROVIDER_SETTING, llm_provider)
-                set_setting(conn, LLM_BASE_URL_SETTING, llm_base_url)
-                set_setting(conn, LLM_MODEL_SETTING, llm_model)
+                if "voice_agent" in payload:
+                    voice_agent = payload.get("voice_agent") or DEFAULT_VOICE_AGENT
+                    validate_provider(voice_agent)
+                    set_setting(conn, VOICE_AGENT_SETTING, voice_agent)
+                if "asr_endpoint" in payload:
+                    set_setting(conn, ASR_ENDPOINT_SETTING, normalize_asr_endpoint(payload.get("asr_endpoint") or DEFAULT_ASR_ENDPOINT))
+                if "asr_model" in payload:
+                    set_setting(conn, ASR_MODEL_SETTING, (payload.get("asr_model") or "").strip() or DEFAULT_ASR_MODEL)
+                if "asr_language" in payload:
+                    set_setting(conn, ASR_LANGUAGE_SETTING, (payload.get("asr_language") or "").strip() or DEFAULT_ASR_LANGUAGE)
+                llm_provider = get_setting(conn, LLM_PROVIDER_SETTING, DEFAULT_LLM_PROVIDER)
+                if "llm_provider" in payload:
+                    llm_provider = validate_llm_provider(payload.get("llm_provider") or DEFAULT_LLM_PROVIDER)
+                    set_setting(conn, LLM_PROVIDER_SETTING, llm_provider)
+                if "llm_base_url" in payload:
+                    llm_base_url = (payload.get("llm_base_url") or "").strip()
+                    set_setting(conn, LLM_BASE_URL_SETTING, validate_llm_base_url(llm_base_url) if llm_base_url else DEFAULT_LLM_BASE_URLS[llm_provider])
+                if "llm_model" in payload:
+                    set_setting(conn, LLM_MODEL_SETTING, (payload.get("llm_model") or "").strip())
                 # Empty llm_api_key means "keep the stored key" so the
                 # frontend never has to echo the secret back.
                 api_key = (payload.get("llm_api_key") or "").strip()
                 if api_key:
                     set_setting(conn, LLM_API_KEY_SETTING, api_key)
+                if "ui_theme" in payload:
+                    set_setting(conn, UI_THEME_SETTING, validate_ui_theme(payload.get("ui_theme")))
+                if "ui_mode" in payload:
+                    set_setting(conn, UI_MODE_SETTING, validate_ui_mode(payload.get("ui_mode")))
                 conn.commit()
-                self.json(
-                    {
-                        "voice_agent": voice_agent,
-                        "asr_endpoint": asr_endpoint,
-                        "asr_model": asr_model,
-                        "asr_language": asr_language,
-                        **llm_state(conn),
-                    }
-                )
+                self.json(settings_state(conn))
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "PUT":
                 update_todo(conn, int(parts[2]), self.body_json())

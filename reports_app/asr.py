@@ -39,13 +39,14 @@ def validate_asr_audio(payload):
 
 def transcribe_audio(raw, content_type, endpoint, model, timeout=120, language=DEFAULT_ASR_LANGUAGE):
     """Sends audio to an OpenAI-compatible /v1/audio/transcriptions service
-    and returns the transcript text. An empty language omits the field so
-    the service picks its own default."""
+    and returns the transcript text. An empty or "auto" language omits the
+    field so the service picks its own default."""
     boundary = f"----reports-asr-{uuid.uuid4().hex}"
     parts = []
+    language_value = (language or "").strip()
     fields = [("model", model), ("response_format", "json")]
-    if (language or "").strip():
-        fields.append(("language", language.strip()))
+    if language_value and language_value.lower() != "auto":
+        fields.append(("language", language_value))
     for name, value in fields:
         parts.append(
             f"--{boundary}\r\n"
