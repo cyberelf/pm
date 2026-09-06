@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
     input_summary TEXT NOT NULL DEFAULT '',
     output_md TEXT NOT NULL DEFAULT '',
     failure_reason TEXT NOT NULL DEFAULT '',
+    queued_at TEXT,
     started_at TEXT NOT NULL,
     completed_at TEXT
 );
@@ -247,6 +248,9 @@ def migrate_schema(conn):
         conn.execute("ALTER TABLE github_repos ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'")
     if "gitlab_server" not in columns:
         conn.execute("ALTER TABLE github_repos ADD COLUMN gitlab_server TEXT NOT NULL DEFAULT ''")
+    job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(generation_jobs)")}
+    if "queued_at" not in job_columns:
+        conn.execute("ALTER TABLE generation_jobs ADD COLUMN queued_at TEXT")
     conn.execute(
         """
         DELETE FROM github_repos

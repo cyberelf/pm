@@ -43,7 +43,7 @@ def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_mod
 def create_voice_job(conn):
     now = iso_now()
     cur = conn.execute(
-        "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES ('transcribing', ?, ?)",
+        "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES ('queued', ?, ?)",
         (now, now),
     )
     return cur.lastrowid
@@ -59,31 +59,33 @@ def get_voice_job(conn, job_id):
 
 
 def get_active_voice_job(conn):
+    # Oldest first: the longest-waiting task is the one closest to finishing,
+    # so clients that track a single job adopt that one.
     row = conn.execute(
-        "SELECT id FROM voice_jobs WHERE status IN ('transcribing', 'structuring') ORDER BY id DESC LIMIT 1"
+        "SELECT id FROM voice_jobs WHERE status IN ('queued', 'transcribing', 'structuring') ORDER BY id ASC LIMIT 1"
     ).fetchone()
     return get_voice_job(conn, row["id"]) if row else None
 
 
 def cancel_voice_job(conn, job_id):
     cur = conn.execute(
-        "UPDATE voice_jobs SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('transcribing', 'structuring')",
+        "UPDATE voice_jobs SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('queued', 'transcribing', 'structuring')",
         (iso_now(), job_id),
     )
     if cur.rowcount != 1:
         row = conn.execute("SELECT status FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
         state = row["status"] if row else "not found"
-        raise ValidationError(f"voice job is {state}; only running jobs can be cancelled")
+        raise ValidationError(f"voice job is {state}; only queued or running jobs can be cancelled")
     return job_id
 
 
 def fail_stale_voice_jobs(db_path):
-    """Jobs stuck mid-flight belong to worker threads from a previous
-    process; after a restart they can never finish, so the single-task
-    lock must not keep blocking new submissions."""
+    """Jobs stuck queued or mid-flight belong to worker threads from a
+    previous process; after a restart they can never finish, so they must not
+    keep consuming task queue capacity."""
     with connect(db_path) as conn:
         conn.execute(
-            "UPDATE voice_jobs SET status = 'failed', error = 'interrupted by service restart', updated_at = ? WHERE status IN ('transcribing', 'structuring')",
+            "UPDATE voice_jobs SET status = 'failed', error = 'interrupted by service restart', updated_at = ? WHERE status IN ('queued', 'transcribing', 'structuring')",
             (iso_now(),),
         )
         conn.commit()
@@ -108,12 +110,34 @@ def _update_voice_job(conn, job_id, **fields):
     )
 
 
+def _update_voice_job_if_status(conn, job_id, expected, **fields):
+    """Stage transition guarded on the previous status so a cancel landing
+    between the queue handoff and this update is never overwritten."""
+    if not fields:
+        return
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    conn.execute(
+        f"UPDATE voice_jobs SET {assignments}, updated_at = ? WHERE id = ? AND status = ?",
+        (*fields.values(), iso_now(), job_id, expected),
+    )
+
+
 def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model, asr_language=DEFAULT_ASR_LANGUAGE):
-    """Background worker: transcribe the recording, structure it into TODO
+    """Task-queue worker: transcribe the recording, structure it into TODO
     items, and record stage timings so failures are diagnosable from
     server.log. Opens its own database connection."""
     started = time.monotonic()
     try:
+        with connect(db_path) as conn:
+            status = _voice_job_status(conn, job_id)
+            if status != "queued":
+                _log_voice_job(job_id, f"cancelled while queued; worker exiting (status={status})")
+                return
+            _update_voice_job_if_status(
+                conn, job_id, "queued",
+                status="transcribing" if payload.get("audio_base64") else "structuring",
+            )
+            conn.commit()
         if payload.get("audio_base64"):
             raw, content_type = validate_asr_audio(payload)
             _log_voice_job(job_id, f"transcribing {len(raw)} bytes via {asr_endpoint} (language={asr_language or 'service default'})")

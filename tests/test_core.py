@@ -54,7 +54,8 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_internal_evidence_prompt, build_tool_prompt, compact_previous_report, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, provider_command, transient_provider_error
+from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_internal_evidence_prompt, build_tool_prompt, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, provider_command, transient_provider_error
+from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
@@ -374,7 +375,19 @@ class CoreTest(unittest.TestCase):
             time.sleep(0.1)
         raise AssertionError("voice job did not finish in time")
 
-    def test_voice_job_single_task_lock_cancel_and_restore(self):
+    def _wait_voice_status(self, server_port, job_id, expected, timeout=10):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            client = HTTPConnection("127.0.0.1", server_port, timeout=10)
+            client.request("GET", f"/api/voice-jobs/{job_id}")
+            payload = json.loads(client.getresponse().read())
+            client.close()
+            if payload["status"] in expected:
+                return payload["status"]
+            time.sleep(0.05)
+        raise AssertionError(f"voice job {job_id} never reached {expected}")
+
+    def test_voice_jobs_queue_cancel_and_capacity(self):
         release = threading.Event()
 
         class BlockingAsrHandler(BaseHTTPRequestHandler):
@@ -401,9 +414,16 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("PUT", "/api/settings", body=json.dumps({"asr_endpoint": f"http://127.0.0.1:{asr_server.server_port}/inference"}), headers={"Content-Type": "application/json"})
-            client.getresponse().read()
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"asr_endpoint": f"http://127.0.0.1:{asr_server.server_port}/inference", "queue_capacity": 2, "queue_parallelism": 1}),
+                headers={"Content-Type": "application/json"},
+            )
+            settings = json.loads(client.getresponse().read())
             client.close()
+            self.assertEqual(settings["queue_capacity"], 2)
+            self.assertEqual(settings["queue_parallelism"], 1)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request(
@@ -414,29 +434,55 @@ class CoreTest(unittest.TestCase):
             )
             first = json.loads(client.getresponse().read())
             client.close()
-            self.assertEqual(first["status"], "transcribing")
+            self.assertEqual(first["status"], "queued")
+            self._wait_voice_status(server.server_port, first["id"], {"transcribing"})
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request("POST", "/api/todos/voice", body=json.dumps({"text": "第二个任务"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
-            conflict = json.loads(response.read())
+            second = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 202)
+            self.assertEqual(second["status"], "queued")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "第三个任务"}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            third = json.loads(response.read())
             client.close()
             self.assertEqual(response.status, 409)
-            self.assertEqual(conflict["active_job_id"], first["id"])
+            self.assertIn("task queue is full", third["error"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/voice-jobs/active")
-            active = json.loads(client.getresponse().read())
+            client.request("GET", "/api/task-queue")
+            queue_state = json.loads(client.getresponse().read())
             client.close()
-            self.assertEqual(active["job"]["id"], first["id"])
+            self.assertEqual(queue_state["capacity"], 2)
+            self.assertEqual(queue_state["parallelism"], 1)
+            self.assertEqual(queue_state["active"], 2)
+            voice_statuses = {task["id"]: task["status"] for task in queue_state["tasks"] if task["kind"] == "voice"}
+            self.assertEqual(voice_statuses[first["id"]], "transcribing")
+            self.assertEqual(voice_statuses[second["id"]], "queued")
 
-            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", f"/api/voice-jobs/{first['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
-            response = client.getresponse()
-            cancelled = json.loads(response.read())
-            client.close()
-            self.assertEqual(response.status, 200)
-            self.assertEqual(cancelled["status"], "cancelled")
+            # cancelling works for queued and running tasks alike
+            for job_id in (second["id"], first["id"]):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request("POST", f"/api/voice-jobs/{job_id}/cancel", body="{}", headers={"Content-Type": "application/json"})
+                response = client.getresponse()
+                cancelled = json.loads(response.read())
+                client.close()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(cancelled["status"], "cancelled")
+
+            release.set()
+            status, job = self._poll_voice_job(server.server_port, first["id"])
+            self.assertEqual(job["status"], "cancelled")
+            status, job = self._poll_voice_job(server.server_port, second["id"])
+            self.assertEqual(job["status"], "cancelled")
+            time.sleep(0.3)
+            created_titles = [row["title"] for row in todo_rows(self.conn)]
+            self.assertNotIn("迟到的转写内容", created_titles)
+            self.assertNotIn("第二个任务", created_titles)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request("GET", "/api/voice-jobs/active")
@@ -444,22 +490,16 @@ class CoreTest(unittest.TestCase):
             client.close()
             self.assertIsNone(active["job"])
 
-            release.set()
-            status, job = self._poll_voice_job(server.server_port, first["id"])
-            self.assertEqual(job["status"], "cancelled")
-            time.sleep(0.3)
-            self.assertEqual([row["title"] for row in todo_rows(self.conn) if row["title"] == "迟到的转写内容"], [])
-
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             client.request("POST", "/api/todos/voice", body=json.dumps({"text": "取消后新建任务"}), headers={"Content-Type": "application/json"})
-            third = json.loads(client.getresponse().read())
+            fourth = json.loads(client.getresponse().read())
             client.close()
-            self.assertEqual(third["status"], "transcribing")
-            status, job = self._poll_voice_job(server.server_port, third["id"])
+            self.assertEqual(fourth["status"], "queued")
+            status, job = self._poll_voice_job(server.server_port, fourth["id"])
             self.assertEqual(job["status"], "completed")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", f"/api/voice-jobs/{third['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
+            client.request("POST", f"/api/voice-jobs/{fourth['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
             response = client.getresponse()
             response.read()
             client.close()
@@ -474,7 +514,7 @@ class CoreTest(unittest.TestCase):
 
     def test_stale_voice_jobs_fail_on_startup(self):
         now = iso_now()
-        for status in ("transcribing", "structuring"):
+        for status in ("queued", "transcribing", "structuring"):
             self.conn.execute(
                 "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES (?, ?, ?)",
                 (status, now, now),
@@ -482,9 +522,202 @@ class CoreTest(unittest.TestCase):
         self.conn.commit()
         fail_stale_voice_jobs(self.db_path)
         rows = self.conn.execute("SELECT status, error FROM voice_jobs").fetchall()
-        self.assertEqual([row["status"] for row in rows], ["failed", "failed"])
+        self.assertEqual([row["status"] for row in rows], ["failed", "failed", "failed"])
         for row in rows:
             self.assertEqual(row["error"], "interrupted by service restart")
+
+    def test_stale_generation_jobs_fail_on_startup(self):
+        now = iso_now()
+        for status in ("queued", "running"):
+            self.conn.execute(
+                "INSERT INTO generation_jobs (project_id, week_key, trigger_type, provider, status, queued_at, started_at) VALUES (?, '2026-W36', 'manual', 'codex', ?, ?, ?)",
+                (self.project_id, status, now, now),
+            )
+        self.conn.commit()
+        fail_stale_generation_jobs(self.db_path)
+        rows = self.conn.execute("SELECT status, failure_reason FROM generation_jobs").fetchall()
+        self.assertEqual([row["status"] for row in rows], ["failed", "failed"])
+        for row in rows:
+            self.assertEqual(row["failure_reason"], "interrupted by service restart")
+
+    def test_manual_generation_queues_and_completes_asynchronously(self):
+        save_weekly_update(self.conn, self.project_id, {"completed": "A"})
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                f"/api/projects/{self.project_id}/generate",
+                body=json.dumps({"force": True}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 202)
+            self.assertEqual(payload["status"], "queued")
+
+            deadline = time.time() + 15
+            job_status = None
+            while time.time() < deadline:
+                row = self.conn.execute("SELECT status FROM generation_jobs WHERE id = ?", (payload["id"],)).fetchone()
+                if row and row["status"] in {"success", "failed", "skipped"}:
+                    job_status = row["status"]
+                    break
+                time.sleep(0.05)
+            self.assertEqual(job_status, "success")
+            week_key = current_week_key("Asia/Shanghai")
+            report = self.conn.execute(
+                "SELECT content_md FROM weekly_reports WHERE project_id = ? AND week_key = ?",
+                (self.project_id, week_key),
+            ).fetchone()
+            self.assertIsNotNone(report)
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/task-queue")
+            queue_state = json.loads(client.getresponse().read())
+            client.close()
+            self.assertEqual(queue_state["capacity"], 5, "defaults come from settings, not the environment")
+            self.assertEqual(queue_state["parallelism"], 2)
+            self.assertEqual(queue_state["active"], 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_generation_enqueue_rejects_duplicate_and_full_queue(self):
+        week_key = current_week_key("Asia/Shanghai")
+        now = iso_now()
+        self.conn.execute(
+            "INSERT INTO generation_jobs (project_id, week_key, trigger_type, provider, status, queued_at, started_at) VALUES (?, ?, 'manual', 'codex', 'running', ?, ?)",
+            (self.project_id, week_key, now, now),
+        )
+        set_setting(self.conn, "queue_capacity", "1")
+        self.conn.commit()
+        other_project = create_project(
+            self.conn,
+            {"name": "Other", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "codex"},
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                f"/api/projects/{self.project_id}/generate",
+                body=json.dumps({"force": True}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            duplicate = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 400)
+            self.assertIn("already has a generation job", duplicate["error"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                f"/api/projects/{other_project}/generate",
+                body=json.dumps({"force": True}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            full = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 409)
+            self.assertIn("task queue is full", full["error"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_queue_settings_validation_and_clamping(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"queue_capacity": 3, "queue_parallelism": 2}),
+                headers={"Content-Type": "application/json"},
+            )
+            payload = json.loads(client.getresponse().read())
+            client.close()
+            self.assertEqual(payload["queue_capacity"], 3)
+            self.assertEqual(payload["queue_parallelism"], 2)
+
+            for bad_payload in (
+                {"queue_capacity": 0},
+                {"queue_capacity": 99},
+                {"queue_capacity": "abc"},
+                {"queue_parallelism": 0},
+                {"queue_parallelism": 99},
+                {"queue_parallelism": "abc"},
+            ):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request("PUT", "/api/settings", body=json.dumps(bad_payload), headers={"Content-Type": "application/json"})
+                response = client.getresponse()
+                response.read()
+                client.close()
+                self.assertEqual(response.status, 400, f"expected 400 for {bad_payload}")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/api/state")
+            state_payload = json.loads(client.getresponse().read())
+            client.close()
+            self.assertEqual(state_payload["queue_capacity"], 3)
+            self.assertEqual(state_payload["queue_parallelism"], 2)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        set_setting(self.conn, "queue_capacity", "999")
+        set_setting(self.conn, "queue_parallelism", "-4")
+        self.assertEqual(queue_capacity(self.conn), 20)
+        self.assertEqual(queue_parallelism(self.conn), 1)
+        set_setting(self.conn, "queue_capacity", "not-a-number")
+        set_setting(self.conn, "queue_parallelism", "")
+        self.assertEqual(queue_capacity(self.conn), 5)
+        self.assertEqual(queue_parallelism(self.conn), 2)
+        with mock.patch.dict(os.environ, {"REPORTS_QUEUE_CAPACITY": "3", "REPORTS_QUEUE_PARALLELISM": "2"}):
+            self.assertEqual(queue_capacity(self.conn), 3)
+            self.assertEqual(queue_parallelism(self.conn), 2)
+
+    def test_task_queue_dispatch_respects_parallelism(self):
+        set_setting(self.conn, "queue_parallelism", "2")
+        self.conn.commit()
+        queue = get_task_queue(self.db_path)
+        lock = threading.Lock()
+        counters = {"active": 0, "max": 0, "done": 0}
+        done = threading.Event()
+
+        def runner():
+            with lock:
+                counters["active"] += 1
+                counters["max"] = max(counters["max"], counters["active"])
+            time.sleep(0.15)
+            with lock:
+                counters["active"] -= 1
+                counters["done"] += 1
+                if counters["done"] == 4:
+                    done.set()
+
+        for _ in range(4):
+            queue.submit(runner)
+        self.assertTrue(done.wait(timeout=5), "queued runners did not all finish in time")
+        self.assertEqual(counters["done"], 4)
+        self.assertEqual(counters["max"], 2, "parallelism setting must cap concurrent runners")
 
     def test_voice_todo_settings_and_api_endpoints(self):
         class MockAsrHandler(BaseHTTPRequestHandler):
@@ -559,7 +792,7 @@ class CoreTest(unittest.TestCase):
                 payload = json.loads(response.read())
                 client.close()
             self.assertEqual(response.status, 202)
-            self.assertEqual(payload["status"], "transcribing")
+            self.assertEqual(payload["status"], "queued")
             status, job = self._poll_voice_job(server.server_port, payload["id"])
             self.assertEqual(status, 200)
             self.assertEqual(job["status"], "completed")
@@ -2280,7 +2513,7 @@ class InternalAgentTest(unittest.TestCase):
             response = client.getresponse()
             payload = json.loads(response.read())
             self.assertEqual(response.status, 202, "the next request on a reused connection must not see the previous body")
-            self.assertEqual(payload["status"], "transcribing")
+            self.assertEqual(payload["status"], "queued")
         finally:
             client.close()
             server.shutdown()

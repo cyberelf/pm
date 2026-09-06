@@ -8,7 +8,9 @@ import time
 from pathlib import Path
 
 from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT, ROOT_DIR
+from .db import connect
 from .git_sources import weekly_commits
+from .risks import evaluate_risks
 from .timeutil import current_week_key, iso_now, parse_iso, week_bounds, week_key_for
 
 
@@ -196,22 +198,36 @@ def changed_since_last_success(conn, project_id, week_key):
     return any(parse_iso(ts) and parse_iso(ts) > last_at for ts in checks if ts)
 
 
-def generate_report(conn, project_id, trigger_type="manual", force=False, timeout=300):
+def generate_report(conn, project_id, trigger_type="manual", force=False, timeout=300, job_id=None):
     project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     week_key = current_week_key(project["timezone"])
     if trigger_type == "scheduled" and not force and not changed_since_last_success(conn, project_id, week_key):
+        if job_id is not None:
+            # the queued row was created before the change check could run;
+            # retire it instead of leaving a ghost job in the queue
+            conn.execute(
+                "UPDATE generation_jobs SET status = 'skipped', failure_reason = ?, completed_at = ? WHERE id = ?",
+                ("scheduled trigger fired but no input changed since last successful report", iso_now(), job_id),
+            )
+            conn.commit()
         return None
     context, snapshot_hash = assemble_context(conn, project_id, week_key)
     now = iso_now()
-    cur = conn.execute(
-        """
-        INSERT INTO generation_jobs
-        (project_id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, started_at)
-        VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
-        """,
-        (project_id, week_key, trigger_type, project["report_provider"], snapshot_hash, input_summary(context), now),
-    )
-    job_id = cur.lastrowid
+    if job_id is None:
+        cur = conn.execute(
+            """
+            INSERT INTO generation_jobs
+            (project_id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, started_at)
+            VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
+            """,
+            (project_id, week_key, trigger_type, project["report_provider"], snapshot_hash, input_summary(context), now),
+        )
+        job_id = cur.lastrowid
+    else:
+        conn.execute(
+            "UPDATE generation_jobs SET status = 'running', input_snapshot_hash = ?, input_summary = ?, started_at = ? WHERE id = ?",
+            (snapshot_hash, input_summary(context), now, job_id),
+        )
     conn.commit()
     try:
         output_md = invoke_provider(project["report_provider"], context, timeout)
@@ -248,6 +264,27 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
         )
         conn.commit()
         return job_id
+
+
+def run_report_job(db_path, job_id, project_id, trigger_type, force=False, timeout=300):
+    """Task-queue worker for a previously queued generation job. Opens its own
+    database connection and refreshes deterministic risks once the report
+    lands, mirroring what the old synchronous endpoint did."""
+    with connect(db_path) as conn:
+        generate_report(conn, project_id, trigger_type, force=force, timeout=timeout, job_id=job_id)
+        evaluate_risks(conn, project_id)
+        conn.commit()
+
+
+def fail_stale_generation_jobs(db_path):
+    """Jobs left queued or running by a previous process can never finish;
+    mark them failed at startup so they stop consuming queue capacity."""
+    with connect(db_path) as conn:
+        conn.execute(
+            "UPDATE generation_jobs SET status = 'failed', failure_reason = 'interrupted by service restart', completed_at = ? WHERE status IN ('queued', 'running')",
+            (iso_now(),),
+        )
+        conn.commit()
 
 
 def invoke_provider(provider, context, timeout=300):

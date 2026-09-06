@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 from .config import (
     GIT_MODE_GITHUB,
     GIT_MODE_GITLAB,
+    MAX_QUEUE_CAPACITY,
+    MAX_QUEUE_PARALLELISM,
     SUPPORTED_GIT_MODES,
     SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_MATERIAL_EXTENSIONS,
@@ -35,6 +37,24 @@ def require_project_name(data):
 def validate_provider(provider):
     if provider not in SUPPORTED_PROVIDERS:
         raise ValidationError("unsupported report provider")
+
+
+def _validate_bounded_int(value, label, maximum):
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ValidationError(f"{label} must be an integer") from None
+    if not 1 <= number <= maximum:
+        raise ValidationError(f"{label} must be between 1 and {maximum}")
+    return number
+
+
+def validate_queue_capacity(value):
+    return _validate_bounded_int(value, "queue capacity", MAX_QUEUE_CAPACITY)
+
+
+def validate_queue_parallelism(value):
+    return _validate_bounded_int(value, "queue parallelism", MAX_QUEUE_PARALLELISM)
 
 
 def validate_llm_provider(provider):

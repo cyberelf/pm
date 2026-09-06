@@ -29,6 +29,8 @@ from .config import (
     LLM_BASE_URL_SETTING,
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
+    QUEUE_CAPACITY_SETTING,
+    QUEUE_PARALLELISM_SETTING,
     STATIC_DIR,
     UI_MODE_SETTING,
     UI_THEME_SETTING,
@@ -51,19 +53,25 @@ from .materials import (
     update_material_summary,
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
-from .reports import changed_since_last_success, generate_report
+from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report
 from .risks import evaluate_risks, progress_status
+from .task_queue import (
+    QueueFullError,
+    enqueue_report_generation,
+    enqueue_voice_job,
+    queue_capacity,
+    queue_parallelism,
+    task_queue_state,
+)
 from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
 from .todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
 from .asr import normalize_asr_endpoint
 from .voice_todos import (
     cancel_voice_job,
-    create_voice_job,
     fail_stale_voice_jobs,
     get_active_voice_job,
     get_voice_job,
-    run_voice_job,
 )
 from .validation import (
     ValidationError,
@@ -78,6 +86,8 @@ from .validation import (
     validate_repo,
     validate_schedule_item,
     validate_project_status,
+    validate_queue_capacity,
+    validate_queue_parallelism,
     validate_timezone,
     validate_ui_mode,
     validate_ui_theme,
@@ -104,6 +114,8 @@ def settings_state(conn):
         "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
         "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
         "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
+        "queue_capacity": queue_capacity(conn),
+        "queue_parallelism": queue_parallelism(conn),
         "ui_theme": get_setting(conn, UI_THEME_SETTING, ""),
         "ui_mode": get_setting(conn, UI_MODE_SETTING, ""),
     }
@@ -114,6 +126,7 @@ def settings_state(conn):
 def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
     init_db(db_path)
     fail_stale_voice_jobs(db_path)
+    fail_stale_generation_jobs(db_path)
     stop = threading.Event()
     scheduler = threading.Thread(target=scheduler_loop, args=(stop, db_path), daemon=True)
     scheduler.start()
@@ -275,6 +288,8 @@ class Handler(BaseHTTPRequestHandler):
             self.read_body_bytes()
             parsed = urlparse(self.path)
             self.handle_api(method, parsed.path, parse_qs(parsed.query))
+        except QueueFullError as exc:
+            self.error(HTTPStatus.CONFLICT, str(exc))
         except ValidationError as exc:
             self.error(HTTPStatus.BAD_REQUEST, str(exc))
         except Exception as exc:
@@ -327,31 +342,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/todos/voice" and method == "POST":
                 payload = self.body_json()
-                active = conn.execute(
-                    "SELECT id FROM voice_jobs WHERE status IN ('transcribing', 'structuring') ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                if active:
-                    self.json(
-                        {"error": "another voice job is already running", "active_job_id": active["id"]},
-                        HTTPStatus.CONFLICT,
-                    )
-                    return
-                job_id = create_voice_job(conn)
+                job_id = enqueue_voice_job(
+                    conn,
+                    self.server.db_path,
+                    payload,
+                    get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
+                    normalize_asr_endpoint(get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT)),
+                    get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL) or DEFAULT_ASR_MODEL,
+                    get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE) or DEFAULT_ASR_LANGUAGE,
+                )
                 conn.commit()
-                threading.Thread(
-                    target=run_voice_job,
-                    args=(
-                        self.server.db_path,
-                        job_id,
-                        payload,
-                        get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
-                        normalize_asr_endpoint(get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT)),
-                        get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL) or DEFAULT_ASR_MODEL,
-                        get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE) or DEFAULT_ASR_LANGUAGE,
-                    ),
-                    daemon=True,
-                ).start()
-                self.json({"id": job_id, "status": "transcribing"}, HTTPStatus.ACCEPTED)
+                self.json({"id": job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
+                return
+            if path == "/api/task-queue" and method == "GET":
+                self.json(task_queue_state(conn))
                 return
             if path == "/api/voice-jobs/active" and method == "GET":
                 self.json({"job": get_active_voice_job(conn)})
@@ -399,6 +403,10 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, UI_THEME_SETTING, validate_ui_theme(payload.get("ui_theme")))
                 if "ui_mode" in payload:
                     set_setting(conn, UI_MODE_SETTING, validate_ui_mode(payload.get("ui_mode")))
+                if "queue_capacity" in payload:
+                    set_setting(conn, QUEUE_CAPACITY_SETTING, str(validate_queue_capacity(payload.get("queue_capacity"))))
+                if "queue_parallelism" in payload:
+                    set_setting(conn, QUEUE_PARALLELISM_SETTING, str(validate_queue_parallelism(payload.get("queue_parallelism"))))
                 conn.commit()
                 self.json(settings_state(conn))
                 return
@@ -534,10 +542,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(workspace(conn, project_id))
                     return
                 if len(parts) == 4 and parts[3] == "generate" and method == "POST":
-                    generate_report(conn, project_id, "manual", force=True)
-                    evaluate_risks(conn, project_id)
+                    payload = self.body_json()
+                    job_id = enqueue_report_generation(
+                        conn, self.server.db_path, project_id, "manual", force=bool(payload.get("force", True))
+                    )
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json({"id": job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
                     return
                 if len(parts) == 4 and parts[3] == "schedule-check" and method == "POST":
                     evaluate_schedules(conn, project_id)
@@ -658,7 +668,7 @@ def workspace(conn, project_id):
         "weekly_update": row_to_dict(conn.execute("SELECT * FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)).fetchone()),
         "report": report_dict,
         "report_history": report_history,
-        "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? ORDER BY id DESC", (project_id, week_key))],
+        "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? ORDER BY id DESC", (project_id, week_key))],
         "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'blocked_outcome') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "progress_status": progress_status(conn, project_id),
