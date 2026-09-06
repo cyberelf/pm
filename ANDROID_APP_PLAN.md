@@ -31,7 +31,7 @@ Android 客户端，覆盖语音记 TODO、TODO 看板、周报查看三类高�
 | 网络 | OkHttp + Retrofit + kotlinx.serialization | 服务端已有 gzip，OkHttp 透明解压 |
 | 设置存储 | DataStore (Preferences) | 服务器地址、证书指纹、上次项目 id |
 | 录音 | AudioRecord（PCM 16kHz mono）→ 手工封 WAV | 见 §4.2，MediaRecorder 默认 AAC 不被接受 |
-| Markdown | 周报正文用 `content_md` + 原生 Markdown 渲染库 | 不用 WebView，保证跟随主题 |
+| 周报渲染 | 服务端渲染的 `content_html` + WebView 注入主题 CSS | 归档接口只返回 HTML（`content_md` 被服务端 pop 掉），且服务端渲染保真最高；CSS 跟随明暗主题 |
 | DI / 架构 | 手写轻量 MVVM（ViewModel + Repository），不引 Hilt | 5 个屏的规模不值得引入 DI 框架 |
 | 代码位置 | 本仓库 `android/` 子目录 | 单仓最简；后端接口演进同仓可见 |
 

@@ -25,10 +25,13 @@ import net.cyberelf.reports.data.ReportsRepository
 import net.cyberelf.reports.data.ServerUrl
 import net.cyberelf.reports.data.SettingsStore
 import net.cyberelf.reports.data.TodoDto
+import net.cyberelf.reports.data.WorkspaceDto
 import net.cyberelf.reports.data.VoiceRepository
 import net.cyberelf.reports.data.VoiceSubmitResult
 import net.cyberelf.reports.data.friendlyMessage
 import net.cyberelf.reports.voice.WavRecorder
+import android.content.Intent
+import android.net.Uri
 import java.io.File
 
 sealed interface ConnectionUi {
@@ -64,6 +67,14 @@ sealed interface VoiceUi {
     data class Failed(val message: String, val canRetryUpload: Boolean) : VoiceUi
 }
 
+data class ReportViewerUi(
+    val weekKey: String,
+    val html: String?,
+    val isCurrent: Boolean,
+    val loading: Boolean,
+    val error: String? = null,
+)
+
 class AppViewModel(
     private val app: Application,
     private val repository: ReportsRepository,
@@ -94,6 +105,10 @@ class AppViewModel(
         val boardBusy: Boolean = false,
         val boardError: String? = null,
         val closingTodo: TodoDto? = null,
+        val workspace: WorkspaceDto? = null,
+        val workspaceLoading: Boolean = false,
+        val workspaceError: String? = null,
+        val reportViewer: ReportViewerUi? = null,
     ) {
         val selectedProject: ProjectDto?
             get() = projects.firstOrNull { it.id == selectedProjectId }
@@ -199,7 +214,82 @@ class AppViewModel(
         }
     }
 
-    fun selectProject(id: Long) = mutableState.update { it.copy(selectedProjectId = id) }
+    fun selectProject(id: Long) {
+        mutableState.update { it.copy(selectedProjectId = id) }
+        loadWorkspace(id)
+    }
+
+    // ---- Reports tab ----
+
+    fun loadWorkspace(projectId: Long) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(workspaceLoading = true, workspaceError = null) }
+            val result = repository.workspace(projectId)
+            mutableState.update { s ->
+                if (s.selectedProjectId != projectId) return@update s // selection moved on; drop stale payload
+                result.fold(
+                    onSuccess = { s.copy(workspace = it, workspaceLoading = false, workspaceError = null) },
+                    onFailure = { s.copy(workspaceLoading = false, workspaceError = friendlyMessage(it)) },
+                )
+            }
+        }
+    }
+
+    /** Current week renders straight from the workspace payload; archived
+     *  weeks are fetched on demand (server returns HTML only). */
+    fun openReport(weekKey: String) {
+        val current = mutableState.value
+        val workspace = current.workspace ?: return
+        if (weekKey == workspace.weekKey && workspace.report != null) {
+            mutableState.update {
+                it.copy(
+                    reportViewer = ReportViewerUi(
+                        weekKey = weekKey,
+                        html = workspace.report.contentHtml,
+                        isCurrent = true,
+                        loading = false,
+                    ),
+                )
+            }
+            return
+        }
+        val projectId = current.selectedProjectId ?: return
+        mutableState.update {
+            it.copy(reportViewer = ReportViewerUi(weekKey, html = null, isCurrent = false, loading = true))
+        }
+        viewModelScope.launch {
+            val result = repository.archivedReport(projectId, weekKey)
+            mutableState.update { s ->
+                val viewer = s.reportViewer ?: return@update s
+                if (viewer.weekKey != weekKey) return@update s
+                result.fold(
+                    onSuccess = {
+                        s.copy(reportViewer = viewer.copy(html = it.contentHtml, loading = false, isCurrent = it.isCurrentWeek))
+                    },
+                    onFailure = { s.copy(reportViewer = viewer.copy(loading = false, error = friendlyMessage(it))) },
+                )
+            }
+        }
+    }
+
+    fun closeReportViewer() = mutableState.update { it.copy(reportViewer = null) }
+
+    /** Opens the server-rendered PDF in a browser; the self-signed cert
+     *  warning is accepted once per phone, same as the web flow. */
+    fun openReportPdf() {
+        val current = mutableState.value
+        val viewer = current.reportViewer ?: return
+        val project = current.workspace?.project ?: return
+        val url = ServerUrl.normalize(current.settings.serverUrl) +
+            "api/projects/${project.id}/reports/${viewer.weekKey}/pdf"
+        try {
+            app.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (e: Exception) {
+            mutableState.update { it.copy(finishedJobNotice = "无法打开 PDF：${e.message ?: "没有可用的浏览器"}") }
+        }
+    }
 
     /** Tests the entered settings; on success persists them. */
     fun saveAndConnect(serverUrl: String, certSha256: String) {
@@ -223,6 +313,7 @@ class AppViewModel(
                             destination = Destination.Main,
                         )
                     }
+                    loadWorkspaceIfMissing()
                 }
                 is ConnResult.Offline ->
                     mutableState.update { it.copy(connection = ConnectionUi.Offline(result.message, result.certProblem)) }
@@ -442,18 +533,30 @@ class AppViewModel(
         if (!silent) mutableState.update { it.copy(connection = ConnectionUi.Testing) }
         viewModelScope.launch {
             when (val result = repository.connect(serverUrl, certSha256)) {
-                is ConnResult.Online -> mutableState.update {
-                    it.copy(
-                        connection = ConnectionUi.Online(result.state.workspaceUser),
-                        projects = result.state.projects,
-                        selectedProjectId = it.selectedProjectId
-                            ?: result.state.projects.firstOrNull()?.id,
-                    )
+                is ConnResult.Online -> {
+                    mutableState.update {
+                        it.copy(
+                            connection = ConnectionUi.Online(result.state.workspaceUser),
+                            projects = result.state.projects,
+                            selectedProjectId = it.selectedProjectId
+                                ?: result.state.projects.firstOrNull()?.id,
+                        )
+                    }
+                    loadWorkspaceIfMissing()
                 }
                 is ConnResult.Offline -> mutableState.update {
                     it.copy(connection = ConnectionUi.Offline(result.message, result.certProblem))
                 }
             }
+        }
+    }
+
+    /** First workspace load after a successful connection. */
+    private fun loadWorkspaceIfMissing() {
+        val state = mutableState.value
+        val projectId = state.selectedProjectId
+        if (projectId != null && state.workspace == null && !state.workspaceLoading) {
+            loadWorkspace(projectId)
         }
     }
 

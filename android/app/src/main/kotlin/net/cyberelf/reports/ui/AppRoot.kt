@@ -70,6 +70,15 @@ fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory))
         return
     }
 
+    state.reportViewer?.let { viewer ->
+        ReportViewerScreen(
+            viewer = viewer,
+            onClose = viewModel::closeReportViewer,
+            onOpenPdf = viewModel::openReportPdf,
+        )
+        return
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -121,7 +130,11 @@ fun AppRoot(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory))
                     connection = state.connection,
                     projects = state.projects,
                     selectedProjectId = state.selectedProject?.id,
+                    workspace = state.workspace,
+                    workspaceLoading = state.workspaceLoading,
+                    workspaceError = state.workspaceError,
                     onSelectProject = viewModel::selectProject,
+                    onOpenReport = viewModel::openReport,
                     onRetry = viewModel::refresh,
                     onOpenSettings = viewModel::openSettings,
                 )
