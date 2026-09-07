@@ -123,3 +123,10 @@ The provider prompt explicitly asks the model to use these as primary evidence a
 python3 -m unittest
 openspec validate "add-weekly-project-management-system"
 ```
+
+## Android Client
+
+The native Android client lives in its own repository: `../pm-android`
+(voice TODOs, TODO board, weekly report reading; talks to this service's
+HTTPS API). Build and setup instructions are in that repo's README;
+the planning doc moved there too (`ANDROID_APP_PLAN.md`).

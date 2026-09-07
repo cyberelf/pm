@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">周报工作台</string>
-    <string name="shortcut_voice_short">语音 TODO</string>
-    <string name="shortcut_voice_long">语音记一条 TODO</string>
-</resources>
