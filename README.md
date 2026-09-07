@@ -43,6 +43,29 @@ PORT=8765 scripts/install_service.sh
 scripts/uninstall_service.sh
 ```
 
+## Docker Compose
+
+An alternative server deployment mode that runs the backend in a container, with the same data layout as the native service:
+
+```bash
+docker compose up -d --build
+curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/state"
+```
+
+- Data (SQLite, uploads, TLS certificates, CLI logins) lives in `./data`; set `REPORTS_DATA_DIR` to relocate it. Do not point the container at a data directory while the macOS LaunchAgent service is running on it — stop one mode before starting the other.
+- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`. On Linux hosts set `REPORTS_UID`/`REPORTS_GID` to the data directory owner.
+- The image ships `gh`, `glab`, `claude`, and chromium for PDF export with CJK fonts. Authenticate the CLIs inside the container; logins persist under `data/home/` on the host:
+
+  ```bash
+  docker compose exec reports gh auth login
+  docker compose exec reports glab auth login
+  ```
+
+  `GH_TOKEN`, `GITLAB_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `OPENAI_API_KEY` from the environment are passed through to the app and the CLIs. The codex CLI is not part of the image; use the `claude` or `internal` provider in this mode.
+- Voice TODOs: the whisper.cpp ASR service stays on the host machine; set the ASR endpoint in 全局设置 to `http://host.docker.internal:8766/inference` (the host is reachable through the `host-gateway` mapping).
+- The self-signed TLS certificate is generated at startup. `REPORTS_TLS_SAN` (defaulting to `REPORTS_HOST` from `.env`) is added to the certificate SANs so the address phones use is covered.
+- On networks where `deb.debian.org` is unreachable, set `APT_MIRROR` (for example `mirrors.tuna.tsinghua.edu.cn`) in `.env` before building.
+
 The first release is local-only: the backend must run on the same machine as the workspace data, uploaded files, temporary files, `gh`/`glab`, Codex CLI, and Claude Code CLI. Remote backend deployment is intentionally out of scope.
 
 ## Local Tools

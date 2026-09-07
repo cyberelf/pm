@@ -1,0 +1,64 @@
+# Docker Compose deployment mode for the Weekly Reports server.
+#
+#   docker compose up -d --build
+#   curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/state"
+#
+# Host-side configuration comes from the repo-root .env (git-ignored):
+# PORT, REPORTS_TLS_PORT, REPORTS_FAKE_PROVIDER, REPORTS_QUEUE_CAPACITY,
+# REPORTS_QUEUE_PARALLELISM, plus the pass-through credential variables
+# commented below. Container-internal values (bind address, inner port) are
+# fixed here on purpose; reachability is controlled by the port mappings.
+
+name: weekly-reports
+
+services:
+  reports:
+    build:
+      context: .
+      args:
+        APT_MIRROR: "${APT_MIRROR:-}"
+    image: weekly-reports:latest
+    restart: unless-stopped
+    # Run as an unprivileged uid matching the data dir owner (Linux hosts);
+    # override with REPORTS_UID / REPORTS_GID in .env when needed.
+    user: "${REPORTS_UID:-1000}:${REPORTS_GID:-1000}"
+    ports:
+      - "${PORT:-8765}:8765"
+      - "${REPORTS_TLS_PORT:-8443}:8443"
+    volumes:
+      # Same data layout as the native service (SQLite, uploads, TLS certs,
+      # CLI config). Do not point this at data/ while the macOS LaunchAgent
+      # service is running on the same directory.
+      - "${REPORTS_DATA_DIR:-./data}:/app/data"
+    extra_hosts:
+      # Lets voice TODOs reach an ASR service on the host machine (default
+      # whisper.cpp port 8766): set the ASR endpoint to
+      # http://host.docker.internal:8766/inference in 全局设置.
+      - "host.docker.internal:host-gateway"
+    environment:
+      REPORTS_HOST: 0.0.0.0
+      PORT: "8765"
+      REPORTS_TLS_PORT: "8443"
+      # Extra TLS certificate SAN. Defaults to REPORTS_HOST from .env so the
+      # self-signed cert covers the address phones actually use.
+      REPORTS_TLS_SAN: "${REPORTS_TLS_SAN:-${REPORTS_HOST:-}}"
+      REPORTS_FAKE_PROVIDER: "${REPORTS_FAKE_PROVIDER:-0}"
+      REPORTS_QUEUE_CAPACITY: "${REPORTS_QUEUE_CAPACITY:-}"
+      REPORTS_QUEUE_PARALLELISM: "${REPORTS_QUEUE_PARALLELISM:-}"
+      TZ: Asia/Shanghai
+      NO_PROXY: "127.0.0.1,localhost,host.docker.internal"
+      # Provider/CLI credentials passed straight through to the app and CLIs.
+      # Leave unset in .env to configure the internal agent in 全局设置 or log
+      # in interactively instead (logins persist under data/home/).
+      GH_TOKEN: "${GH_TOKEN:-}"
+      GITLAB_TOKEN: "${GITLAB_TOKEN:-}"
+      ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
+      ANTHROPIC_AUTH_TOKEN: "${ANTHROPIC_AUTH_TOKEN:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/state', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
