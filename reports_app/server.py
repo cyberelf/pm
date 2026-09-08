@@ -51,11 +51,12 @@ from .db import (
 from .config import (
     GITHUB_ENABLED_SETTING,
     GITHUB_TOKEN_SETTING,
+    GITHUB_TOKENS_SETTING,
     GITLAB_ENABLED_SETTING,
     GITLAB_TOKEN_SETTING,
     GITLAB_URL_SETTING,
 )
-from .git_sources import check_repo, git_auth_for_user, list_branches, refresh_repo
+from .git_sources import check_repo, git_auth_for_user, list_branches, load_github_tokens, refresh_repo
 from .markdown import render_markdown
 from .materials import (
     delete_material,
@@ -212,7 +213,15 @@ def settings_state(conn, user):
         "ui_mode": get_effective_user_setting(conn, user_id, UI_MODE_SETTING, ""),
         "github_enabled": get_setting(conn, GITHUB_ENABLED_SETTING, "1") != "0",
         "gitlab_enabled": get_setting(conn, GITLAB_ENABLED_SETTING, "1") != "0",
-        "github_token_set": bool(get_user_setting(conn, user_id, GITHUB_TOKEN_SETTING)),
+        "github_token_set": bool(load_github_tokens(conn, user_id)),
+        "github_tokens": [
+            {
+                "label": entry["label"],
+                "owner": entry["owner"],
+                "hint": f"····{entry['token'][-4:]}" if entry["token"] else "",
+            }
+            for entry in load_github_tokens(conn, user_id)
+        ],
         "gitlab_token_set": bool(get_user_setting(conn, user_id, GITLAB_TOKEN_SETTING)),
         "gitlab_url": get_user_setting(conn, user_id, GITLAB_URL_SETTING),
     }
@@ -568,6 +577,27 @@ class Handler(BaseHTTPRequestHandler):
                 # Per-user git credentials: a non-empty value stores the token,
                 # an empty value clears it; the token itself never leaves the
                 # server afterwards, only *_token_set flags.
+                if GITHUB_TOKENS_SETTING in payload:
+                    stored = load_github_tokens(conn, user_id)
+                    merged = []
+                    for index, entry in enumerate((payload.get(GITHUB_TOKENS_SETTING) or [])[:8]):
+                        if not isinstance(entry, dict):
+                            continue
+                        token = (entry.get("token") or "").strip()
+                        if not token and index < len(stored) and stored[index]["owner"] == (entry.get("owner") or "").strip().lower():
+                            token = stored[index]["token"]
+                        if not token:
+                            continue
+                        merged.append(
+                            {
+                                "label": (entry.get("label") or "").strip()[:64],
+                                "owner": (entry.get("owner") or "").strip().lstrip("@").lower()[:64],
+                                "token": token[:255],
+                            }
+                        )
+                    set_user_setting(conn, user_id, GITHUB_TOKENS_SETTING, json.dumps(merged, ensure_ascii=False))
+                    # once the list exists it replaces the legacy single token
+                    set_user_setting(conn, user_id, GITHUB_TOKEN_SETTING, "")
                 for token_key in (GITHUB_TOKEN_SETTING, GITLAB_TOKEN_SETTING):
                     if token_key in payload:
                         set_user_setting(conn, user_id, token_key, (payload.get(token_key) or "").strip())

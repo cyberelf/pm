@@ -87,6 +87,7 @@ DEFAULT_GITLAB_SERVER = "https://gitlab.com"
 GITHUB_ENABLED_SETTING = "github_enabled"
 GITLAB_ENABLED_SETTING = "gitlab_enabled"
 GITHUB_TOKEN_SETTING = "github_token"
+GITHUB_TOKENS_SETTING = "github_tokens"
 GITLAB_TOKEN_SETTING = "gitlab_token"
 GITLAB_URL_SETTING = "gitlab_url"
 MAX_GITLAB_PAGES = 5

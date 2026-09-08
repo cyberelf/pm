@@ -139,11 +139,10 @@
                 <label class="switch-row"><span class="switch"><input id="gitlab-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitLab 集成（全局，仅管理员可改）</span></label>
               </div>
               <div class="git-provider-row">
-                <div class="git-provider-name"><span class="status connected">GitHub</span><small>github.com</small></div>
-                <label>Token
-                  <input id="github-token-input" type="password" autocomplete="off" placeholder="ghp_...">
-                </label>
-                <small class="git-provider-hint">只读即可：Fine-grained token 选 Contents: Read-only（自动附带 Metadata），并在 Repository access 中勾选要访问的仓库；经典 token 勾 public_repo（公开仓库）或 repo（含私有）。访问组织仓库时，fine-grained token 的 Resource owner 必须选该组织，且组织需在 Settings → Third-party access 批准；经典 token 若组织启用 SAML SSO 还需对令牌执行 SSO 授权。仓库显示 inaccessible/404 通常是路径有误或令牌未被授权。</small>
+                <div class="git-provider-name"><span class="status connected">GitHub</span><small>github.com · 支持多个 Token</small></div>
+                <div id="github-token-list" class="github-token-list"></div>
+                <div class="row"><button type="button" onclick="addGithubTokenRow()">＋ 添加 Token</button></div>
+                <small class="git-provider-hint">可同时配置多个 Token：「组织名」留空的条目是其余仓库的兜底（经典 token，或个人的 fine-grained token）；填了组织名（如 acme）的条目只用于该组织的仓库（fine-grained token，Resource owner 需选该组织并在组织的 Settings → Third-party access 批准；经典 token 若组织启用 SAML SSO 还需对令牌执行 SSO 授权）。只读即可：fine-grained 选 Contents: Read-only，经典勾 repo（或 public_repo 仅公开仓库）。Token 保存后只显示尾 4 位。</small>
               </div>
               <div class="git-provider-row">
                 <div class="git-provider-name"><span class="status connected">GitLab</span><small>gitlab.com 或自建实例</small></div>
@@ -404,6 +403,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=45"></script>
+    <script src="/app.js?v=46"></script>
   </body>
 </html>

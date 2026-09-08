@@ -232,6 +232,7 @@ async function loadState() {
   state.githubEnabled = data.github_enabled !== false;
   state.gitlabEnabled = data.gitlab_enabled !== false;
   state.githubTokenSet = !!data.github_token_set;
+  state.githubTokens = data.github_tokens || [];
   state.gitlabTokenSet = !!data.gitlab_token_set;
   state.gitlabUrl = data.gitlab_url || "";
   state.asrEndpoint = data.asr_endpoint || "";
@@ -1016,11 +1017,43 @@ async function saveQueueSettings() {
   toast("任务队列设置已保存");
 }
 
+function renderGithubTokenList() {
+  const list = $("github-token-list");
+  if (!list) return;
+  const rows = state.githubTokens.map((entry) => ({ label: entry.label || "", owner: entry.owner || "", hint: entry.hint || "" }));
+  if (!rows.length) rows.push({ label: "", owner: "", hint: "" });
+  list.innerHTML = rows.map((entry, index) => `
+    <div class="github-token-row" data-github-token-row>
+      <input data-github-token-label placeholder="名称（可选）" value="${escapeAttr(entry.label)}">
+      <input data-github-token-owner placeholder="组织名，留空=个人/通用" value="${escapeAttr(entry.owner)}">
+      <input data-github-token-value type="password" autocomplete="off" placeholder="${entry.hint ? `已配置 ${entry.hint}，留空保持不变` : "ghp_... / github_pat_..."}">
+      <button type="button" class="danger" onclick="removeGithubTokenRow(this)">删除</button>
+    </div>
+  `).join("");
+}
+
+function collectGithubTokenRows() {
+  return Array.from(document.querySelectorAll("[data-github-token-row]")).map((row) => ({
+    label: row.querySelector("[data-github-token-label]")?.value.trim() || "",
+    owner: row.querySelector("[data-github-token-owner]")?.value.trim() || "",
+    token: row.querySelector("[data-github-token-value]")?.value.trim() || "",
+  }));
+}
+
+function addGithubTokenRow() {
+  state.githubTokens = collectGithubTokenRows();
+  state.githubTokens.push({ label: "", owner: "", hint: "" });
+  renderGithubTokenList();
+  const rows = document.querySelectorAll("[data-github-token-row]");
+  rows[rows.length - 1]?.querySelector("[data-github-token-label]")?.focus();
+}
+
+function removeGithubTokenRow(button) {
+  button.closest("[data-github-token-row]")?.remove();
+}
+
 function renderGitSettings() {
-  const githubToken = $("github-token-input");
-  if (!githubToken) return;
-  githubToken.value = "";
-  githubToken.placeholder = state.githubTokenSet ? "已配置，留空保持不变" : "ghp_...";
+  renderGithubTokenList();
   const gitlabUrl = $("gitlab-url-input");
   if (gitlabUrl) gitlabUrl.value = state.gitlabUrl || "";
   const gitlabToken = $("gitlab-token-input");
@@ -1034,9 +1067,9 @@ function renderGitSettings() {
 
 async function saveGitSettings() {
   const payload = {};
-  const githubToken = $("github-token-input")?.value.trim();
+  const githubTokenRows = collectGithubTokenRows().filter((row) => row.label || row.owner || row.token);
+  if (githubTokenRows.length) payload.github_tokens = githubTokenRows;
   const gitlabToken = $("gitlab-token-input")?.value.trim();
-  if (githubToken) payload.github_token = githubToken;
   if (gitlabToken) payload.gitlab_token = gitlabToken;
   if (state.isAdmin) {
     payload.github_enabled = !!($("github-enabled-input")?.checked);
@@ -1046,6 +1079,7 @@ async function saveGitSettings() {
   state.githubEnabled = data.github_enabled !== false;
   state.gitlabEnabled = data.gitlab_enabled !== false;
   state.githubTokenSet = !!data.github_token_set;
+  state.githubTokens = data.github_tokens || [];
   state.gitlabTokenSet = !!data.gitlab_token_set;
   state.gitlabUrl = data.gitlab_url || "";
   renderGitSettings();

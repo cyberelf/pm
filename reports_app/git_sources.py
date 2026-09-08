@@ -6,10 +6,13 @@ the credentials up through the owning project's user, so background jobs
 work without a request context.
 """
 
+import json
+
 from .config import (
     GIT_MODE_GITLAB,
     GITHUB_ENABLED_SETTING,
     GITHUB_TOKEN_SETTING,
+    GITHUB_TOKENS_SETTING,
     GITLAB_ENABLED_SETTING,
     GITLAB_TOKEN_SETTING,
     GITLAB_URL_SETTING,
@@ -24,9 +27,47 @@ from .github import weekly_commits as github_weekly_commits
 from .timeutil import iso_now
 
 
+def load_github_tokens(conn, user_id):
+    """Token entries as stored by 全局设置: [{label, owner, token}]. An entry
+    with an owner serves that organization's repos only; an ownerless entry
+    (classic token or personal fine-grained token) is the fallback for
+    everything else. The pre-list single github_token setting still works as
+    the deepest fallback so existing accounts keep working untouched."""
+    raw = get_user_setting(conn, user_id, GITHUB_TOKENS_SETTING, "")
+    try:
+        entries = json.loads(raw or "[]")
+    except ValueError:
+        entries = []
+    result = [
+        {"label": str(e.get("label") or ""), "owner": str(e.get("owner") or "").strip().lower(), "token": str(e.get("token") or "")}
+        for e in entries
+        if isinstance(e, dict) and e.get("token")
+    ]
+    if not result:
+        legacy = get_user_setting(conn, user_id, GITHUB_TOKEN_SETTING, "")
+        if legacy:
+            result = [{"label": "通用", "owner": "", "token": legacy}]
+    return result
+
+
+def github_token_for(info, repo):
+    """Pick the token for a repo: a per-org entry matching the repo's owner
+    wins, then the ownerless (classic / personal) entry."""
+    owner = (repo or "").split("/", 1)[0].strip().lower()
+    entries = info.get("github_tokens") or []
+    for entry in entries:
+        if entry["owner"] and entry["owner"] == owner and entry["token"]:
+            return entry["token"]
+    for entry in entries:
+        if not entry["owner"] and entry["token"]:
+            return entry["token"]
+    return info.get("github_token", "")
+
+
 def git_auth_for_user(conn, user_id):
     return {
         "github_token": get_user_setting(conn, user_id, GITHUB_TOKEN_SETTING),
+        "github_tokens": load_github_tokens(conn, user_id),
         "gitlab_token": get_user_setting(conn, user_id, GITLAB_TOKEN_SETTING),
         "gitlab_url": get_user_setting(conn, user_id, GITLAB_URL_SETTING),
         "github_enabled": get_setting(conn, GITHUB_ENABLED_SETTING, "1") != "0",
@@ -59,7 +100,7 @@ def check_repo(repo, git_mode="github", gitlab_server="", auth_info=None, timeou
         )
     if not info.get("github_enabled", True):
         return _disabled_result("GitHub 集成已在全局设置中停用，无法读取该仓库")
-    return github_check_repo(repo, token=info.get("github_token", ""), timeout=timeout)
+    return github_check_repo(repo, token=github_token_for(info, repo), timeout=timeout)
 
 
 def list_branches(repo, git_mode="github", gitlab_server="", auth_info=None, timeout=30):
@@ -82,7 +123,7 @@ def list_branches(repo, git_mode="github", gitlab_server="", auth_info=None, tim
             "status_message": "GitHub 集成已在全局设置中停用",
             "branches": [],
         }
-    return github_list_branches(repo, token=info.get("github_token", ""), timeout=timeout)
+    return github_list_branches(repo, token=github_token_for(info, repo), timeout=timeout)
 
 
 def weekly_commits(repo, since, until, branches=None, git_mode="github", gitlab_server="", auth_info=None, timeout=30):
@@ -116,7 +157,7 @@ def weekly_commits(repo, since, until, branches=None, git_mode="github", gitlab_
             "commits": [],
         }
     return github_weekly_commits(
-        repo, since, until, branches, token=info.get("github_token", ""), timeout=timeout
+        repo, since, until, branches, token=github_token_for(info, repo), timeout=timeout
     )
 
 

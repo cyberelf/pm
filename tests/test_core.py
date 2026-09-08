@@ -1608,6 +1608,27 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(auth_info["github_token"], "ghp-secret")
         self.assertFalse(auth_info["github_enabled"])
 
+    def test_github_token_selection_prefers_matching_org_entry(self):
+        set_user_setting(
+            self.conn,
+            self.user_id,
+            "github_tokens",
+            json.dumps([
+                {"label": "acme", "owner": "Acme", "token": "ghp_org"},
+                {"label": "general", "owner": "", "token": "ghp_all"},
+            ]),
+        )
+        info = git_sources.git_auth_for_user(self.conn, self.user_id)
+        self.assertEqual(git_sources.github_token_for(info, "acme/infra"), "ghp_org")
+        self.assertEqual(git_sources.github_token_for(info, "ACME/web"), "ghp_org", "owner matching is case-insensitive")
+        self.assertEqual(git_sources.github_token_for(info, "alice/pet"), "ghp_all", "ownerless entry is the fallback")
+        # legacy single token is the deepest fallback
+        set_user_setting(self.conn, self.user_id, "github_tokens", "")
+        set_user_setting(self.conn, self.user_id, "github_token", "ghp_legacy")
+        info = git_sources.git_auth_for_user(self.conn, self.user_id)
+        self.assertEqual(git_sources.load_github_tokens(self.conn, self.user_id)[0]["token"], "ghp_legacy")
+        self.assertEqual(git_sources.github_token_for(info, "acme/infra"), "ghp_legacy")
+
     def test_gitlab_url_from_user_settings_is_the_server_fallback(self):
         set_user_setting(self.conn, self.user_id, "gitlab_url", "https://gitlab.example.com")
         with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check:
@@ -3060,6 +3081,51 @@ class GitSettingsApiTest(unittest.TestCase):
             status, payload = self.api(server.server_port, "GET", "/api/state", admin_token)
             self.assertTrue(payload["llm_api_key_set"] is not None)
             self.assertIn("queue_capacity", payload)
+
+            # GitHub token list: per-org entries plus a general fallback
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                member_token,
+                body=json.dumps({"github_tokens": [
+                    {"label": "acme", "owner": "@Acme", "token": "ghp_org1"},
+                    {"label": "general", "owner": "", "token": "ghp_all1"},
+                ]}),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(len(payload["github_tokens"]), 2)
+            self.assertEqual(payload["github_tokens"][0]["owner"], "acme", "owner is normalized (lowercase, no @)")
+            self.assertTrue(all(entry["hint"].startswith("····") for entry in payload["github_tokens"]))
+            self.assertNotIn("ghp_org1", json.dumps(payload), "raw tokens never leave the server")
+            row = self.conn.execute(
+                "SELECT value FROM user_settings WHERE user_id = ? AND key = 'github_tokens'", (self.member_id,)
+            ).fetchone()
+            self.assertIn("ghp_org1", row["value"])
+
+            # resubmitting with empty tokens keeps the stored values by index
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                member_token,
+                body=json.dumps({"github_tokens": [
+                    {"label": "acme", "owner": "acme", "token": ""},
+                    {"label": "general", "owner": "", "token": ""},
+                ]}),
+            )
+            self.assertEqual(status, 200)
+            stored = json.loads(
+                self.conn.execute(
+                    "SELECT value FROM user_settings WHERE user_id = ? AND key = 'github_tokens'", (self.member_id,)
+                ).fetchone()["value"]
+            )
+            self.assertEqual([entry["token"] for entry in stored], ["ghp_org1", "ghp_all1"])
+
+            # a repo whose owner matches uses the org token
+            auth_info = git_sources.git_auth_for_user(self.conn, self.member_id)
+            self.assertEqual(git_sources.github_token_for(auth_info, "acme/infra"), "ghp_org1")
+            self.assertEqual(git_sources.github_token_for(auth_info, "alice/pet"), "ghp_all1")
 
             # per-user GitLab server address: stored, returned, and validated
             status, payload = self.api(
