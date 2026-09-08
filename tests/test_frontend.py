@@ -41,6 +41,11 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("toggleRepo(", source)
         self.assertIn("data-schedule-enabled", source)
 
+    def test_git_settings_save_sends_gitlab_url_and_skip_verify(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('payload.gitlab_url = $("gitlab-url-input")?.value.trim() || "";', source)
+        self.assertIn('payload.gitlab_skip_verify = !!($("gitlab-skip-verify-input")?.checked);', source)
+
     def test_project_pause_switch_and_greyed_menu_entries(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")

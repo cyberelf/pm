@@ -706,7 +706,7 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(queue_capacity(self.conn), 20)
         self.assertEqual(queue_parallelism(self.conn), 1)
 
-    def test_settings_roundtrip_gitlab_skip_verify(self):
+    def test_settings_roundtrip_gitlab_url_and_skip_verify(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.db_path = self.db_path
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -717,11 +717,12 @@ class CoreTest(unittest.TestCase):
                 client,
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"gitlab_skip_verify": True}),
+                body=json.dumps({"gitlab_url": "gitlab.example.com:8443", "gitlab_skip_verify": True}),
                 headers={"Content-Type": "application/json"},
             )
             settings = json.loads(client.getresponse().read())
             client.close()
+            self.assertEqual(settings["gitlab_url"], "https://gitlab.example.com:8443")
             self.assertTrue(settings["gitlab_skip_verify"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
@@ -729,12 +730,22 @@ class CoreTest(unittest.TestCase):
                 client,
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"gitlab_skip_verify": False}),
+                body=json.dumps({"gitlab_url": "", "gitlab_skip_verify": False}),
                 headers={"Content-Type": "application/json"},
             )
             settings = json.loads(client.getresponse().read())
             client.close()
+            self.assertEqual(settings["gitlab_url"], "")
             self.assertFalse(settings["gitlab_skip_verify"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client, "PUT", "/api/settings", body=json.dumps({"gitlab_url": "ftp://gitlab.example.com"}), headers={"Content-Type": "application/json"}
+            )
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
         finally:
             server.shutdown()
             server.server_close()

@@ -1078,6 +1078,7 @@ async function saveGitSettings() {
   const payload = {};
   const githubTokenRows = collectGithubTokenRows().filter((row) => row.label || row.owner || row.token);
   if (githubTokenRows.length) payload.github_tokens = githubTokenRows;
+  payload.gitlab_url = $("gitlab-url-input")?.value.trim() || "";
   const gitlabToken = $("gitlab-token-input")?.value.trim();
   if (gitlabToken) payload.gitlab_token = gitlabToken;
   payload.gitlab_skip_verify = !!($("gitlab-skip-verify-input")?.checked);
