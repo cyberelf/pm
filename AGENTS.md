@@ -2,7 +2,7 @@
 
 ## Scope
 
-This repository implements a local personal weekly project reporting workspace. The first release is single-user and local-only.
+This repository implements a local weekly project reporting workspace with account-based data isolation. A system administrator manages accounts; regular users see only their own projects, TODOs, and voice jobs. Local-only: the backend runs on the same machine as the workspace data.
 
 ## Architecture
 
@@ -11,19 +11,20 @@ This repository implements a local personal weekly project reporting workspace. 
 - Uploads: local files under `data/uploads/`.
 - Frontend: dependency-free static HTML/CSS/JS in `static/`.
 - Task queue: weekly report generation and voice TODO transcription run through a shared in-process queue (`reports_app/task_queue.py`). Capacity (queued + running, default 5) and parallelism (default 2) are configurable in 全局设置 or via `REPORTS_QUEUE_CAPACITY` / `REPORTS_QUEUE_PARALLELISM`; changes take effect without a restart. Submissions beyond capacity are rejected with HTTP 409.
-- External tools: local `gh` (GitHub), `glab` (GitLab), Codex CLI, Claude Code CLI, a local whisper.cpp ASR service (`scripts/install_asr_service.sh`, port 8766) for voice TODO transcription, and the in-process internal agent (`reports_app/internal_agent.py`) that calls OpenAI/Anthropic-compatible LLM endpoints through langchain bindings configured in 全局设置.
+- Accounts: users, PBKDF2 password hashes, and cookie sessions live in the database (`users`, `sessions`, `user_settings`; logic in `reports_app/auth.py`). The first startup bootstraps an admin named `darren` with `REPORTS_ADMIN_PASSWORD` (default `changeme`). Every `/api` route requires a session except auth state/login; admin-only management covers users, LLM/ASR/queue settings, and the GitHub/GitLab enable switches. Git credentials are per-user tokens stored in `user_settings`.
+- External tools: the GitHub REST API and GitLab REST API v4 called directly with per-user tokens (`reports_app/github.py`, `reports_app/gitlab.py` — no `gh`/`glab` CLIs), a local whisper.cpp ASR service (`scripts/install_asr_service.sh`, port 8766) for voice TODO transcription, and the in-process internal agent (`reports_app/internal_agent.py`) that calls OpenAI/Anthropic-compatible LLM endpoints through langchain bindings configured in 全局设置. The Codex/Claude CLI agent paths were removed; the internal agent is the only report/voice/summary provider.
 - Stable service: macOS LaunchAgent scripts in `scripts/`, plus a Docker Compose deployment mode (`compose.yaml`, `Dockerfile`, `docker/entrypoint.sh`) whose state lives in the docker named volume `weekly-reports_reports-data`, separate from `data/`.
 
 ## Development Rules
 
 - Keep changes small and aligned with the OpenSpec change under `openspec/changes/add-weekly-project-management-system`.
 - Prefer standard library code unless a dependency clearly removes meaningful complexity.
-- Preserve the local-only, single-user scope. Do not add teams, roles, OAuth, or remote runners without a new OpenSpec change.
+- Preserve the local-only scope and the account model: one admin manages users, per-user data isolation stays intact, and report/voice/summary generation stays on the internal agent. Do not add remote runners, OAuth, or additional providers without a new OpenSpec change.
 - Store user-facing timestamps and scheduling in China time by default using `Asia/Shanghai`.
-- Report generation must use temporary input/output files and must not let agent CLIs write directly to app data.
-- Report generation defaults to real Codex/Claude provider execution. Use `REPORTS_FAKE_PROVIDER=1` only in tests or explicit dry runs.
+- Report generation runs in-process; no external agent CLI writes to app data.
+- Report generation defaults to real internal-agent execution. Use `REPORTS_FAKE_PROVIDER=1` only in tests or explicit dry runs.
 - Report context must include this week's newly uploaded or manually entered materials and this week's Git commits for connected repositories.
-- Agent CLIs must get platform information through `scripts/report_context.py`; do not prompt them to read SQLite, uploaded files, app files, or GitHub/`gh`/GitLab/`glab` directly. The internal agent receives the same bounded evidence inline instead of the platform CLI.
+- The internal agent receives bounded evidence inline (`build_internal_evidence_prompt`); it never reads SQLite, uploaded files, or app files directly, and git activity comes from the assembled context.
 - Generated risk forecasts stay in Markdown report content. System risk warnings must come from deterministic rules.
 
 ## Verification
@@ -46,7 +47,7 @@ curl --noproxy '*' http://127.0.0.1:8765/api/state
 
 - Use the macOS LaunchAgent as the normal long-running service. Install or restart it with `scripts/install_service.sh`; the service label is `com.cyberelf.weeklyreports`.
 - Re-run `scripts/install_service.sh` after changing backend Python code, the service environment, the port, or LaunchAgent configuration so the running process uses the new version.
-- Verify the running service with `curl --noproxy '*' http://127.0.0.1:8765/api/state`. When a change adds or modifies an API, verify that endpoint against the running service as well.
+- Verify the running service with `curl --noproxy '*' http://127.0.0.1:8765/api/auth/state` (public); authenticated endpoints need a session cookie from `POST /api/auth/login`. When a change adds or modifies an API, verify that endpoint against the running service as well.
 - Inspect `data/server.log` and `data/server.err.log` when startup or API verification fails. Check the loaded service with `launchctl print "gui/$(id -u)/com.cyberelf.weeklyreports"`.
 - Remove the LaunchAgent with `scripts/uninstall_service.sh` when it should no longer run. Reinstall it with `scripts/install_service.sh` rather than editing the generated plist directly.
 - `scripts/start_server.sh` and `scripts/stop_server.sh` are for temporary manual operation. Do not run the manual server and LaunchAgent on the same port; stop or uninstall one mode before starting the other.
