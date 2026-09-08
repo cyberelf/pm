@@ -53,7 +53,10 @@ def _request(path, token, timeout):
 
 
 def _api_error(status_code, error):
-    return f"GitHub API error {status_code}: {(error or '').strip()[:300]}"
+    text = f"GitHub API error {status_code}: {(error or '').strip()[:300]}"
+    if status_code == 404:
+        text += "；仓库不存在、owner/repo 路径有误，或为私有仓库且令牌无权访问（GitHub 对未授权的私有仓库同样返回 404）"
+    return text
 
 
 def _paginate(path, token, timeout):
@@ -92,6 +95,24 @@ def check_repo(repo, token="", timeout=20):
         return {
             "status": "unauthenticated",
             "status_message": "GitHub token was rejected; check 全局设置 Git 集成 token",
+            "activity_summary": "",
+            "last_activity_at": None,
+        }
+    if status_code == 404:
+        # GitHub answers 404 both for unknown repos and for private repos the
+        # token cannot see; one anonymous probe tells the two apart.
+        if token:
+            _, anon_status, _ = _request(f"/repos/{quote(repo, safe='/')}", "", timeout)
+            if anon_status == 200:
+                return {
+                    "status": "inaccessible",
+                    "status_message": "仓库存在但当前令牌无权访问：fine-grained token 需在 Repository access 中包含该仓库（Contents: Read-only），经典 token 需 repo 权限",
+                    "activity_summary": "",
+                    "last_activity_at": None,
+                }
+        return {
+            "status": "inaccessible",
+            "status_message": "仓库不存在、owner/repo 路径有误，或为私有仓库且当前令牌无权访问（GitHub 对未授权的私有仓库同样返回 404）",
             "activity_summary": "",
             "last_activity_at": None,
         }

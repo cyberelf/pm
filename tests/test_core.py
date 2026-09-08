@@ -41,6 +41,7 @@ from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
 from reports_app.gitlab import list_branches as gitlab_list_branches
 from reports_app.gitlab import weekly_commits as gitlab_weekly_commits
+from reports_app.github import check_repo as github_check_repo
 from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
@@ -1443,6 +1444,36 @@ class CoreTest(unittest.TestCase):
         with mock.patch("reports_app.gitlab._request", return_value=(None, 401, "401 Unauthorized")):
             result = gitlab_check_repo("group/proj", server="gitlab.example.com", token="bad")
         self.assertEqual(result["status"], "unauthenticated")
+
+    def test_github_404_distinguishes_missing_repo_from_token_access(self):
+        # token rejected for a PRIVATE repo but the repo is public: anonymous probe succeeds
+        def probe_ok(path, token, timeout):
+            return ({}, 200, None) if not token else (None, 404, '{"status":"404"}')
+
+        with mock.patch("reports_app.github._request", side_effect=probe_ok):
+            result = github_check_repo("owner/private", token="ghp_x")
+        self.assertEqual(result["status"], "inaccessible")
+        self.assertIn("令牌无权访问", result["status_message"])
+
+        # anonymous probe also 404: the path itself is wrong (or fully inaccessible)
+        def always_404(path, token, timeout):
+            return None, 404, '{"status":"404"}'
+
+        with mock.patch("reports_app.github._request", side_effect=always_404):
+            result = github_check_repo("owner/ghost", token="ghp_x")
+        self.assertEqual(result["status"], "inaccessible")
+        self.assertIn("路径有误", result["status_message"])
+
+        result = github_check_repo("owner/ghost", token="")
+        self.assertEqual(result["status"], "inaccessible")
+        self.assertIn("路径有误", result["status_message"])
+
+    def test_gitlab_404_reports_path_or_permission(self):
+        with mock.patch("reports_app.gitlab._request", return_value=(None, 404, '{"message":"404 Project Not Found"}')):
+            result = gitlab_check_repo("group/ghost", server="https://gitlab.example.com", token="glpat_x")
+        self.assertEqual(result["status"], "inaccessible")
+        self.assertIn("路径有误", result["status_message"])
+        self.assertIn("404", result["status_message"])
 
     def test_gitlab_weekly_commits_reads_selected_branches_and_dedupes(self):
         shared = {

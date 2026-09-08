@@ -65,7 +65,10 @@ def _request(server, path, token, timeout):
 
 
 def _api_error(status_code, error):
-    return f"GitLab API error {status_code}: {(error or '').strip()[:300]}"
+    text = f"GitLab API error {status_code}: {(error or '').strip()[:300]}"
+    if status_code == 404:
+        text += "；项目不存在、路径有误，或为私有项目且令牌无权访问（GitLab 对未授权的私有项目同样返回 404）"
+    return text
 
 
 def _unreachable(error):
@@ -105,6 +108,13 @@ def check_repo(repo, server="", token="", timeout=20):
         return {
             "status": "unauthenticated",
             "status_message": "GitLab token was rejected; check 全局设置 Git 集成 token",
+            "activity_summary": "",
+            "last_activity_at": None,
+        }
+    if status_code == 404:
+        return {
+            "status": "inaccessible",
+            "status_message": "项目不存在、group/project 路径有误，或为私有项目且当前令牌无权访问（GitLab 对未授权的私有项目同样返回 404）",
             "activity_summary": "",
             "last_activity_at": None,
         }
