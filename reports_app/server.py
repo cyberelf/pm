@@ -49,7 +49,13 @@ from .db import (
     set_setting,
     set_user_setting,
 )
-from .git_sources import check_repo, list_branches, refresh_repo
+from .config import (
+    GITHUB_ENABLED_SETTING,
+    GITHUB_TOKEN_SETTING,
+    GITLAB_ENABLED_SETTING,
+    GITLAB_TOKEN_SETTING,
+)
+from .git_sources import check_repo, git_auth_for_user, list_branches, refresh_repo
 from .markdown import render_markdown
 from .materials import (
     delete_material,
@@ -120,6 +126,8 @@ ADMIN_ONLY_SETTING_KEYS = {
     "llm_api_key",
     "queue_capacity",
     "queue_parallelism",
+    "github_enabled",
+    "gitlab_enabled",
 }
 
 
@@ -203,6 +211,10 @@ def settings_state(conn, user):
     state = {
         "ui_theme": get_effective_user_setting(conn, user_id, UI_THEME_SETTING, ""),
         "ui_mode": get_effective_user_setting(conn, user_id, UI_MODE_SETTING, ""),
+        "github_enabled": get_setting(conn, GITHUB_ENABLED_SETTING, "1") != "0",
+        "gitlab_enabled": get_setting(conn, GITLAB_ENABLED_SETTING, "1") != "0",
+        "github_token_set": bool(get_user_setting(conn, user_id, GITHUB_TOKEN_SETTING)),
+        "gitlab_token_set": bool(get_user_setting(conn, user_id, GITLAB_TOKEN_SETTING)),
     }
     if is_admin:
         state.update(
@@ -555,8 +567,18 @@ class Handler(BaseHTTPRequestHandler):
                     set_user_setting(conn, user_id, UI_THEME_SETTING, validate_ui_theme(payload.get("ui_theme")))
                 if "ui_mode" in payload:
                     set_user_setting(conn, user_id, UI_MODE_SETTING, validate_ui_mode(payload.get("ui_mode")))
+                # Per-user git credentials: a non-empty value stores the token,
+                # an empty value clears it; the token itself never leaves the
+                # server afterwards, only *_token_set flags.
+                for token_key in (GITHUB_TOKEN_SETTING, GITLAB_TOKEN_SETTING):
+                    if token_key in payload:
+                        set_user_setting(conn, user_id, token_key, (payload.get(token_key) or "").strip())
                 if any(key in payload for key in ADMIN_ONLY_SETTING_KEYS):
                     require_admin(user)
+                if GITHUB_ENABLED_SETTING in payload:
+                    set_setting(conn, GITHUB_ENABLED_SETTING, "1" if payload.get(GITHUB_ENABLED_SETTING) else "0")
+                if GITLAB_ENABLED_SETTING in payload:
+                    set_setting(conn, GITLAB_ENABLED_SETTING, "1" if payload.get(GITLAB_ENABLED_SETTING) else "0")
                 if "voice_agent" in payload:
                     voice_agent = payload.get("voice_agent") or DEFAULT_VOICE_AGENT
                     validate_provider(voice_agent)
@@ -683,13 +705,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(workspace(conn, project_id))
                     return
                 if len(parts) == 4 and parts[3] == "repos" and method == "POST":
-                    repo_id = add_repo(conn, project_id, self.body_json())
+                    repo_id = add_repo(conn, project_id, self.body_json(), auth_info=git_auth_for_user(conn, user_id))
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     self.json({"id": repo_id}, HTTPStatus.CREATED)
                     return
                 if len(parts) == 5 and parts[3] == "repos" and method == "PUT":
-                    update_repo_notes(conn, project_id, int(parts[4]), self.body_json())
+                    update_repo_notes(conn, project_id, int(parts[4]), self.body_json(), auth_info=git_auth_for_user(conn, user_id))
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     self.json(workspace(conn, project_id))
@@ -701,7 +723,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(workspace(conn, project_id))
                     return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "branches" and method == "GET":
-                    self.json(repo_branches(conn, project_id, int(parts[4])))
+                    self.json(repo_branches(conn, project_id, int(parts[4]), auth_info=git_auth_for_user(conn, user_id)))
                     return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "refresh" and method == "POST":
                     refresh_repo(conn, int(parts[4]))
@@ -1047,13 +1069,18 @@ def update_settings(conn, project_id, payload):
         )
 
 
-def add_repo(conn, project_id, payload):
+def add_repo(conn, project_id, payload, auth_info=None):
     raw_repo = (payload.get("repo") or "").strip()
     git_mode = validate_git_mode(payload.get("git_mode"))
     gitlab_server = ""
     if git_mode == "gitlab":
         gitlab_server = validate_gitlab_server(payload.get("gitlab_server")) or gitlab_server_from_url(raw_repo)
     repo = validate_repo(raw_repo, git_mode)
+    info = auth_info or {}
+    if git_mode == "gitlab" and not info.get("gitlab_enabled", True):
+        raise ValidationError("GitLab 集成已在全局设置中停用，无法添加 GitLab 仓库")
+    if git_mode == "github" and not info.get("github_enabled", True):
+        raise ValidationError("GitHub 集成已在全局设置中停用，无法添加 GitHub 仓库")
     notes = payload.get("notes") or ""
     requested_branches = validate_branches(payload.get("branches") or [])
     existing = conn.execute(
@@ -1072,7 +1099,7 @@ def add_repo(conn, project_id, payload):
             values,
         )
         return existing["id"]
-    result = check_repo(repo, git_mode, gitlab_server)
+    result = check_repo(repo, git_mode, gitlab_server, auth_info=auth_info)
     branches = requested_branches or [result.get("default_branch") or "main"]
     now = iso_now()
     cur = conn.execute(
@@ -1100,7 +1127,7 @@ def add_repo(conn, project_id, payload):
     return cur.lastrowid
 
 
-def update_repo_notes(conn, project_id, repo_id, payload):
+def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
     row = conn.execute(
         "SELECT repo, notes, tracked_branches_json, enabled, git_mode, gitlab_server FROM github_repos WHERE id = ? AND project_id = ?",
         (repo_id, project_id),
@@ -1125,7 +1152,7 @@ def update_repo_notes(conn, project_id, repo_id, payload):
         ).fetchone()
         if conflict:
             raise ValidationError("a repository entry with this git mode and server already exists")
-    result = check_repo(row["repo"], git_mode, gitlab_server) if target_changed else None
+    result = check_repo(row["repo"], git_mode, gitlab_server, auth_info=auth_info) if target_changed else None
     if result:
         conn.execute(
             """
@@ -1177,14 +1204,14 @@ def repo_rows(conn, project_id):
     return rows
 
 
-def repo_branches(conn, project_id, repo_id):
+def repo_branches(conn, project_id, repo_id, auth_info=None):
     row = conn.execute(
         "SELECT repo, git_mode, gitlab_server FROM github_repos WHERE id = ? AND project_id = ?",
         (repo_id, project_id),
     ).fetchone()
     if not row:
         raise ValidationError("repository not found")
-    return list_branches(row["repo"], row["git_mode"], row["gitlab_server"])
+    return list_branches(row["repo"], row["git_mode"], row["gitlab_server"], auth_info=auth_info)
 
 
 def save_plan(conn, project_id, payload):

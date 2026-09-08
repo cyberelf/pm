@@ -1,14 +1,25 @@
+"""GitLab REST API (v4) access for repository status, branches, and commits.
+
+Requests go straight to the configured GitLab instance with a per-user
+personal access token in the PRIVATE-TOKEN header; public projects are
+readable without a token. (This used to be delegated to the local `glab`
+CLI, which cannot isolate credentials per user.)
+"""
+
 import json
-import shutil
-import subprocess
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 
-from .config import DEFAULT_GITLAB_SERVER, MAX_GITLAB_PAGES, TRACK_ALL_BRANCHES
-from .github import flatten_api_pages, normalize_branches
+from .config import DEFAULT_GITLAB_SERVER, TRACK_ALL_BRANCHES
+from .github import _commit_result, normalize_branches
 from .validation import ValidationError, validate_gitlab_server
 
+API_PREFIX = "api/v4"
 PAGE_SIZE = 100
+MAX_PAGES = 5
+USER_AGENT = "weekly-reports"
 
 
 def resolve_server(server):
@@ -26,53 +37,96 @@ def project_path(repo):
     return quote(str(repo or "").strip(), safe="")
 
 
-def run_glab(args, timeout):
-    return subprocess.run(["glab", *args], text=True, capture_output=True, timeout=timeout)
+def _request(server, path, token, timeout):
+    """One GET against the GitLab v4 API with the same result contract as
+    github._request: (payload, status_code, error)."""
+    url = f"{resolve_server(server).rstrip('/')}/{API_PREFIX}/{path}"
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
+    if token:
+        request.add_header("PRIVATE-TOKEN", token)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        try:
+            return json.loads(raw or "null"), 200, None
+        except ValueError as exc:
+            return None, 200, f"failed to parse response: {exc}"
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        return None, exc.code, body or str(exc)
+    except Exception as exc:
+        return None, None, str(exc)
 
 
-def check_repo(repo, server="", timeout=20):
-    host = gitlab_host(server)
-    if not shutil.which("glab"):
-        return {
-            "status": "disconnected",
-            "status_message": "local GitLab CLI (`glab`) is missing",
-            "activity_summary": "",
-            "last_activity_at": None,
-        }
-    auth = run_glab(["auth", "status", "--hostname", host], timeout=timeout)
-    if auth.returncode != 0:
+def _api_error(status_code, error):
+    return f"GitLab API error {status_code}: {(error or '').strip()[:300]}"
+
+
+def _unreachable(error):
+    return {
+        "status": "disconnected",
+        "status_message": f"GitLab server unreachable: {error}",
+        "activity_summary": "",
+        "last_activity_at": None,
+    }
+
+
+def _paginate(server, path, token, timeout):
+    items = []
+    for page in range(1, MAX_PAGES + 1):
+        separator = "&" if "?" in path else "?"
+        payload, status_code, error = _request(
+            server, f"{path}{separator}per_page={PAGE_SIZE}&page={page}", token, timeout
+        )
+        if status_code is None:
+            return None, f"GitLab server unreachable: {error}"
+        if status_code != 200:
+            return None, _api_error(status_code, error)
+        if not isinstance(payload, list):
+            return None, "unexpected GitLab API response shape"
+        items.extend(payload)
+        if len(payload) < PAGE_SIZE:
+            break
+    return items, None
+
+
+def check_repo(repo, server="", token="", timeout=20):
+    encoded = project_path(repo)
+    data, status_code, error = _request(server, f"projects/{encoded}", token, timeout)
+    if status_code is None:
+        return _unreachable(error)
+    if status_code == 401:
         return {
             "status": "unauthenticated",
-            "status_message": (auth.stderr or auth.stdout or f"local glab is unauthenticated for {host}").strip(),
+            "status_message": "GitLab token was rejected; check 全局设置 Git 集成 token",
             "activity_summary": "",
             "last_activity_at": None,
         }
-    encoded = project_path(repo)
-    view = run_glab(["api", f"projects/{encoded}", "--hostname", host], timeout=timeout)
-    if view.returncode != 0:
+    if status_code != 200:
         return {
             "status": "inaccessible",
-            "status_message": (view.stderr or view.stdout or "repository inaccessible").strip(),
-            "activity_summary": "",
-            "last_activity_at": None,
-        }
-    try:
-        data = json.loads(view.stdout or "{}")
-    except (json.JSONDecodeError, ValueError) as exc:
-        return {
-            "status": "inaccessible",
-            "status_message": f"failed to parse repository: {exc}",
+            "status_message": _api_error(status_code, error),
             "activity_summary": "",
             "last_activity_at": None,
         }
     default_branch = (data.get("default_branch") or "main").strip() or "main"
-    merge_requests = run_glab(
-        ["api", f"projects/{encoded}/merge_requests?scope=all&state=all&per_page=10&order_by=updated_at", "--hostname", host],
-        timeout=timeout,
+    merge_requests, _, _ = _request(
+        server,
+        f"projects/{encoded}/merge_requests?scope=all&state=all&per_page=10&order_by=updated_at",
+        token,
+        timeout,
     )
-    issues = run_glab(
-        ["api", f"projects/{encoded}/issues?scope=all&state=all&per_page=10", "--hostname", host],
-        timeout=timeout,
+    issues, _, _ = _request(
+        server,
+        f"projects/{encoded}/issues?scope=all&state=all&per_page=10",
+        token,
+        timeout,
     )
     parts = [f"Repository {data.get('path_with_namespace') or repo}"]
     if data.get("description"):
@@ -80,29 +134,22 @@ def check_repo(repo, server="", timeout=20):
     if data.get("last_activity_at"):
         parts.append(f"Last activity: {data['last_activity_at']}")
     parts.append(f"Default branch: {default_branch}")
-    if merge_requests.returncode == 0:
-        parts.append(f"Recent merge requests: {len(json.loads(merge_requests.stdout or '[]'))}")
-    if issues.returncode == 0:
-        parts.append(f"Recent issues: {len(json.loads(issues.stdout or '[]'))}")
+    if isinstance(merge_requests, list):
+        parts.append(f"Recent merge requests: {len(merge_requests)}")
+    if isinstance(issues, list):
+        parts.append(f"Recent issues: {len(issues)}")
+    host = gitlab_host(server)
     return {
         "status": "connected",
-        "status_message": f"connected through local glab ({host})",
+        "status_message": f"connected through GitLab API ({host})",
         "activity_summary": "\n".join(parts),
         "last_activity_at": data.get("last_activity_at"),
         "default_branch": default_branch,
     }
 
 
-def list_branches(repo, server="", timeout=30):
-    host = gitlab_host(server)
-    if not shutil.which("glab"):
-        return {
-            "repo": repo,
-            "status": "disconnected",
-            "status_message": "local GitLab CLI (`glab`) is missing",
-            "branches": [],
-        }
-    items, error = fetch_paginated(f"projects/{project_path(repo)}/repository/branches", host, timeout=timeout)
+def list_branches(repo, server="", token="", timeout=30):
+    items, error = _paginate(server, f"projects/{project_path(repo)}/repository/branches", token, timeout)
     if error:
         return {
             "repo": repo,
@@ -114,26 +161,16 @@ def list_branches(repo, server="", timeout=30):
         "repo": repo,
         "status": "ok",
         "status_message": f"{len(items)} branches",
-        "branches": [item.get("name") for item in items if item.get("name")],
+        "branches": [item.get("name") for item in items if isinstance(item, dict) and item.get("name")],
     }
 
 
-def weekly_commits(repo, since, until, branches=None, server="", timeout=30):
+def weekly_commits(repo, since, until, branches=None, server="", token="", timeout=30):
     tracked_branches = normalize_branches(branches)
-    host = gitlab_host(server)
-    if not shutil.which("glab"):
-        return {
-            "repo": repo,
-            "branches": tracked_branches,
-            "resolved_branches": [],
-            "status": "disconnected",
-            "status_message": "local GitLab CLI (`glab`) is missing",
-            "commits": [],
-        }
     branch_names = tracked_branches
     tracking_all = TRACK_ALL_BRANCHES in tracked_branches
     if tracking_all:
-        branch_result = list_branches(repo, server=server, timeout=timeout)
+        branch_result = list_branches(repo, server=server, token=token, timeout=timeout)
         if branch_result["status"] != "ok":
             return {
                 "repo": repo,
@@ -153,50 +190,13 @@ def weekly_commits(repo, since, until, branches=None, server="", timeout=30):
             f"projects/{project_path(repo)}/repository/commits"
             f"?ref_name={quote(branch, safe='')}&since={quote(since_q, safe='')}&until={quote(until_q, safe='')}"
         )
-        items, error = fetch_paginated(endpoint, host, timeout=timeout)
+        items, error = _paginate(server, endpoint, token, timeout)
         if error:
             errors.append(f"{branch}: {error}")
             continue
         for item in items:
             add_commit(commits_by_sha, item, branch)
-    commits = sorted(commits_by_sha.values(), key=lambda item: item.get("date") or "", reverse=True)
-    status = "ok"
-    if errors and commits:
-        status = "partial"
-    elif errors:
-        status = "failed"
-    scope = "all remote branches" if tracking_all else "selected branches"
-    status_message = f"{len(commits)} commits in current project week across {len(branch_names)} {scope}"
-    if errors:
-        status_message = f"{status_message}; errors: {'; '.join(errors)}"
-    return {
-        "repo": repo,
-        "branches": tracked_branches,
-        "resolved_branches": branch_names,
-        "status": status,
-        "status_message": status_message,
-        "commits": commits,
-    }
-
-
-def fetch_paginated(endpoint, host, timeout, max_pages=MAX_GITLAB_PAGES):
-    items = []
-    for page in range(1, max_pages + 1):
-        separator = "&" if "?" in endpoint else "?"
-        result = run_glab(
-            ["api", f"{endpoint}{separator}per_page={PAGE_SIZE}&page={page}", "--hostname", host],
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            return None, (result.stderr or result.stdout or "request failed").strip()
-        try:
-            data = flatten_api_pages(json.loads(result.stdout or "[]"))
-        except (json.JSONDecodeError, ValueError) as exc:
-            return None, f"failed to parse response: {exc}"
-        items.extend(data)
-        if len(data) < PAGE_SIZE:
-            break
-    return items, None
+    return _commit_result(repo, tracked_branches, branch_names, commits_by_sha, errors, tracking_all)
 
 
 def add_commit(commits_by_sha, item, branch):

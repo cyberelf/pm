@@ -1,129 +1,156 @@
+"""GitHub REST API access for repository status, branches, and commits.
+
+Requests go to api.github.com directly. A per-user personal access token is
+used when configured; without one only public data is reachable and the
+anonymous rate limit applies. (This used to be delegated to the local `gh`
+CLI, which cannot isolate credentials per user.)
+"""
+
 import json
-import shutil
-import subprocess
-from urllib.parse import urlencode
+import urllib.error
+import urllib.request
+from urllib.parse import quote, urlencode
 
 from .config import TRACK_ALL_BRANCHES
 
+API_BASE = "https://api.github.com"
+PAGE_SIZE = 100
+MAX_PAGES = 5
+USER_AGENT = "weekly-reports"
 
-def check_repo(repo, timeout=20):
-    if not shutil.which("gh"):
-        return {
-            "status": "disconnected",
-            "status_message": "local GitHub CLI (`gh`) is missing",
-            "activity_summary": "",
-            "last_activity_at": None,
-        }
-    auth = subprocess.run(["gh", "auth", "status"], text=True, capture_output=True, timeout=timeout)
-    if auth.returncode != 0:
+
+def _request(path, token, timeout):
+    """One GET against the GitHub REST API.
+
+    Returns (payload, status_code, error): status_code is None for network
+    level failures, and error carries the response body or exception text.
+    """
+    request = urllib.request.Request(
+        f"{API_BASE}{path}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": USER_AGENT,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        try:
+            return json.loads(raw or "null"), 200, None
+        except ValueError as exc:
+            return None, 200, f"failed to parse response: {exc}"
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        return None, exc.code, body or str(exc)
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _api_error(status_code, error):
+    return f"GitHub API error {status_code}: {(error or '').strip()[:300]}"
+
+
+def _paginate(path, token, timeout):
+    items = []
+    for page in range(1, MAX_PAGES + 1):
+        separator = "&" if "?" in path else "?"
+        payload, status_code, error = _request(
+            f"{path}{separator}per_page={PAGE_SIZE}&page={page}", token, timeout
+        )
+        if status_code is None:
+            return None, f"GitHub API unreachable: {error}"
+        if status_code != 200:
+            return None, _api_error(status_code, error)
+        if not isinstance(payload, list):
+            return None, "unexpected GitHub API response shape"
+        items.extend(payload)
+        if len(payload) < PAGE_SIZE:
+            break
+    return items, None
+
+
+def _unreachable(error):
+    return {
+        "status": "disconnected",
+        "status_message": f"GitHub API unreachable: {error}",
+        "activity_summary": "",
+        "last_activity_at": None,
+    }
+
+
+def check_repo(repo, token="", timeout=20):
+    data, status_code, error = _request(f"/repos/{quote(repo, safe='/')}", token, timeout)
+    if status_code is None:
+        return _unreachable(error)
+    if status_code == 401:
         return {
             "status": "unauthenticated",
-            "status_message": (auth.stderr or auth.stdout or "local gh is unauthenticated").strip(),
+            "status_message": "GitHub token was rejected; check 全局设置 Git 集成 token",
             "activity_summary": "",
             "last_activity_at": None,
         }
-    view = subprocess.run(
-        ["gh", "repo", "view", repo, "--json", "nameWithOwner,pushedAt,description,defaultBranchRef"],
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    if view.returncode != 0:
+    if status_code != 200:
         return {
             "status": "inaccessible",
-            "status_message": (view.stderr or view.stdout or "repository inaccessible").strip(),
+            "status_message": _api_error(status_code, error),
             "activity_summary": "",
             "last_activity_at": None,
         }
-    data = json.loads(view.stdout or "{}")
-    default_branch = ((data.get("defaultBranchRef") or {}).get("name") or "main").strip() or "main"
-    prs = subprocess.run(
-        ["gh", "pr", "list", "-R", repo, "--state", "all", "--limit", "10", "--json", "number,title,state,updatedAt"],
-        text=True,
-        capture_output=True,
-        timeout=timeout,
+    default_branch = (data.get("default_branch") or "main").strip() or "main"
+    pulls, _, _ = _request(
+        f"/repos/{quote(repo, safe='/')}/pulls?state=all&per_page=10&sort=updated", token, timeout
     )
-    issues = subprocess.run(
-        ["gh", "issue", "list", "-R", repo, "--state", "all", "--limit", "10", "--json", "number,title,state,updatedAt"],
-        text=True,
-        capture_output=True,
-        timeout=timeout,
+    issues, _, _ = _request(
+        f"/repos/{quote(repo, safe='/')}/issues?state=all&per_page=10&sort=updated", token, timeout
     )
-    parts = [f"Repository {data.get('nameWithOwner', repo)}"]
+    parts = [f"Repository {data.get('full_name', repo)}"]
     if data.get("description"):
         parts.append(data["description"])
-    if data.get("pushedAt"):
-        parts.append(f"Last push: {data['pushedAt']}")
+    if data.get("pushed_at"):
+        parts.append(f"Last push: {data['pushed_at']}")
     parts.append(f"Default branch: {default_branch}")
-    if prs.returncode == 0:
-        pr_data = json.loads(prs.stdout or "[]")
-        parts.append(f"Recent PRs: {len(pr_data)}")
-    if issues.returncode == 0:
-        issue_data = json.loads(issues.stdout or "[]")
-        parts.append(f"Recent issues: {len(issue_data)}")
+    if isinstance(pulls, list):
+        parts.append(f"Recent PRs: {len(pulls)}")
+    if isinstance(issues, list):
+        parts.append(f"Recent issues: {len([item for item in issues if 'pull_request' not in item])}")
     return {
         "status": "connected",
-        "status_message": "connected through local gh",
+        "status_message": "connected through GitHub API",
         "activity_summary": "\n".join(parts),
-        "last_activity_at": data.get("pushedAt"),
+        "last_activity_at": data.get("pushed_at"),
         "default_branch": default_branch,
     }
 
 
-def list_branches(repo, timeout=30):
-    if not shutil.which("gh"):
-        return {
-            "repo": repo,
-            "status": "disconnected",
-            "status_message": "local GitHub CLI (`gh`) is missing",
-            "branches": [],
-        }
-    endpoint = f"repos/{repo}/branches?per_page=100"
-    result = subprocess.run(
-        ["gh", "api", "--paginate", "--slurp", endpoint],
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    if result.returncode != 0:
+def list_branches(repo, token="", timeout=30):
+    items, error = _paginate(f"/repos/{quote(repo, safe='/')}/branches", token, timeout)
+    if error:
         return {
             "repo": repo,
             "status": "failed",
-            "status_message": (result.stderr or result.stdout or "failed to read branches").strip(),
-            "branches": [],
-        }
-    try:
-        data = flatten_api_pages(json.loads(result.stdout or "[]"))
-    except (json.JSONDecodeError, ValueError) as exc:
-        return {
-            "repo": repo,
-            "status": "failed",
-            "status_message": f"failed to parse branches: {exc}",
+            "status_message": error,
             "branches": [],
         }
     return {
         "repo": repo,
         "status": "ok",
-        "status_message": f"{len(data)} branches",
-        "branches": [item.get("name") for item in data if item.get("name")],
+        "status_message": f"{len(items)} branches",
+        "branches": [item.get("name") for item in items if isinstance(item, dict) and item.get("name")],
     }
 
 
-def weekly_commits(repo, since, until, branches=None, timeout=30):
+def weekly_commits(repo, since, until, branches=None, token="", timeout=30):
     tracked_branches = normalize_branches(branches)
-    if not shutil.which("gh"):
-        return {
-            "repo": repo,
-            "branches": tracked_branches,
-            "resolved_branches": [],
-            "status": "disconnected",
-            "status_message": "local GitHub CLI (`gh`) is missing",
-            "commits": [],
-        }
     branch_names = tracked_branches
     tracking_all = TRACK_ALL_BRANCHES in tracked_branches
     if tracking_all:
-        branch_result = list_branches(repo, timeout=timeout)
+        branch_result = list_branches(repo, token=token, timeout=timeout)
         if branch_result["status"] != "ok":
             return {
                 "repo": repo,
@@ -139,24 +166,20 @@ def weekly_commits(repo, since, until, branches=None, timeout=30):
     commits_by_sha = {}
     errors = []
     for branch in branch_names:
-        query = urlencode({"sha": branch, "since": since_q, "until": until_q, "per_page": "100"}, safe="")
-        endpoint = f"repos/{repo}/commits?{query}"
-        result = subprocess.run(
-            ["gh", "api", "--method", "GET", "--paginate", "--slurp", endpoint],
-            text=True,
-            capture_output=True,
-            timeout=timeout,
+        query = urlencode(
+            {"sha": branch, "since": since_q, "until": until_q},
+            safe="",
         )
-        if result.returncode != 0:
-            errors.append(f"{branch}: {(result.stderr or result.stdout or 'failed to read commits').strip()}")
+        items, error = _paginate(f"/repos/{quote(repo, safe='/')}/commits?{query}", token, timeout)
+        if error:
+            errors.append(f"{branch}: {error}")
             continue
-        try:
-            data = flatten_api_pages(json.loads(result.stdout or "[]"))
-        except (json.JSONDecodeError, ValueError) as exc:
-            errors.append(f"{branch}: failed to parse commits: {exc}")
-            continue
-        for item in data:
+        for item in items:
             add_commit(commits_by_sha, item, branch)
+    return _commit_result(repo, tracked_branches, branch_names, commits_by_sha, errors, tracking_all)
+
+
+def _commit_result(repo, tracked_branches, branch_names, commits_by_sha, errors, tracking_all):
     commits = sorted(commits_by_sha.values(), key=lambda item: item.get("date") or "", reverse=True)
     status = "ok"
     if errors and commits:
@@ -184,22 +207,6 @@ def normalize_branches(branches):
         if name and name not in result:
             result.append(name)
     return result or ["main"]
-
-
-def flatten_api_pages(pages):
-    if not isinstance(pages, list):
-        raise ValueError("unexpected paginated response shape")
-    items = []
-    for page in pages:
-        if isinstance(page, list):
-            items.extend(page)
-        elif isinstance(page, dict):
-            items.append(page)
-        else:
-            raise ValueError("unexpected paginated response item")
-    if any(not isinstance(item, dict) for item in items):
-        raise ValueError("unexpected paginated response item")
-    return items
 
 
 def add_commit(commits_by_sha, item, branch):

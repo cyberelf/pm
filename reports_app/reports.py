@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT, ROOT_DIR
 from .db import connect
-from .git_sources import weekly_commits
+from .git_sources import git_auth_for_user, weekly_commits
 from .risks import evaluate_risks
 from .timeutil import current_week_key, iso_now, parse_iso, week_bounds, week_key_for
 
@@ -111,7 +111,7 @@ def assemble_context(conn, project_id, week_key=None):
         ],
         "github_activity": [repo_activity_context(row) for row in repos],
         "git_commits_this_week": [
-            repo_commit_context(row, week_start, week_end)
+            repo_commit_context(row, week_start, week_end, git_auth_for_user(conn, project["user_id"]))
             for row in repos
             if row["status"] == "connected"
         ],
@@ -140,7 +140,7 @@ def input_summary(context):
     )
 
 
-def repo_commit_context(repo_row, week_start, week_end):
+def repo_commit_context(repo_row, week_start, week_end, auth_info):
     branches = json.loads(repo_row["tracked_branches_json"] or '["main"]')
     result = weekly_commits(
         repo_row["repo"],
@@ -149,6 +149,7 @@ def repo_commit_context(repo_row, week_start, week_end):
         branches,
         git_mode=repo_row["git_mode"],
         gitlab_server=repo_row["gitlab_server"],
+        auth_info=auth_info,
     )
     result["notes"] = repo_row["notes"]
     return result

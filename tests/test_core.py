@@ -36,7 +36,7 @@ from reports_app.internal_agent import (
 )
 from reports_app.asr import normalize_asr_endpoint, transcribe_audio, validate_asr_audio
 from reports_app import auth
-from reports_app.db import create_project, ensure_bootstrap_admin, init_db, connect, set_setting
+from reports_app.db import create_project, ensure_bootstrap_admin, init_db, connect, set_setting, set_user_setting
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
 from reports_app.gitlab import list_branches as gitlab_list_branches
@@ -1476,57 +1476,47 @@ class CoreTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def test_gitlab_check_repo_uses_glab_with_hostname(self):
-        def fake_run(cmd, **kwargs):
-            self.assertEqual(cmd[0], "glab")
-            self.assertEqual(cmd[cmd.index("--hostname") + 1], "gitlab.example.com")
-            if cmd[1] == "auth":
-                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-            endpoint = cmd[2]
-            if "merge_requests" in endpoint:
-                payload = [{"iid": 1}, {"iid": 2}]
-            elif "issues" in endpoint:
-                payload = [{"iid": 1}]
-            elif endpoint.startswith("projects/group%2Fproj"):
-                payload = {
-                    "path_with_namespace": "group/proj",
-                    "description": "infra",
-                    "default_branch": "trunk",
-                    "last_activity_at": "2026-06-30T10:00:00.000+08:00",
-                }
-            else:
-                payload = {}
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+    def test_gitlab_check_repo_uses_configured_token(self):
+        def fake_request(server, path, token, timeout):
+            self.assertEqual(server, "gitlab.example.com")
+            self.assertEqual(token, "glpat-x")
+            if "merge_requests" in path:
+                return [{"iid": 1}, {"iid": 2}], 200, None
+            if "issues" in path:
+                return [{"iid": 1}], 200, None
+            if path.startswith("projects/group%2Fproj"):
+                return (
+                    {
+                        "path_with_namespace": "group/proj",
+                        "description": "infra",
+                        "default_branch": "trunk",
+                        "last_activity_at": "2026-06-30T10:00:00.000+08:00",
+                    },
+                    200,
+                    None,
+                )
+            return {}, 200, None
 
-        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
-            "reports_app.gitlab.subprocess.run", side_effect=fake_run
-        ) as run:
-            result = gitlab_check_repo("group/proj", server="gitlab.example.com")
+        with mock.patch("reports_app.gitlab._request", side_effect=fake_request) as request:
+            result = gitlab_check_repo("group/proj", server="gitlab.example.com", token="glpat-x")
 
         self.assertEqual(result["status"], "connected")
         self.assertEqual(result["default_branch"], "trunk")
         self.assertEqual(result["last_activity_at"], "2026-06-30T10:00:00.000+08:00")
         self.assertIn("Recent merge requests: 2", result["activity_summary"])
         self.assertIn("Recent issues: 1", result["activity_summary"])
-        self.assertEqual(run.call_count, 4)
-        endpoint = run.call_args_list[1].args[0][2]
-        self.assertTrue(endpoint.startswith("projects/group%2Fproj"))
+        self.assertEqual(request.call_count, 3, "project + merge requests + issues, no separate auth call")
+        self.assertTrue(request.call_args_list[0].args[1].startswith("projects/group%2Fproj"))
 
-    def test_gitlab_check_repo_reports_missing_glab_and_bad_auth(self):
-        with mock.patch("reports_app.gitlab.shutil.which", return_value=None):
+    def test_gitlab_check_repo_reports_unreachable_and_bad_auth(self):
+        with mock.patch("reports_app.gitlab._request", return_value=(None, None, "connection refused")):
             result = gitlab_check_repo("group/proj")
         self.assertEqual(result["status"], "disconnected")
-        self.assertIn("glab", result["status_message"])
+        self.assertIn("unreachable", result["status_message"])
 
-        def fake_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="not logged in")
-
-        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
-            "reports_app.gitlab.subprocess.run", side_effect=fake_run
-        ):
-            result = gitlab_check_repo("group/proj")
+        with mock.patch("reports_app.gitlab._request", return_value=(None, 401, "401 Unauthorized")):
+            result = gitlab_check_repo("group/proj", server="gitlab.example.com", token="bad")
         self.assertEqual(result["status"], "unauthenticated")
-        self.assertIn("not logged in", result["status_message"])
 
     def test_gitlab_weekly_commits_reads_selected_branches_and_dedupes(self):
         shared = {
@@ -1537,13 +1527,13 @@ class CoreTest(unittest.TestCase):
             "web_url": "https://gitlab.example.com/group/proj/-/commit/aaa1112223334445",
         }
 
-        def fake_run(cmd, **kwargs):
-            endpoint = cmd[2]
-            self.assertIn("projects/group%2Fsub%2Fproj/repository/commits", endpoint)
-            self.assertIn("per_page=100&page=1", endpoint)
-            if "ref_name=main" in endpoint:
+        def fake_request(server, path, token, timeout):
+            self.assertEqual(token, "glpat-x")
+            self.assertIn("projects/group%2Fsub%2Fproj/repository/commits", path)
+            self.assertIn("per_page=100&page=1", path)
+            if "ref_name=main" in path:
                 items = [shared]
-            elif "ref_name=develop" in endpoint:
+            elif "ref_name=develop" in path:
                 items = [
                     shared,
                     {
@@ -1556,29 +1546,24 @@ class CoreTest(unittest.TestCase):
                 ]
             else:
                 items = []
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(items), stderr="")
+            return items, 200, None
 
         start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
         end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
-        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
-            "reports_app.gitlab.subprocess.run", side_effect=fake_run
-        ) as run:
+        with mock.patch("reports_app.gitlab._request", side_effect=fake_request) as request:
             result = gitlab_weekly_commits(
                 "group/sub/proj",
                 start,
                 end,
                 ["main", "develop"],
                 server="https://gitlab.example.com",
+                token="glpat-x",
             )
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["branches"], ["main", "develop"])
         self.assertEqual(len(result["commits"]), 2)
-        for call in run.call_args_list:
-            command = call.args[0]
-            self.assertIn("--hostname", command)
-            self.assertEqual(command[command.index("--hostname") + 1], "gitlab.example.com")
-        self.assertIn("since=2026-06-29T00%3A00%3A00Z", run.call_args_list[0].args[0][2])
+        self.assertIn("since=2026-06-29T00%3A00%3A00Z", request.call_args_list[0].args[1])
         shared_commit = next(item for item in result["commits"] if item["sha"] == "aaa111222333")
         self.assertEqual(shared_commit["branches"], ["main", "develop"])
         self.assertEqual(shared_commit["date"], "2026-06-30T00:00:00Z")
@@ -1587,21 +1572,18 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(develop_commit["message"], "develop only")
 
     def test_gitlab_list_branches_stops_at_short_page(self):
-        def fake_run(cmd, **kwargs):
-            endpoint = cmd[2]
-            self.assertIn("projects/group%2Fproj/repository/branches", endpoint)
-            items = [{"name": f"feature/{index}"} for index in range(100)] if endpoint.endswith("page=1") else [{"name": "release/next"}]
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(items), stderr="")
+        def fake_request(server, path, token, timeout):
+            self.assertIn("projects/group%2Fproj/repository/branches", path)
+            items = [{"name": f"feature/{index}"} for index in range(100)] if path.endswith("page=1") else [{"name": "release/next"}]
+            return items, 200, None
 
-        with mock.patch("reports_app.gitlab.shutil.which", return_value="/usr/bin/glab"), mock.patch(
-            "reports_app.gitlab.subprocess.run", side_effect=fake_run
-        ) as run:
+        with mock.patch("reports_app.gitlab._request", side_effect=fake_request) as request:
             result = gitlab_list_branches("group/proj", server="gitlab.example.com")
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(len(result["branches"]), 101)
         self.assertEqual(result["branches"][-1], "release/next")
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(request.call_count, 2)
 
     def test_git_sources_dispatch_routes_by_mode(self):
         with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check, mock.patch(
@@ -1609,7 +1591,7 @@ class CoreTest(unittest.TestCase):
         ) as gh_check:
             glab_check.return_value = {"status": "connected"}
             git_sources.check_repo("group/proj", "gitlab", "https://gitlab.example.com")
-        glab_check.assert_called_once_with("group/proj", server="https://gitlab.example.com", timeout=20)
+        glab_check.assert_called_once_with("group/proj", server="https://gitlab.example.com", token="", timeout=20)
         gh_check.assert_not_called()
 
         with mock.patch("reports_app.git_sources.gitlab_weekly_commits") as glab_commits, mock.patch(
@@ -1618,8 +1600,39 @@ class CoreTest(unittest.TestCase):
             start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
             end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
             git_sources.weekly_commits("owner/repo", start, end, ["main"], git_mode="github")
-        gh_commits.assert_called_once_with("owner/repo", start, end, ["main"], timeout=30)
+        gh_commits.assert_called_once_with("owner/repo", start, end, ["main"], token="", timeout=30)
         glab_commits.assert_not_called()
+
+    def test_git_sources_honors_disabled_integrations_and_user_tokens(self):
+        with mock.patch("reports_app.git_sources.github_check_repo") as gh_check:
+            result = git_sources.check_repo(
+                "owner/repo", "github", "", auth_info={"github_enabled": False, "github_token": "t"}
+            )
+        self.assertEqual(result["status"], "disabled")
+        gh_check.assert_not_called()
+
+        with mock.patch("reports_app.git_sources.gitlab_weekly_commits") as glab_commits:
+            glab_commits.return_value = {"status": "ok", "commits": []}
+            start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
+            end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
+            git_sources.weekly_commits(
+                "group/proj",
+                start,
+                end,
+                ["main"],
+                git_mode="gitlab",
+                auth_info={"gitlab_token": "glpat-y", "gitlab_enabled": True},
+            )
+        glab_commits.assert_called_once_with("group/proj", start, end, ["main"], server="", token="glpat-y", timeout=30)
+
+        auth_info = git_sources.git_auth_for_user(self.conn, self.user_id)
+        self.assertTrue(auth_info["github_enabled"])
+        self.assertEqual(auth_info["github_token"], "")
+        set_user_setting(self.conn, self.user_id, "github_token", "ghp-secret")
+        set_setting(self.conn, "github_enabled", "0")
+        auth_info = git_sources.git_auth_for_user(self.conn, self.user_id)
+        self.assertEqual(auth_info["github_token"], "ghp-secret")
+        self.assertFalse(auth_info["github_enabled"])
 
     def test_gitlab_repo_mode_is_persisted_and_unique_per_mode(self):
         connected = {
@@ -1745,69 +1758,83 @@ class CoreTest(unittest.TestCase):
         self.assertEqual([(row["weekday"], row["local_time"], row["enabled"]) for row in rows], [(6, "09:00", 0)])
 
     def test_weekly_commits_reads_selected_branches_and_deduplicates(self):
-        def fake_run(cmd, **kwargs):
-            endpoint = cmd[-1]
-            if "sha=main" in endpoint:
-                stdout = json.dumps([
-                    {
-                        "sha": "abc1234567890",
-                        "html_url": "https://example.test/a",
-                        "commit": {"message": "shared", "author": {"name": "A", "date": "2026-06-30T00:00:00Z"}},
-                    }
-                ])
-            elif "sha=develop" in endpoint:
-                stdout = json.dumps([
-                    {
-                        "sha": "abc1234567890",
-                        "html_url": "https://example.test/a",
-                        "commit": {"message": "shared", "author": {"name": "A", "date": "2026-06-30T00:00:00Z"}},
-                    },
+        main_commit = {
+            "sha": "abc1234567890",
+            "html_url": "https://example.test/a",
+            "commit": {"message": "shared", "author": {"name": "A", "date": "2026-06-30T00:00:00Z"}},
+        }
+
+        def fake_request(path, token, timeout):
+            if "sha=main" in path:
+                return [main_commit], 200, None
+            if "sha=develop" in path:
+                return [
+                    main_commit,
                     {
                         "sha": "def1234567890",
                         "html_url": "https://example.test/b",
                         "commit": {"message": "develop only", "author": {"name": "B", "date": "2026-07-01T00:00:00Z"}},
                     },
-                ])
-            else:
-                stdout = "[]"
-            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+                ], 200, None
+            return [], 200, None
 
         start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
         end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
-        with mock.patch("reports_app.github.shutil.which", return_value="/usr/bin/gh"), mock.patch("reports_app.github.subprocess.run", side_effect=fake_run) as run:
+        with mock.patch("reports_app.github._request", side_effect=fake_request) as request:
             result = weekly_commits("owner/repo", start, end, ["main", "develop"])
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["branches"], ["main", "develop"])
         self.assertEqual(len(result["commits"]), 2)
         shared = next(item for item in result["commits"] if item["sha"] == "abc123456789")
         self.assertEqual(shared["branches"], ["main", "develop"])
-        self.assertEqual(run.call_count, 2)
+        self.assertEqual(request.call_count, 2)
+
+    def test_github_weekly_commits_maps_api_errors(self):
+        def fake_request(path, token, timeout):
+            if "sha=main" in path:
+                return None, 401, "401 Unauthorized"
+            return [
+                {
+                    "sha": "def1234567890",
+                    "html_url": "https://example.test/b",
+                    "commit": {"message": "develop only", "author": {"name": "B", "date": "2026-07-01T00:00:00Z"}},
+                }
+            ], 200, None
+
+        start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
+        end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
+        with mock.patch("reports_app.github._request", side_effect=fake_request):
+            result = weekly_commits("owner/repo", start, end, ["main", "develop"])
+        self.assertEqual(result["status"], "partial", "one failed branch plus one successful branch")
+        self.assertIn("401", result["status_message"])
+        self.assertEqual(len(result["commits"]), 1)
+
+        def unreachable(path, token, timeout):
+            return None, None, "getaddrinfo failed"
+
+        with mock.patch("reports_app.github._request", side_effect=unreachable):
+            result = weekly_commits("owner/repo", start, end, ["main"])
+        self.assertEqual(result["status"], "failed")
 
     def test_list_branches_loads_all_paginated_remote_branches(self):
         first_page = [{"name": f"feature/{index}"} for index in range(100)]
         second_page = [{"name": "release/next"}]
-        completed = subprocess.CompletedProcess(
-            ["gh", "api"],
-            0,
-            stdout=json.dumps([first_page, second_page]),
-            stderr="",
-        )
-        with mock.patch("reports_app.github.shutil.which", return_value="/usr/bin/gh"), mock.patch(
-            "reports_app.github.subprocess.run", return_value=completed
-        ) as run:
+
+        def fake_request(path, token, timeout):
+            self.assertIn("repos/owner/repo/branches", path)
+            return (first_page, 200, None) if path.endswith("page=1") else (second_page, 200, None)
+
+        with mock.patch("reports_app.github._request", side_effect=fake_request) as request:
             result = list_branches("owner/repo")
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(len(result["branches"]), 101)
         self.assertEqual(result["branches"][-1], "release/next")
-        command = run.call_args.args[0]
-        self.assertIn("--paginate", command)
-        self.assertIn("--slurp", command)
-        self.assertIn("repos/owner/repo/branches?per_page=100", command)
+        self.assertEqual(request.call_count, 2)
 
     def test_weekly_commits_resolves_all_remote_branches_at_collection_time(self):
-        def fake_run(cmd, **kwargs):
-            branch = "main" if "sha=main" in cmd[-1] else "develop"
+        def fake_request(path, token, timeout):
+            branch = "main" if "sha=main" in path else "develop"
             item = {
                 "sha": f"{branch}-sha",
                 "html_url": f"https://example.test/{branch}",
@@ -1816,24 +1843,20 @@ class CoreTest(unittest.TestCase):
                     "author": {"name": "A", "date": "2026-07-01T00:00:00Z"},
                 },
             }
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([[item], []]), stderr="")
+            return [item], 200, None
 
         start = datetime(2026, 6, 29, tzinfo=ZoneInfo("UTC"))
         end = datetime(2026, 7, 6, tzinfo=ZoneInfo("UTC"))
         branch_result = {"status": "ok", "status_message": "2 branches", "branches": ["main", "develop"]}
-        with mock.patch("reports_app.github.shutil.which", return_value="/usr/bin/gh"), mock.patch(
-            "reports_app.github.list_branches", return_value=branch_result
-        ) as branches, mock.patch("reports_app.github.subprocess.run", side_effect=fake_run) as run:
+        with mock.patch("reports_app.github.list_branches", return_value=branch_result) as branches, mock.patch(
+            "reports_app.github._request", side_effect=fake_request
+        ):
             result = weekly_commits("owner/repo", start, end, ["*"])
 
-        branches.assert_called_once_with("owner/repo", timeout=30)
+        branches.assert_called_once_with("owner/repo", token="", timeout=30)
         self.assertEqual(result["branches"], ["*"])
         self.assertEqual(result["resolved_branches"], ["main", "develop"])
         self.assertEqual(len(result["commits"]), 2)
-        self.assertEqual(run.call_count, 2)
-        for call in run.call_args_list:
-            self.assertIn("--paginate", call.args[0])
-            self.assertIn("--slurp", call.args[0])
 
     def test_fake_provider_flag_requires_truthy_value(self):
         os.environ["REPORTS_FAKE_PROVIDER"] = "0"
@@ -2942,6 +2965,115 @@ class UserAuthTest(unittest.TestCase):
             )
             self.assertEqual(status, 200)
             self.assertIsNotNone(auth.authenticate(self.conn, "darren", "newpass1"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+class GitSettingsApiTest(unittest.TestCase):
+    """Global GitHub/GitLab switches are admin-only; git tokens are per user."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        init_db(self.db_path)
+        self.conn = connect(self.db_path)
+        self.admin = ensure_bootstrap_admin(self.conn)
+        self.member_id = auth.create_user(self.conn, "member", "secret1", is_admin=False)
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def tearDown(self):
+        self.conn.close()
+        os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        self.tmp.cleanup()
+
+    def start_server(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread
+
+    def token_for(self, port, username, password):
+        client = HTTPConnection("127.0.0.1", port, timeout=10)
+        client.request(
+            "POST",
+            "/api/auth/login",
+            body=json.dumps({"username": username, "password": password}),
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        response.read()
+        cookie = response.getheader("Set-Cookie") or ""
+        client.close()
+        return cookie.split("reports_session=")[1].split(";")[0]
+
+    def api(self, port, method, path, token, body=None):
+        client = HTTPConnection("127.0.0.1", port, timeout=10)
+        headers = {"Content-Type": "application/json", "Cookie": f"reports_session={token}"}
+        client.request(method, path, body=body, headers=headers)
+        response = client.getresponse()
+        payload = json.loads(response.read())
+        client.close()
+        return response.status, payload
+
+    def test_git_switches_are_admin_only_and_tokens_stay_per_user(self):
+        server, thread = self.start_server()
+        try:
+            admin_token = self.token_for(server.server_port, "darren", "changeme")
+            member_token = self.token_for(server.server_port, "member", "secret1")
+
+            # a member can store their own token but cannot flip the switches
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                member_token,
+                body=json.dumps({"github_token": "ghp-member", "github_enabled": False}),
+            )
+            self.assertEqual(status, 403)
+            row = self.conn.execute(
+                "SELECT value FROM user_settings WHERE user_id = ? AND key = 'github_token'", (self.member_id,)
+            ).fetchone()
+            self.assertIsNone(row, "the whole request must be rejected, not just the admin key")
+
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                member_token,
+                body=json.dumps({"github_token": "ghp-member"}),
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["github_token_set"])
+            self.assertIsNone(
+                self.conn.execute("SELECT value FROM app_settings WHERE key = 'github_token'").fetchone(),
+                "git tokens must not leak into the global app_settings table",
+            )
+
+            # the admin can flip the switch and the flag is visible to everyone
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                admin_token,
+                body=json.dumps({"github_enabled": False}),
+            )
+            self.assertEqual(status, 200)
+            self.assertFalse(payload["github_enabled"])
+
+            status, payload = self.api(server.server_port, "GET", "/api/state", member_token)
+            self.assertEqual(status, 200)
+            self.assertFalse(payload["github_enabled"])
+            self.assertTrue(payload["github_token_set"])
+            self.assertNotIn("llm_api_key_set", payload, "LLM configuration is admin-only")
+            self.assertNotIn("queue_capacity", payload, "queue configuration is admin-only")
+
+            status, payload = self.api(server.server_port, "GET", "/api/state", admin_token)
+            self.assertTrue(payload["llm_api_key_set"] is not None)
+            self.assertIn("queue_capacity", payload)
         finally:
             server.shutdown()
             server.server_close()
