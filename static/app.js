@@ -19,6 +19,7 @@ const state = {
   todoEditorId: null,
   pendingReportProjectId: null,
   pendingDeleteTodoId: null,
+  pendingDeleteUserId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   settingsView: false,
   currentUser: null,
@@ -232,6 +233,7 @@ async function loadState() {
   state.gitlabEnabled = data.gitlab_enabled !== false;
   state.githubTokenSet = !!data.github_token_set;
   state.gitlabTokenSet = !!data.gitlab_token_set;
+  state.gitlabUrl = data.gitlab_url || "";
   state.asrEndpoint = data.asr_endpoint || "";
   state.asrModel = data.asr_model || "";
   state.asrLanguage = data.asr_language || "zh";
@@ -1018,7 +1020,9 @@ function renderGitSettings() {
   const githubToken = $("github-token-input");
   if (!githubToken) return;
   githubToken.value = "";
-  githubToken.placeholder = state.githubTokenSet ? "已配置，留空保持不变" : "ghp-...";
+  githubToken.placeholder = state.githubTokenSet ? "已配置，留空保持不变" : "ghp_...";
+  const gitlabUrl = $("gitlab-url-input");
+  if (gitlabUrl) gitlabUrl.value = state.gitlabUrl || "";
   const gitlabToken = $("gitlab-token-input");
   gitlabToken.value = "";
   gitlabToken.placeholder = state.gitlabTokenSet ? "已配置，留空保持不变" : "glpat-...";
@@ -1043,6 +1047,7 @@ async function saveGitSettings() {
   state.gitlabEnabled = data.gitlab_enabled !== false;
   state.githubTokenSet = !!data.github_token_set;
   state.gitlabTokenSet = !!data.gitlab_token_set;
+  state.gitlabUrl = data.gitlab_url || "";
   renderGitSettings();
   toast("Git 集成设置已保存");
 }
@@ -1092,16 +1097,12 @@ async function createUser() {
   }
 }
 
-async function resetUserPassword(id) {
+function resetUserPassword(id) {
   const user = (state.users || []).find((item) => item.id === id);
-  const password = window.prompt(`为「${user ? user.username : id}」设置新密码（至少 6 位）：`);
-  if (password === null) return;
-  try {
-    await api(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ password }) });
-    toast("密码已重置");
-  } catch (error) {
-    toast(error.message);
-  }
+  $("reset-password-user-id").value = String(id);
+  $("reset-password-title").textContent = user ? `为「${user.username}」设置新密码` : `为用户 ${id} 设置新密码`;
+  $("reset-password-input").value = "";
+  $("reset-password-dialog").showModal();
 }
 
 async function setUserAdmin(id, isAdmin) {
@@ -1124,9 +1125,17 @@ async function setUserEnabled(id, enabled) {
   }
 }
 
-async function deleteUserAccount(id) {
+function deleteUserAccount(id) {
   const user = (state.users || []).find((item) => item.id === id);
-  if (!window.confirm(`确定删除用户「${user ? user.username : id}」？该账号名下的项目与数据必须先迁移或删除。`)) return;
+  state.pendingDeleteUserId = id;
+  $("user-delete-title").textContent = user ? user.username : `用户 ${id}`;
+  $("user-delete-dialog").showModal();
+}
+
+async function runUserDelete() {
+  const id = state.pendingDeleteUserId;
+  state.pendingDeleteUserId = null;
+  if (!id) return;
   try {
     await api(`/api/users/${id}`, { method: "DELETE" });
     await loadUsers();
@@ -1355,6 +1364,9 @@ function onRepoModeChange() {
   if (!$("repo-server-input")) return;
   $("repo-server-input").classList.toggle("hidden", !gitlab);
   $("repo-input").placeholder = gitlab ? "group/project 或 group/sub-group/project" : "owner/repo";
+  $("repo-server-input").placeholder = state.gitlabUrl
+    ? `默认使用 ${state.gitlabUrl}，可改`
+    : "GitLab 服务器地址，如 https://gitlab.com";
 }
 
 function renderRepoRow(r) {
@@ -1362,7 +1374,7 @@ function renderRepoRow(r) {
   const gitlab = r.git_mode === "gitlab";
   const modeLabel = gitlab ? "GitLab" : "GitHub";
   const target = gitlab
-    ? `<input id="repo-server-${r.id}" class="table-input" placeholder="https://gitlab.com（自建实例可改）" value="${escapeAttr(r.gitlab_server || "")}">`
+    ? `<input id="repo-server-${r.id}" class="table-input" placeholder="${escapeAttr(state.gitlabUrl || "https://gitlab.com")}（可改）" value="${escapeAttr(r.gitlab_server || "")}">`
     : "";
   return `
     <tr class="${enabled ? "" : "repo-row-disabled"}">
@@ -2384,6 +2396,31 @@ $("save-git-settings").onclick = () => saveGitSettings().catch((error) => toast(
 $("save-password").onclick = () => changeOwnPassword().catch((error) => toast(error.message));
 $("login-form").onsubmit = login;
 $("logout-button").onclick = logout;
+$("cancel-reset-password").onclick = () => $("reset-password-dialog").close();
+$("reset-password-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const id = Number($("reset-password-user-id").value);
+  const password = $("reset-password-input").value;
+  try {
+    await api(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ password }) });
+    $("reset-password-dialog").close();
+    toast("密码已重置");
+  } catch (error) {
+    toast(error.message);
+  }
+};
+$("cancel-user-delete").onclick = () => {
+  state.pendingDeleteUserId = null;
+  $("user-delete-dialog").close();
+};
+$("user-delete-dialog").oncancel = () => {
+  state.pendingDeleteUserId = null;
+};
+$("user-delete-form").onsubmit = async (event) => {
+  event.preventDefault();
+  $("user-delete-dialog").close();
+  await runUserDelete();
+};
 setupVoiceTodoFab();
 restoreQueues();
 $("page-corner").onkeydown = (event) => {

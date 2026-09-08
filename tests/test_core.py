@@ -1560,6 +1560,24 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(auth_info["github_token"], "ghp-secret")
         self.assertFalse(auth_info["github_enabled"])
 
+    def test_gitlab_url_from_user_settings_is_the_server_fallback(self):
+        set_user_setting(self.conn, self.user_id, "gitlab_url", "https://gitlab.example.com")
+        with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check:
+            glab_check.return_value = {"status": "connected"}
+            git_sources.check_repo("group/proj", "gitlab", "", auth_info={"gitlab_url": "https://gitlab.example.com"})
+        glab_check.assert_called_once_with(
+            "group/proj", server="https://gitlab.example.com", token="", timeout=20
+        )
+        # a repo's own server address still wins
+        with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check:
+            glab_check.return_value = {"status": "connected"}
+            git_sources.check_repo(
+                "group/proj", "gitlab", "https://other.example.com", auth_info={"gitlab_url": "https://gitlab.example.com"}
+            )
+        glab_check.assert_called_once_with(
+            "group/proj", server="https://other.example.com", token="", timeout=20
+        )
+
     def test_gitlab_repo_mode_is_persisted_and_unique_per_mode(self):
         connected = {
             "status": "connected",
@@ -2994,6 +3012,27 @@ class GitSettingsApiTest(unittest.TestCase):
             status, payload = self.api(server.server_port, "GET", "/api/state", admin_token)
             self.assertTrue(payload["llm_api_key_set"] is not None)
             self.assertIn("queue_capacity", payload)
+
+            # per-user GitLab server address: stored, returned, and validated
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                member_token,
+                body=json.dumps({"gitlab_url": "https://gitlab.self.example.com"}),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["gitlab_url"], "https://gitlab.self.example.com")
+            status, payload = self.api(server.server_port, "GET", "/api/state", member_token)
+            self.assertEqual(payload["gitlab_url"], "https://gitlab.self.example.com")
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/settings",
+                member_token,
+                body=json.dumps({"gitlab_url": "ftp://bad"}),
+            )
+            self.assertEqual(status, 400)
         finally:
             server.shutdown()
             server.server_close()

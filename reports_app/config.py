@@ -88,6 +88,7 @@ GITHUB_ENABLED_SETTING = "github_enabled"
 GITLAB_ENABLED_SETTING = "gitlab_enabled"
 GITHUB_TOKEN_SETTING = "github_token"
 GITLAB_TOKEN_SETTING = "gitlab_token"
+GITLAB_URL_SETTING = "gitlab_url"
 MAX_GITLAB_PAGES = 5
 SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".pdf"}
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}

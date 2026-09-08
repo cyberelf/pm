@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=50" />
+    <link rel="stylesheet" href="/styles.css?v=51" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -138,15 +138,26 @@
                 <label class="switch-row"><span class="switch"><input id="github-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitHub 集成（全局，仅管理员可改）</span></label>
                 <label class="switch-row"><span class="switch"><input id="gitlab-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitLab 集成（全局，仅管理员可改）</span></label>
               </div>
-              <div class="voice-settings">
-                <label>GitHub Token
+              <div class="git-provider-row">
+                <div class="git-provider-name"><span class="status connected">GitHub</span><small>github.com</small></div>
+                <label>Token
                   <input id="github-token-input" type="password" autocomplete="off" placeholder="ghp_...">
                 </label>
-                <label>GitLab Token
+                <small class="git-provider-hint">只读即可：Fine-grained token 选 Contents: Read-only（自动附带 Metadata）；经典 token 勾 public_repo（公开仓库）或 repo（含私有）。</small>
+              </div>
+              <div class="git-provider-row">
+                <div class="git-provider-name"><span class="status connected">GitLab</span><small>gitlab.com 或自建实例</small></div>
+                <label>服务器地址
+                  <input id="gitlab-url-input" placeholder="https://gitlab.com">
+                </label>
+                <label>Token
                   <input id="gitlab-token-input" type="password" autocomplete="off" placeholder="glpat-...">
                 </label>
+                <small class="git-provider-hint">最小范围 read_api（个人访问令牌，只读 API）；访问私有项目需要 Reporter 及以上角色。</small>
+              </div>
+              <div class="voice-settings">
                 <button id="save-git-settings" class="primary" type="button">保存</button>
-                <small>令牌只保存在服务器数据库，与账号绑定，接口不会回传；留空表示保持已保存的值。配置后仓库状态读取和 commits 抓取通过 GitHub / GitLab REST API 使用你的令牌；GitHub 未配置令牌时只能访问公开仓库。GitLab 服务器地址在每个项目的仓库设置里填写。</small>
+                <small>令牌与服务器地址保存在你的账号下，接口不会回传令牌；令牌留空表示保持已保存的值。仓库状态读取和 commits 抓取通过 GitHub / GitLab REST API 使用你的配置；仓库未单独填地址时使用这里的 GitLab 服务器地址；GitHub 未配置令牌时只能访问公开仓库。</small>
               </div>
             </div>
             <div class="panel admin-only hidden">
@@ -296,6 +307,38 @@
       </form>
     </dialog>
 
+    <dialog id="user-delete-dialog" class="message-dialog">
+      <form method="dialog" id="user-delete-form" class="modal-form message-box">
+        <div class="message-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V5h6v2M6 7l1 13h10l1-13M10 11v5M14 11v5"></path></svg>
+        </div>
+        <div class="message-copy">
+          <h2>删除这个用户？</h2>
+          <p id="user-delete-title" class="dialog-context"></p>
+          <span>删除后无法恢复；名下仍有项目、TODO 或语音任务的账号会先被拒绝，需要迁移或清理其数据。</span>
+        </div>
+        <div class="modal-actions message-actions">
+          <button id="cancel-user-delete" type="button">取消</button>
+          <button class="danger" value="default">确认删除</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="reset-password-dialog">
+      <form method="dialog" id="reset-password-form" class="modal-form">
+        <h2>重置密码</h2>
+        <p id="reset-password-title" class="dialog-context"></p>
+        <input id="reset-password-user-id" type="hidden" />
+        <label>新密码（至少 6 位）
+          <input id="reset-password-input" type="password" autocomplete="new-password" required minlength="6" />
+        </label>
+        <div class="modal-actions">
+          <button id="cancel-reset-password" type="button">取消</button>
+          <button class="primary" value="default">确认重置</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="report-confirm-dialog" class="message-dialog">
       <form method="dialog" id="report-confirm-form" class="modal-form message-box">
         <div class="message-icon" aria-hidden="true">
@@ -361,6 +404,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=44"></script>
+    <script src="/app.js?v=45"></script>
   </body>
 </html>

@@ -53,6 +53,7 @@ from .config import (
     GITHUB_TOKEN_SETTING,
     GITLAB_ENABLED_SETTING,
     GITLAB_TOKEN_SETTING,
+    GITLAB_URL_SETTING,
 )
 from .git_sources import check_repo, git_auth_for_user, list_branches, refresh_repo
 from .markdown import render_markdown
@@ -213,6 +214,7 @@ def settings_state(conn, user):
         "gitlab_enabled": get_setting(conn, GITLAB_ENABLED_SETTING, "1") != "0",
         "github_token_set": bool(get_user_setting(conn, user_id, GITHUB_TOKEN_SETTING)),
         "gitlab_token_set": bool(get_user_setting(conn, user_id, GITLAB_TOKEN_SETTING)),
+        "gitlab_url": get_user_setting(conn, user_id, GITLAB_URL_SETTING),
     }
     if is_admin:
         state.update(
@@ -569,6 +571,13 @@ class Handler(BaseHTTPRequestHandler):
                 for token_key in (GITHUB_TOKEN_SETTING, GITLAB_TOKEN_SETTING):
                     if token_key in payload:
                         set_user_setting(conn, user_id, token_key, (payload.get(token_key) or "").strip())
+                if GITLAB_URL_SETTING in payload:
+                    set_user_setting(
+                        conn,
+                        user_id,
+                        GITLAB_URL_SETTING,
+                        validate_gitlab_server(payload.get(GITLAB_URL_SETTING)),
+                    )
                 if any(key in payload for key in ADMIN_ONLY_SETTING_KEYS):
                     require_admin(user)
                 if GITHUB_ENABLED_SETTING in payload:

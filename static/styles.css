@@ -535,6 +535,7 @@ strong { color: var(--ink); }
 .project-bar { display: none; }
 .mobile-tabbar { display: none; }
 .sidebar-settings { margin-top: auto; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; color: var(--body); }
+.sidebar-settings + .sidebar-settings { margin-top: 8px; }
 .sidebar-settings svg { width: 16px; height: 16px; }
 .settings-panels {
   width: min(100%, calc(var(--content-width) + 48px));
@@ -1202,3 +1203,7 @@ body.logged-out .voice-todo-widget { visibility: hidden; }
 .git-integration-admin { display: grid; gap: 10px; margin-bottom: 12px; }
 .user-create-row { flex-wrap: wrap; align-items: center; }
 .user-create-row input { min-width: 140px; }
+.git-provider-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--hairline); }
+.git-provider-name { display: flex; align-items: baseline; gap: 8px; }
+.git-provider-name small { color: var(--muted); }
+.git-provider-hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
