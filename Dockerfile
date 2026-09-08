@@ -61,6 +61,11 @@ COPY run.py ./
 COPY reports_app ./reports_app
 COPY static ./static
 COPY scripts ./scripts
+
+# Pre-create the named-volume mount point with the runtime uid's ownership so
+# a freshly initialized volume is writable by the container user (1000:1000).
+RUN mkdir -p /app/data && chown 1000:1000 /app/data
+
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 EXPOSE 8765 8443

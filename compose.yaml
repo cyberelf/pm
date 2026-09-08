@@ -19,17 +19,18 @@ services:
         APT_MIRROR: "${APT_MIRROR:-}"
     image: weekly-reports:latest
     restart: unless-stopped
-    # Run as an unprivileged uid matching the data dir owner (Linux hosts);
-    # override with REPORTS_UID / REPORTS_GID in .env when needed.
-    user: "${REPORTS_UID:-1000}:${REPORTS_GID:-1000}"
+    # Fixed unprivileged runtime uid; the named volume is initialized with
+    # matching ownership from the image (see the mkdir/chown in the Dockerfile).
+    user: "1000:1000"
     ports:
       - "${PORT:-8765}:8765"
       - "${REPORTS_TLS_PORT:-8443}:8443"
     volumes:
-      # Same data layout as the native service (SQLite, uploads, TLS certs,
-      # CLI config). Do not point this at data/ while the macOS LaunchAgent
-      # service is running on the same directory.
-      - "${REPORTS_DATA_DIR:-./data}:/app/data"
+      # All persistent state (SQLite, uploads, TLS certs, CLI config) lives in
+      # a docker-managed named volume; nothing is written to the checkout, and
+      # the modes never share state with the native LaunchAgent service.
+      # Survives `docker compose down`; removed only by `docker compose down -v`.
+      - reports-data:/app/data
     extra_hosts:
       # Lets voice TODOs reach an ASR service on the host machine (default
       # whisper.cpp port 8766): set the ASR endpoint to
@@ -62,3 +63,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+volumes:
+  reports-data:

@@ -52,9 +52,9 @@ docker compose up -d --build
 curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/state"
 ```
 
-- Data (SQLite, uploads, TLS certificates, CLI logins) lives in `./data`; set `REPORTS_DATA_DIR` to relocate it. Do not point the container at a data directory while the macOS LaunchAgent service is running on it — stop one mode before starting the other.
-- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`. On Linux hosts set `REPORTS_UID`/`REPORTS_GID` to the data directory owner.
-- The image ships `gh`, `glab`, `claude`, and chromium for PDF export with CJK fonts. Authenticate the CLIs inside the container; logins persist under `data/home/` on the host:
+- Data (SQLite, uploads, TLS certificates, CLI logins) lives in a docker-managed named volume (`weekly-reports_reports-data`), never in the checkout and never in the native service's `data/` directory — the volume starts empty and the two modes never share state. It survives `docker compose down`; remove it with `docker compose down -v`, and back it up with `docker compose cp reports:/app/data ./data-backup`.
+- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
+- The image ships `gh`, `glab`, `claude`, and chromium for PDF export with CJK fonts. Authenticate the CLIs inside the container; logins persist in the data volume (`/app/data/home` inside the container):
 
   ```bash
   docker compose exec reports gh auth login
