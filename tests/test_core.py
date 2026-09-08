@@ -72,7 +72,7 @@ from reports_app.voice_todos import (
     fallback_voice_items,
     parse_voice_todo_output,
 )
-from reports_app.validation import ValidationError, gitlab_server_from_url, validate_branches, validate_git_mode, validate_gitlab_server, validate_llm_base_url, validate_llm_provider, validate_material_filename, validate_provider, validate_repo, validate_schedule_item
+from reports_app.validation import ValidationError, validate_branches, validate_git_mode, validate_gitlab_server, validate_llm_base_url, validate_llm_provider, validate_material_filename, validate_provider, validate_repo, validate_schedule_item
 
 
 class CoreTest(unittest.TestCase):
@@ -142,8 +142,6 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(validate_gitlab_server("http://10.0.0.2:8080"), "http://10.0.0.2:8080")
         with self.assertRaises(ValidationError):
             validate_gitlab_server("ftp://gitlab.example.com")
-        self.assertEqual(gitlab_server_from_url("https://gitlab.example.com:8443/group/proj"), "https://gitlab.example.com:8443")
-        self.assertEqual(gitlab_server_from_url("group/proj"), "")
 
     def test_project_settings_and_schedule(self):
         update_settings(
@@ -1568,7 +1566,7 @@ class CoreTest(unittest.TestCase):
             "reports_app.git_sources.github_check_repo"
         ) as gh_check:
             glab_check.return_value = {"status": "connected"}
-            git_sources.check_repo("group/proj", "gitlab", "https://gitlab.example.com")
+            git_sources.check_repo("group/proj", "gitlab", auth_info={"gitlab_url": "https://gitlab.example.com"})
         glab_check.assert_called_once_with("group/proj", server="https://gitlab.example.com", token="", timeout=20)
         gh_check.assert_not_called()
 
@@ -1584,7 +1582,7 @@ class CoreTest(unittest.TestCase):
     def test_git_sources_honors_disabled_integrations_and_user_tokens(self):
         with mock.patch("reports_app.git_sources.github_check_repo") as gh_check:
             result = git_sources.check_repo(
-                "owner/repo", "github", "", auth_info={"github_enabled": False, "github_token": "t"}
+                "owner/repo", "github", auth_info={"github_enabled": False, "github_token": "t"}
             )
         self.assertEqual(result["status"], "disabled")
         gh_check.assert_not_called()
@@ -1639,7 +1637,7 @@ class CoreTest(unittest.TestCase):
             }
 
         with mock.patch("reports_app.git_sources.github_check_repo", side_effect=fake_check) as check:
-            result = git_sources.check_repo("acme/infra", "github", "", auth_info=info)
+            result = git_sources.check_repo("acme/infra", "github", auth_info=info)
         self.assertEqual(check.call_count, 2)
         self.assertEqual(result["status"], "connected")
         self.assertIn("自动改用「general」", result["status_message"])
@@ -1670,22 +1668,20 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(git_sources.load_github_tokens(self.conn, self.user_id)[0]["token"], "ghp_legacy")
         self.assertEqual(git_sources.github_token_for(info, "acme/infra"), "ghp_legacy")
 
-    def test_gitlab_url_from_user_settings_is_the_server_fallback(self):
+    def test_gitlab_url_from_user_settings_is_the_only_server(self):
         set_user_setting(self.conn, self.user_id, "gitlab_url", "https://gitlab.example.com")
         with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check:
             glab_check.return_value = {"status": "connected"}
-            git_sources.check_repo("group/proj", "gitlab", "", auth_info={"gitlab_url": "https://gitlab.example.com"})
+            git_sources.check_repo("group/proj", "gitlab", auth_info={"gitlab_url": "https://gitlab.example.com"})
         glab_check.assert_called_once_with(
             "group/proj", server="https://gitlab.example.com", token="", timeout=20
         )
-        # a repo's own server address still wins
+        # without a configured URL the request goes out empty and gitlab.resolve_server falls back to gitlab.com
         with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check:
             glab_check.return_value = {"status": "connected"}
-            git_sources.check_repo(
-                "group/proj", "gitlab", "https://other.example.com", auth_info={"gitlab_url": "https://gitlab.example.com"}
-            )
+            git_sources.check_repo("group/proj", "gitlab", auth_info={})
         glab_check.assert_called_once_with(
-            "group/proj", server="https://other.example.com", token="", timeout=20
+            "group/proj", server="", token="", timeout=20
         )
 
     def test_gitlab_repo_mode_is_persisted_and_unique_per_mode(self):
@@ -1706,20 +1702,19 @@ class CoreTest(unittest.TestCase):
                     "repo": "https://gitlab.example.com/group/proj.git",
                     "notes": "primary",
                     "git_mode": "gitlab",
-                    "gitlab_server": "gitlab.example.com",
                 },
             )
             again = add_repo(
                 self.conn,
                 self.project_id,
-                {"repo": "group/proj", "git_mode": "gitlab", "gitlab_server": "https://gitlab.example.com"},
+                {"repo": "group/proj", "git_mode": "gitlab"},
             )
         self.assertNotEqual(gh_id, gl_id)
         self.assertEqual(gl_id, again)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM github_repos").fetchone()["n"], 2)
         row = self.conn.execute("SELECT git_mode, gitlab_server, repo FROM github_repos WHERE id = ?", (gl_id,)).fetchone()
         self.assertEqual(row["git_mode"], "gitlab")
-        self.assertEqual(row["gitlab_server"], "https://gitlab.example.com")
+        self.assertEqual(row["gitlab_server"], "", "the per-repo GitLab server address is gone; 全局设置 holds the URL")
         self.assertEqual(row["repo"], "group/proj")
 
         with self.assertRaises(ValidationError):
@@ -1727,7 +1722,7 @@ class CoreTest(unittest.TestCase):
                 self.conn,
                 self.project_id,
                 gh_id,
-                {"git_mode": "gitlab", "gitlab_server": "https://gitlab.example.com"},
+                {"git_mode": "gitlab"},
             )
 
         other_id = None
@@ -1738,11 +1733,10 @@ class CoreTest(unittest.TestCase):
                 self.conn,
                 self.project_id,
                 other_id,
-                {"git_mode": "gitlab", "gitlab_server": "https://gitlab.example.com"},
+                {"git_mode": "gitlab"},
             )
-        row = self.conn.execute("SELECT git_mode, gitlab_server, status FROM github_repos WHERE id = ?", (other_id,)).fetchone()
+        row = self.conn.execute("SELECT git_mode, status FROM github_repos WHERE id = ?", (other_id,)).fetchone()
         self.assertEqual(row["git_mode"], "gitlab")
-        self.assertEqual(row["gitlab_server"], "https://gitlab.example.com")
         self.assertEqual(row["status"], "connected")
 
         self.conn.execute("UPDATE github_repos SET status = 'inaccessible' WHERE id = ?", (gl_id,))
@@ -1765,7 +1759,7 @@ class CoreTest(unittest.TestCase):
             commits.return_value = {"repo": "group/proj", "status": "ok", "status_message": "0 commits", "commits": []}
             context, _hash = assemble_context(self.conn, self.project_id)
         self.assertEqual(commits.call_args.kwargs["git_mode"], "gitlab")
-        self.assertEqual(commits.call_args.kwargs["gitlab_server"], "https://gitlab.example.com")
+        self.assertNotIn("gitlab_server", commits.call_args.kwargs, "the stored per-repo server value is ignored")
         self.assertEqual(context["github_activity"][0]["git_mode"], "gitlab")
 
     def test_schedule_enable_disable_and_skipped_run_recording(self):

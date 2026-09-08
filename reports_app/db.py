@@ -291,7 +291,7 @@ def migrate_schema(conn):
         """
         DELETE FROM github_repos
         WHERE id NOT IN (
-            SELECT MIN(id) FROM github_repos GROUP BY project_id, git_mode, gitlab_server, repo
+            SELECT MIN(id) FROM github_repos GROUP BY project_id, git_mode, repo
         )
         """
     )
@@ -299,6 +299,9 @@ def migrate_schema(conn):
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repos_project_mode_repo ON github_repos(project_id, git_mode, gitlab_server, repo)"
     )
+    # the per-repo GitLab server address is gone; 全局设置 → Git 集成 holds the
+    # only GitLab URL, so legacy values would silently point repos elsewhere
+    conn.execute("UPDATE github_repos SET gitlab_server = '' WHERE gitlab_server != ''")
     table_columns = {
         "projects": {row["name"] for row in conn.execute("PRAGMA table_info(projects)")},
         "todos": {row["name"] for row in conn.execute("PRAGMA table_info(todos)")},

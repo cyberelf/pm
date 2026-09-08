@@ -94,7 +94,6 @@ from .voice_todos import (
 )
 from .validation import (
     ValidationError,
-    gitlab_server_from_url,
     require_project_name,
     validate_llm_base_url,
     validate_llm_provider,
@@ -1107,9 +1106,6 @@ def update_settings(conn, project_id, payload):
 def add_repo(conn, project_id, payload, auth_info=None):
     raw_repo = (payload.get("repo") or "").strip()
     git_mode = validate_git_mode(payload.get("git_mode"))
-    gitlab_server = ""
-    if git_mode == "gitlab":
-        gitlab_server = validate_gitlab_server(payload.get("gitlab_server")) or gitlab_server_from_url(raw_repo)
     repo = validate_repo(raw_repo, git_mode)
     info = auth_info or {}
     if git_mode == "gitlab" and not info.get("gitlab_enabled", True):
@@ -1119,8 +1115,8 @@ def add_repo(conn, project_id, payload, auth_info=None):
     notes = payload.get("notes") or ""
     requested_branches = validate_branches(payload.get("branches") or [])
     existing = conn.execute(
-        "SELECT id FROM github_repos WHERE project_id = ? AND git_mode = ? AND gitlab_server = ? AND repo = ?",
-        (project_id, git_mode, gitlab_server, repo),
+        "SELECT id FROM github_repos WHERE project_id = ? AND git_mode = ? AND repo = ?",
+        (project_id, git_mode, repo),
     ).fetchone()
     if existing:
         updates = ["notes = ?", "enabled = 1", "updated_at = ?"]
@@ -1134,20 +1130,19 @@ def add_repo(conn, project_id, payload, auth_info=None):
             values,
         )
         return existing["id"]
-    result = check_repo(repo, git_mode, gitlab_server, auth_info=auth_info)
+    result = check_repo(repo, git_mode, auth_info=auth_info)
     branches = requested_branches or [result.get("default_branch") or "main"]
     now = iso_now()
     cur = conn.execute(
         """
         INSERT INTO github_repos
         (project_id, repo, git_mode, gitlab_server, enabled, notes, tracked_branches_json, status, status_message, last_checked_at, last_activity_at, activity_summary, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, '', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
             repo,
             git_mode,
-            gitlab_server,
             notes,
             json.dumps(branches),
             result["status"],
@@ -1164,7 +1159,7 @@ def add_repo(conn, project_id, payload, auth_info=None):
 
 def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
     row = conn.execute(
-        "SELECT repo, notes, tracked_branches_json, enabled, git_mode, gitlab_server FROM github_repos WHERE id = ? AND project_id = ?",
+        "SELECT repo, notes, tracked_branches_json, enabled, git_mode FROM github_repos WHERE id = ? AND project_id = ?",
         (repo_id, project_id),
     ).fetchone()
     if not row:
@@ -1176,23 +1171,20 @@ def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
         branches = json.loads(row["tracked_branches_json"] or '["main"]')
     enabled = row["enabled"] if "enabled" not in payload else (1 if payload.get("enabled") else 0)
     git_mode = validate_git_mode(payload.get("git_mode")) if "git_mode" in payload else row["git_mode"]
-    gitlab_server = (
-        validate_gitlab_server(payload.get("gitlab_server")) if git_mode == "gitlab" else ""
-    )
-    target_changed = git_mode != row["git_mode"] or gitlab_server != (row["gitlab_server"] or "")
+    target_changed = git_mode != row["git_mode"]
     if target_changed:
         conflict = conn.execute(
-            "SELECT id FROM github_repos WHERE project_id = ? AND git_mode = ? AND gitlab_server = ? AND repo = ? AND id != ?",
-            (project_id, git_mode, gitlab_server, row["repo"], repo_id),
+            "SELECT id FROM github_repos WHERE project_id = ? AND git_mode = ? AND repo = ? AND id != ?",
+            (project_id, git_mode, row["repo"], repo_id),
         ).fetchone()
         if conflict:
-            raise ValidationError("a repository entry with this git mode and server already exists")
-    result = check_repo(row["repo"], git_mode, gitlab_server, auth_info=auth_info) if target_changed else None
+            raise ValidationError("a repository entry with this git mode already exists")
+    result = check_repo(row["repo"], git_mode, auth_info=auth_info) if target_changed else None
     if result:
         conn.execute(
             """
             UPDATE github_repos
-            SET notes = ?, tracked_branches_json = ?, enabled = ?, git_mode = ?, gitlab_server = ?,
+            SET notes = ?, tracked_branches_json = ?, enabled = ?, git_mode = ?,
                 status = ?, status_message = ?, activity_summary = ?, last_activity_at = ?,
                 last_checked_at = ?, updated_at = ?
             WHERE id = ? AND project_id = ?
@@ -1202,7 +1194,6 @@ def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
                 json.dumps(branches),
                 enabled,
                 git_mode,
-                gitlab_server,
                 result["status"],
                 result["status_message"],
                 result["activity_summary"],
@@ -1215,8 +1206,8 @@ def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
         )
         return result
     conn.execute(
-        "UPDATE github_repos SET notes = ?, tracked_branches_json = ?, enabled = ?, git_mode = ?, gitlab_server = ?, updated_at = ? WHERE id = ? AND project_id = ?",
-        (notes, json.dumps(branches), enabled, git_mode, gitlab_server, now, repo_id, project_id),
+        "UPDATE github_repos SET notes = ?, tracked_branches_json = ?, enabled = ?, git_mode = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+        (notes, json.dumps(branches), enabled, git_mode, now, repo_id, project_id),
     )
     return None
 
@@ -1241,12 +1232,12 @@ def repo_rows(conn, project_id):
 
 def repo_branches(conn, project_id, repo_id, auth_info=None):
     row = conn.execute(
-        "SELECT repo, git_mode, gitlab_server FROM github_repos WHERE id = ? AND project_id = ?",
+        "SELECT repo, git_mode FROM github_repos WHERE id = ? AND project_id = ?",
         (repo_id, project_id),
     ).fetchone()
     if not row:
         raise ValidationError("repository not found")
-    return list_branches(row["repo"], row["git_mode"], row["gitlab_server"], auth_info=auth_info)
+    return list_branches(row["repo"], row["git_mode"], auth_info=auth_info)
 
 
 def save_plan(conn, project_id, payload):

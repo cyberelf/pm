@@ -1366,7 +1366,6 @@ function renderSettings(ws) {
       <div class="row">
         <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
         <input id="repo-input" placeholder="owner/repo">
-        <input id="repo-server-input" placeholder="GitLab 服务器地址，如 https://gitlab.example.com" class="hidden">
         <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
         <button type="button" onclick="addRepo()">添加仓库</button>
       </div>
@@ -1401,24 +1400,16 @@ function syncProjectToggleState(input) {
 
 function onRepoModeChange() {
   const gitlab = $("repo-mode-input") && $("repo-mode-input").value === "gitlab";
-  if (!$("repo-server-input")) return;
-  $("repo-server-input").classList.toggle("hidden", !gitlab);
+  if (!$("repo-input")) return;
   $("repo-input").placeholder = gitlab ? "group/project 或 group/sub-group/project" : "owner/repo";
-  $("repo-server-input").placeholder = state.gitlabUrl
-    ? `默认使用 ${state.gitlabUrl}，可改`
-    : "GitLab 服务器地址，如 https://gitlab.com";
 }
 
 function renderRepoRow(r) {
   const enabled = Number(r.enabled) !== 0;
-  const gitlab = r.git_mode === "gitlab";
-  const modeLabel = gitlab ? "GitLab" : "GitHub";
-  const target = gitlab
-    ? `<input id="repo-server-${r.id}" class="table-input" placeholder="${escapeAttr(state.gitlabUrl || "https://gitlab.com")}（可改）" value="${escapeAttr(r.gitlab_server || "")}">`
-    : "";
+  const modeLabel = r.git_mode === "gitlab" ? "GitLab" : "GitHub";
   return `
     <tr class="${enabled ? "" : "repo-row-disabled"}">
-      <td data-label="仓库"><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}${target ? `<br>${target}` : ""}</td>
+      <td data-label="仓库"><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}</td>
       <td data-label="跟踪分支">${renderBranchPicker(r)}</td>
       <td data-label="补充说明"><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
       <td data-label="启用">${enabled
@@ -1803,9 +1794,7 @@ async function deleteMaterial(id) {
 }
 
 async function addRepo() {
-  const gitMode = $("repo-mode-input").value;
-  const payload = { repo: $("repo-input").value, notes: $("repo-notes-input").value, git_mode: gitMode };
-  if (gitMode === "gitlab") payload.gitlab_server = $("repo-server-input").value;
+  const payload = { repo: $("repo-input").value, notes: $("repo-notes-input").value, git_mode: $("repo-mode-input").value };
   await api(`/api/projects/${state.projectId}/repos`, { method: "POST", body: JSON.stringify(payload) });
   toast("仓库已保存");
   await loadWorkspace();
@@ -1816,7 +1805,6 @@ async function saveRepoNotes(id) {
   if (!branches.length) return toast("请至少选择一个分支");
   const repo = (state.workspace.repos || []).find((item) => item.id === id);
   const payload = { notes: $(`repo-notes-${id}`).value, branches, git_mode: repo && repo.git_mode === "gitlab" ? "gitlab" : "github" };
-  if (payload.git_mode === "gitlab") payload.gitlab_server = $(`repo-server-${id}`).value;
   await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
   toast("仓库已保存");
   await loadWorkspace();

@@ -80,10 +80,10 @@ def git_auth_for_user(conn, user_id):
     }
 
 
-def _gitlab_server(gitlab_server, info):
-    """A repo's own server address wins; the account's GitLab URL is the
-    fallback so self-hosted users only configure it once."""
-    return (gitlab_server or "").strip() or (info.get("gitlab_url") or "").strip()
+def _gitlab_server(info):
+    """Every GitLab repo goes through the account's GitLab URL from
+    全局设置 → Git 集成; there is no per-repo server address anymore."""
+    return (info.get("gitlab_url") or "").strip()
 
 
 def _disabled_result(message):
@@ -95,13 +95,13 @@ def _disabled_result(message):
     }
 
 
-def check_repo(repo, git_mode="github", gitlab_server="", auth_info=None, timeout=20):
+def check_repo(repo, git_mode="github", auth_info=None, timeout=20):
     info = auth_info or {}
     if git_mode == GIT_MODE_GITLAB:
         if not info.get("gitlab_enabled", True):
             return _disabled_result("GitLab 集成已在全局设置中停用，无法读取该仓库")
         return gitlab_check_repo(
-            repo, server=_gitlab_server(gitlab_server, info), token=info.get("gitlab_token", ""), timeout=timeout
+            repo, server=_gitlab_server(info), token=info.get("gitlab_token", ""), timeout=timeout
         )
     if not info.get("github_enabled", True):
         return _disabled_result("GitHub 集成已在全局设置中停用，无法读取该仓库")
@@ -119,7 +119,7 @@ def check_repo(repo, git_mode="github", gitlab_server="", auth_info=None, timeou
     return result
 
 
-def list_branches(repo, git_mode="github", gitlab_server="", auth_info=None, timeout=30):
+def list_branches(repo, git_mode="github", auth_info=None, timeout=30):
     info = auth_info or {}
     if git_mode == GIT_MODE_GITLAB:
         if not info.get("gitlab_enabled", True):
@@ -130,7 +130,7 @@ def list_branches(repo, git_mode="github", gitlab_server="", auth_info=None, tim
                 "branches": [],
             }
         return gitlab_list_branches(
-            repo, server=_gitlab_server(gitlab_server, info), token=info.get("gitlab_token", ""), timeout=timeout
+            repo, server=_gitlab_server(info), token=info.get("gitlab_token", ""), timeout=timeout
         )
     if not info.get("github_enabled", True):
         return {
@@ -142,7 +142,7 @@ def list_branches(repo, git_mode="github", gitlab_server="", auth_info=None, tim
     return github_list_branches(repo, token=github_token_for(info, repo), timeout=timeout)
 
 
-def weekly_commits(repo, since, until, branches=None, git_mode="github", gitlab_server="", auth_info=None, timeout=30):
+def weekly_commits(repo, since, until, branches=None, git_mode="github", auth_info=None, timeout=30):
     info = auth_info or {}
     if git_mode == GIT_MODE_GITLAB:
         if not info.get("gitlab_enabled", True):
@@ -159,7 +159,7 @@ def weekly_commits(repo, since, until, branches=None, git_mode="github", gitlab_
             since,
             until,
             branches,
-            server=_gitlab_server(gitlab_server, info),
+            server=_gitlab_server(info),
             token=info.get("gitlab_token", ""),
             timeout=timeout,
         )
@@ -187,7 +187,7 @@ def refresh_repo(conn, repo_id):
         (repo_id,),
     ).fetchone()
     auth_info = git_auth_for_user(conn, repo_row["owner_user_id"])
-    result = check_repo(repo_row["repo"], repo_row["git_mode"], repo_row["gitlab_server"], auth_info=auth_info)
+    result = check_repo(repo_row["repo"], repo_row["git_mode"], auth_info=auth_info)
     now = iso_now()
     conn.execute(
         """

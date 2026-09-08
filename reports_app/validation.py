@@ -126,13 +126,6 @@ def validate_repo(repo, git_mode=GIT_MODE_GITHUB):
     return value.replace("https://github.com/", "").rstrip("/")
 
 
-def gitlab_server_from_url(repo):
-    match = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://([^/]+?)/", (repo or "").strip())
-    if not match:
-        return ""
-    return validate_gitlab_server(match.group(1))
-
-
 def validate_gitlab_server(server):
     value = (server or "").strip()
     if not value:

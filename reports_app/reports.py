@@ -39,7 +39,7 @@ def assemble_context(conn, project_id, week_key=None):
     ).fetchall()
     repos = conn.execute(
         """
-        SELECT repo, git_mode, gitlab_server, notes, tracked_branches_json, status, status_message,
+        SELECT repo, git_mode, notes, tracked_branches_json, status, status_message,
                last_checked_at, last_activity_at, activity_summary
         FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id
         """,
@@ -143,7 +143,6 @@ def repo_commit_context(repo_row, week_start, week_end, auth_info):
         week_end,
         branches,
         git_mode=repo_row["git_mode"],
-        gitlab_server=repo_row["gitlab_server"],
         auth_info=auth_info,
     )
     result["notes"] = repo_row["notes"]
