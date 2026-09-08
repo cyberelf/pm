@@ -179,7 +179,7 @@ def enqueue_report_generation(conn, db_path, project_id, trigger_type, force=Fal
     return job_id
 
 
-def enqueue_voice_job(conn, db_path, payload, voice_agent, asr_endpoint, asr_model, asr_language):
+def enqueue_voice_job(conn, db_path, payload, voice_agent, asr_endpoint, asr_model, asr_language, user_id):
     """Insert a queued voice job and hand it to the shared task queue with the
     same capacity accounting as report generation."""
     conn.execute("BEGIN IMMEDIATE")
@@ -187,7 +187,7 @@ def enqueue_voice_job(conn, db_path, payload, voice_agent, asr_endpoint, asr_mod
         capacity = queue_capacity(conn)
         if active_task_count(conn) >= capacity:
             raise QueueFullError(f"task queue is full (capacity {capacity})")
-        job_id = create_voice_job(conn)
+        job_id = create_voice_job(conn, user_id)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -198,37 +198,52 @@ def enqueue_voice_job(conn, db_path, payload, voice_agent, asr_endpoint, asr_mod
     return job_id
 
 
-def task_queue_state(conn):
-    """Queue snapshot for the frontend: configuration plus every in-flight
-    task across both job kinds."""
-    project_names = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM projects")}
+def task_queue_state(conn, user_id=None, is_admin=False):
+    """Queue snapshot for the frontend. Tasks stay visible to their owner
+    (report tasks through the owning project); queue configuration values are
+    included only for administrators."""
+    if user_id is None:
+        project_filter, params = "", ()
+        project_names = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM projects")}
+        voice_filter = ""
+    else:
+        project_filter, params = " AND project_id IN (SELECT id FROM projects WHERE user_id = ?)", (user_id,)
+        project_names = {
+            row["id"]: row["name"]
+            for row in conn.execute("SELECT id, name FROM projects WHERE user_id = ?", (user_id,))
+        }
+        voice_filter = " AND user_id = ?"
     tasks = []
     for row in conn.execute(
-        """
+        f"""
         SELECT id, project_id, week_key, trigger_type, provider, status, started_at
         FROM generation_jobs
-        WHERE status IN ('queued', 'running')
+        WHERE status IN ('queued', 'running'){project_filter}
         ORDER BY id
-        """
+        """,
+        params,
     ):
         item = dict(row)
         item["kind"] = "report"
         item["project_name"] = project_names.get(item["project_id"], "")
         tasks.append(item)
     for row in conn.execute(
-        """
+        f"""
         SELECT id, status, created_at, updated_at
         FROM voice_jobs
-        WHERE status IN ('queued', 'transcribing', 'structuring')
+        WHERE status IN ('queued', 'transcribing', 'structuring'){voice_filter}
         ORDER BY id
-        """
+        """,
+        params if user_id is None else (user_id,),
     ):
         item = dict(row)
         item["kind"] = "voice"
         tasks.append(item)
-    return {
-        "capacity": queue_capacity(conn),
-        "parallelism": queue_parallelism(conn),
+    state = {
         "active": len(tasks),
         "tasks": tasks,
     }
+    if is_admin:
+        state["capacity"] = queue_capacity(conn)
+        state["parallelism"] = queue_parallelism(conn)
+    return state

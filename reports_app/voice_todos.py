@@ -17,17 +17,17 @@ MAX_VOICE_TEXT_LENGTH = 4000
 MAX_VOICE_TODO_ITEMS = 10
 
 
-def create_todos_from_voice(conn, text, provider, timeout=120):
+def create_todos_from_voice(conn, text, provider, timeout=120, user_id=None):
     transcript = (text or "").strip()
     if not transcript:
         raise ValidationError("voice transcript is required")
     transcript = transcript[:MAX_VOICE_TEXT_LENGTH]
     items, error = convert_transcript_to_todos(transcript, provider, timeout)
-    created = [create_todo(conn, item) for item in items]
+    created = [create_todo(conn, item, user_id) for item in items]
     return {"ids": created, "fallback": bool(error), "error": error}
 
 
-def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_model, timeout=180, asr_language=DEFAULT_ASR_LANGUAGE):
+def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_model, timeout=180, asr_language=DEFAULT_ASR_LANGUAGE, user_id=None):
     """Transcribes an uploaded recording through the configured ASR service,
     then structures the transcript into TODO items. Returns (result, transcript)."""
     raw, content_type = validate_asr_audio(payload)
@@ -37,20 +37,20 @@ def create_todos_from_voice_audio(conn, payload, provider, asr_endpoint, asr_mod
         raise
     except Exception as exc:
         raise ValidationError(f"voice transcription failed: {exc}") from exc
-    return create_todos_from_voice(conn, transcript, provider, timeout), transcript
+    return create_todos_from_voice(conn, transcript, provider, timeout, user_id=user_id), transcript
 
 
-def create_voice_job(conn):
+def create_voice_job(conn, user_id):
     now = iso_now()
     cur = conn.execute(
-        "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES ('queued', ?, ?)",
-        (now, now),
+        "INSERT INTO voice_jobs (status, user_id, created_at, updated_at) VALUES ('queued', ?, ?, ?)",
+        (user_id, now, now),
     )
     return cur.lastrowid
 
 
-def get_voice_job(conn, job_id):
-    row = conn.execute("SELECT * FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
+def get_voice_job(conn, job_id, user_id=None):
+    row = _voice_job(conn, job_id, user_id)
     if not row:
         raise ValidationError("voice job not found")
     item = dict(row)
@@ -58,19 +58,28 @@ def get_voice_job(conn, job_id):
     return item
 
 
-def get_active_voice_job(conn):
+def _voice_job(conn, job_id, user_id=None):
+    if user_id is None:
+        return conn.execute("SELECT * FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
+    return conn.execute(
+        "SELECT * FROM voice_jobs WHERE id = ? AND user_id = ?", (job_id, user_id)
+    ).fetchone()
+
+
+def get_active_voice_job(conn, user_id):
     # Oldest first: the longest-waiting task is the one closest to finishing,
     # so clients that track a single job adopt that one.
     row = conn.execute(
-        "SELECT id FROM voice_jobs WHERE status IN ('queued', 'transcribing', 'structuring') ORDER BY id ASC LIMIT 1"
+        "SELECT id FROM voice_jobs WHERE user_id = ? AND status IN ('queued', 'transcribing', 'structuring') ORDER BY id ASC LIMIT 1",
+        (user_id,),
     ).fetchone()
     return get_voice_job(conn, row["id"]) if row else None
 
 
-def cancel_voice_job(conn, job_id):
+def cancel_voice_job(conn, job_id, user_id):
     cur = conn.execute(
-        "UPDATE voice_jobs SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('queued', 'transcribing', 'structuring')",
-        (iso_now(), job_id),
+        "UPDATE voice_jobs SET status = 'cancelled', updated_at = ? WHERE id = ? AND user_id = ? AND status IN ('queued', 'transcribing', 'structuring')",
+        (iso_now(), job_id, user_id),
     )
     if cur.rowcount != 1:
         row = conn.execute("SELECT status FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -129,7 +138,9 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
     started = time.monotonic()
     try:
         with connect(db_path) as conn:
-            status = _voice_job_status(conn, job_id)
+            job = conn.execute("SELECT status, user_id FROM voice_jobs WHERE id = ?", (job_id,)).fetchone()
+            status = job["status"] if job else None
+            owner_id = job["user_id"] if job else None
             if status != "queued":
                 _log_voice_job(job_id, f"cancelled while queued; worker exiting (status={status})")
                 return
@@ -169,7 +180,7 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
                 _log_voice_job(job_id, "cancelled during structuring; discarding results")
                 conn.commit()
                 return
-            created = [create_todo(conn, item) for item in items]
+            created = [create_todo(conn, item, owner_id) for item in items]
             _update_voice_job(
                 conn,
                 job_id,

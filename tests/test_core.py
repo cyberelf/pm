@@ -35,7 +35,8 @@ from reports_app.internal_agent import (
     validate_llm_settings,
 )
 from reports_app.asr import normalize_asr_endpoint, transcribe_audio, validate_asr_audio
-from reports_app.db import create_project, init_db, connect, set_setting
+from reports_app import auth
+from reports_app.db import create_project, ensure_bootstrap_admin, init_db, connect, set_setting
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
 from reports_app.gitlab import list_branches as gitlab_list_branches
@@ -78,6 +79,9 @@ class CoreTest(unittest.TestCase):
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
         init_db(self.db_path)
         self.conn = connect(self.db_path)
+        self.user = ensure_bootstrap_admin(self.conn)
+        self.user_id = self.user["id"]
+        self.conn.commit()
         self.project_id = create_project(
             self.conn,
             {
@@ -86,9 +90,23 @@ class CoreTest(unittest.TestCase):
                 "timezone": "Asia/Shanghai",
                 "report_provider": "codex",
             },
+            self.user,
         )
         self.conn.commit()
         os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def session_token(self):
+        if not getattr(self, "_session_token", None):
+            self._session_token = auth.create_session(self.conn, self.user_id)
+            self.conn.commit()
+        return self._session_token
+
+    def api_request(self, client, method, path, body=None, headers=None):
+        merged = dict(headers or {})
+        merged.setdefault("Cookie", f"reports_session={self.session_token()}")
+        if body is not None:
+            merged.setdefault("Content-Type", "application/json")
+        client.request(method, path, body=body, headers=merged)
 
     def tearDown(self):
         self.conn.close()
@@ -147,18 +165,18 @@ class CoreTest(unittest.TestCase):
 
     def test_todo_open_workflow_requires_valid_title_and_status(self):
         with self.assertRaises(ValidationError):
-            create_todo(self.conn, {"title": "  "})
-        todo_id = create_todo(self.conn, {"title": "Ship board", "description": "Build the flow"})
-        update_todo(self.conn, todo_id, {"status": "doing"})
-        todo = todo_rows(self.conn)[0]
+            create_todo(self.conn, {"title": "  "}, self.user_id)
+        todo_id = create_todo(self.conn, {"title": "Ship board", "description": "Build the flow"}, self.user_id)
+        update_todo(self.conn, todo_id, {"status": "doing"}, self.user_id)
+        todo = todo_rows(self.conn, self.user_id)[0]
         self.assertEqual(todo["status"], "doing")
         self.assertEqual(todo["description"], "Build the flow")
-        update_todo(self.conn, todo_id, {"status": "doing", "description": "**bold** <script>bad()</script>"})
-        todo = todo_rows(self.conn)[0]
+        update_todo(self.conn, todo_id, {"status": "doing", "description": "**bold** <script>bad()</script>"}, self.user_id)
+        todo = todo_rows(self.conn, self.user_id)[0]
         self.assertIn("<strong>bold</strong>", todo["description_html"])
         self.assertNotIn("<script>", todo["description_html"])
         with self.assertRaises(ValidationError):
-            update_todo(self.conn, todo_id, {"status": "closed"})
+            update_todo(self.conn, todo_id, {"status": "closed"}, self.user_id)
 
     def test_tls_listener_serves_api_for_secure_context_clients(self):
         openssl = shutil.which("openssl")
@@ -178,7 +196,7 @@ class CoreTest(unittest.TestCase):
         try:
             context = ssl._create_unverified_context()
             client = HTTPSConnection("127.0.0.1", tls_server.server_port, timeout=10, context=context)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
@@ -299,10 +317,11 @@ class CoreTest(unittest.TestCase):
                     "codex",
                     f"http://127.0.0.1:{server.server_port}/inference",
                     "whisper",
+                    user_id=self.user_id,
                 )
             self.assertEqual(transcript, "盘点线上集群状态")
             self.assertFalse(result["fallback"])
-            todo = next(row for row in todo_rows(self.conn) if row["id"] == result["ids"][0])
+            todo = next(row for row in todo_rows(self.conn, self.user_id) if row["id"] == result["ids"][0])
             self.assertEqual(todo["title"], "盘点线上集群状态")
         finally:
             server.shutdown()
@@ -341,10 +360,10 @@ class CoreTest(unittest.TestCase):
 
     def test_create_todos_from_voice_with_fake_provider(self):
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
-            result = create_todos_from_voice(self.conn, "给后端日志加上脱敏处理", "claude")
+            result = create_todos_from_voice(self.conn, "给后端日志加上脱敏处理", "claude", user_id=self.user_id)
         self.assertFalse(result["fallback"])
         self.assertEqual(len(result["ids"]), 1)
-        todo = next(row for row in todo_rows(self.conn) if row["id"] == result["ids"][0])
+        todo = next(row for row in todo_rows(self.conn, self.user_id) if row["id"] == result["ids"][0])
         self.assertEqual(todo["title"], "给后端日志加上脱敏处理")
         self.assertEqual(todo["status"], "todo")
 
@@ -354,10 +373,10 @@ class CoreTest(unittest.TestCase):
                 "reports_app.reports.run_provider_command",
                 side_effect=RuntimeError("provider exploded"),
             ):
-                result = create_todos_from_voice(self.conn, "盘点仓库权限", "codex")
+                result = create_todos_from_voice(self.conn, "盘点仓库权限", "codex", user_id=self.user_id)
         self.assertTrue(result["fallback"])
         self.assertIn("provider exploded", result["error"])
-        todo = next(row for row in todo_rows(self.conn) if row["id"] == result["ids"][0])
+        todo = next(row for row in todo_rows(self.conn, self.user_id) if row["id"] == result["ids"][0])
         self.assertEqual(todo["title"], "盘点仓库权限")
         with self.assertRaises(ValidationError):
             create_todos_from_voice(self.conn, "   ", "codex")
@@ -366,7 +385,7 @@ class CoreTest(unittest.TestCase):
         deadline = time.time() + timeout
         while time.time() < deadline:
             client = HTTPConnection("127.0.0.1", server_port, timeout=10)
-            client.request("GET", f"/api/voice-jobs/{job_id}")
+            self.api_request(client, "GET", f"/api/voice-jobs/{job_id}")
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
@@ -379,7 +398,7 @@ class CoreTest(unittest.TestCase):
         deadline = time.time() + timeout
         while time.time() < deadline:
             client = HTTPConnection("127.0.0.1", server_port, timeout=10)
-            client.request("GET", f"/api/voice-jobs/{job_id}")
+            self.api_request(client, "GET", f"/api/voice-jobs/{job_id}")
             payload = json.loads(client.getresponse().read())
             client.close()
             if payload["status"] in expected:
@@ -414,7 +433,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"asr_endpoint": f"http://127.0.0.1:{asr_server.server_port}/inference", "queue_capacity": 2, "queue_parallelism": 1}),
@@ -426,7 +445,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(settings["queue_parallelism"], 1)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "POST",
                 "/api/todos/voice",
                 body=json.dumps({"audio_base64": base64.b64encode(b"RIFFfake").decode(), "content_type": "audio/wav"}),
@@ -438,7 +457,7 @@ class CoreTest(unittest.TestCase):
             self._wait_voice_status(server.server_port, first["id"], {"transcribing"})
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "第二个任务"}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", "/api/todos/voice", body=json.dumps({"text": "第二个任务"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             second = json.loads(response.read())
             client.close()
@@ -446,7 +465,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(second["status"], "queued")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "第三个任务"}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", "/api/todos/voice", body=json.dumps({"text": "第三个任务"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             third = json.loads(response.read())
             client.close()
@@ -454,7 +473,7 @@ class CoreTest(unittest.TestCase):
             self.assertIn("task queue is full", third["error"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/task-queue")
+            self.api_request(client, "GET", "/api/task-queue")
             queue_state = json.loads(client.getresponse().read())
             client.close()
             self.assertEqual(queue_state["capacity"], 2)
@@ -467,7 +486,7 @@ class CoreTest(unittest.TestCase):
             # cancelling works for queued and running tasks alike
             for job_id in (second["id"], first["id"]):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-                client.request("POST", f"/api/voice-jobs/{job_id}/cancel", body="{}", headers={"Content-Type": "application/json"})
+                self.api_request(client, "POST", f"/api/voice-jobs/{job_id}/cancel", body="{}", headers={"Content-Type": "application/json"})
                 response = client.getresponse()
                 cancelled = json.loads(response.read())
                 client.close()
@@ -480,18 +499,18 @@ class CoreTest(unittest.TestCase):
             status, job = self._poll_voice_job(server.server_port, second["id"])
             self.assertEqual(job["status"], "cancelled")
             time.sleep(0.3)
-            created_titles = [row["title"] for row in todo_rows(self.conn)]
+            created_titles = [row["title"] for row in todo_rows(self.conn, self.user_id)]
             self.assertNotIn("迟到的转写内容", created_titles)
             self.assertNotIn("第二个任务", created_titles)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/voice-jobs/active")
+            self.api_request(client, "GET", "/api/voice-jobs/active")
             active = json.loads(client.getresponse().read())
             client.close()
             self.assertIsNone(active["job"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "取消后新建任务"}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", "/api/todos/voice", body=json.dumps({"text": "取消后新建任务"}), headers={"Content-Type": "application/json"})
             fourth = json.loads(client.getresponse().read())
             client.close()
             self.assertEqual(fourth["status"], "queued")
@@ -499,7 +518,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(job["status"], "completed")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", f"/api/voice-jobs/{fourth['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", f"/api/voice-jobs/{fourth['id']}/cancel", body="{}", headers={"Content-Type": "application/json"})
             response = client.getresponse()
             response.read()
             client.close()
@@ -549,7 +568,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "POST",
                 f"/api/projects/{self.project_id}/generate",
                 body=json.dumps({"force": True}),
@@ -578,7 +597,7 @@ class CoreTest(unittest.TestCase):
             self.assertIsNotNone(report)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/task-queue")
+            self.api_request(client, "GET", "/api/task-queue")
             queue_state = json.loads(client.getresponse().read())
             client.close()
             self.assertEqual(queue_state["capacity"], 5, "defaults come from settings, not the environment")
@@ -601,6 +620,7 @@ class CoreTest(unittest.TestCase):
         other_project = create_project(
             self.conn,
             {"name": "Other", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "codex"},
+            self.user,
         )
         self.conn.commit()
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -609,7 +629,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "POST",
                 f"/api/projects/{self.project_id}/generate",
                 body=json.dumps({"force": True}),
@@ -622,7 +642,7 @@ class CoreTest(unittest.TestCase):
             self.assertIn("already has a generation job", duplicate["error"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "POST",
                 f"/api/projects/{other_project}/generate",
                 body=json.dumps({"force": True}),
@@ -645,7 +665,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"queue_capacity": 3, "queue_parallelism": 2}),
@@ -665,14 +685,14 @@ class CoreTest(unittest.TestCase):
                 {"queue_parallelism": "abc"},
             ):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-                client.request("PUT", "/api/settings", body=json.dumps(bad_payload), headers={"Content-Type": "application/json"})
+                self.api_request(client, "PUT", "/api/settings", body=json.dumps(bad_payload), headers={"Content-Type": "application/json"})
                 response = client.getresponse()
                 response.read()
                 client.close()
                 self.assertEqual(response.status, 400, f"expected 400 for {bad_payload}")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             state_payload = json.loads(client.getresponse().read())
             client.close()
             self.assertEqual(state_payload["queue_capacity"], 3)
@@ -743,7 +763,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
@@ -762,21 +782,21 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(payload["asr_model"], "whisper")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("PUT", "/api/settings", body=json.dumps({"voice_agent": "gpt"}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "PUT", "/api/settings", body=json.dumps({"voice_agent": "gpt"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             response.read()
             client.close()
             self.assertEqual(response.status, 400)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("PUT", "/api/settings", body=json.dumps({"asr_endpoint": "not-a-url"}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "PUT", "/api/settings", body=json.dumps({"asr_endpoint": "not-a-url"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             response.read()
             client.close()
             self.assertEqual(response.status, 400)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             response = client.getresponse()
             state_payload = json.loads(response.read())
             client.close()
@@ -787,7 +807,7 @@ class CoreTest(unittest.TestCase):
 
             with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-                client.request("POST", "/api/todos/voice", body=json.dumps({"text": "巡检线上集群状态"}), headers={"Content-Type": "application/json"})
+                self.api_request(client, "POST", "/api/todos/voice", body=json.dumps({"text": "巡检线上集群状态"}), headers={"Content-Type": "application/json"})
                 response = client.getresponse()
                 payload = json.loads(response.read())
                 client.close()
@@ -798,11 +818,11 @@ class CoreTest(unittest.TestCase):
             self.assertEqual(job["status"], "completed")
             self.assertFalse(job["fallback"])
             self.assertEqual(job["transcript"], "巡检线上集群状态")
-            self.assertEqual(job["todo_ids"], [todo["id"] for todo in todo_rows(self.conn) if todo["title"] == "巡检线上集群状态"])
+            self.assertEqual(job["todo_ids"], [todo["id"] for todo in todo_rows(self.conn, self.user_id) if todo["title"] == "巡检线上集群状态"])
 
             with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-                client.request(
+                self.api_request(client, 
                     "POST",
                     "/api/todos/voice",
                     body=json.dumps({"audio_base64": base64.b64encode(b"RIFFfake").decode(), "content_type": "audio/wav"}),
@@ -815,11 +835,11 @@ class CoreTest(unittest.TestCase):
             status, job = self._poll_voice_job(server.server_port, payload["id"])
             self.assertEqual(job["status"], "completed")
             self.assertEqual(job["transcript"], "给官网更换证书")
-            created = todo_rows(self.conn)[0]
+            created = todo_rows(self.conn, self.user_id)[0]
             self.assertEqual(created["title"], "给官网更换证书")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "  "}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", "/api/todos/voice", body=json.dumps({"text": "  "}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
@@ -836,12 +856,9 @@ class CoreTest(unittest.TestCase):
             asr_thread.join(timeout=2)
 
     def test_todo_card_links_open_in_new_tab(self):
-        todo_id = create_todo(
-            self.conn,
-            {"title": "Link card", "description": "See [guide](https://example.com/docs) and https://example.com"},
-        )
-        close_todo(self.conn, todo_id, {"reason": "Done via https://example.com/done"})
-        todo = todo_rows(self.conn)[0]
+        todo_id = create_todo(self.conn, {"title": "Link card", "description": "See [guide](https://example.com/docs) and https://example.com"}, self.user_id)
+        close_todo(self.conn, todo_id, {"reason": "Done via https://example.com/done"}, self.user_id)
+        todo = todo_rows(self.conn, self.user_id)[0]
         for html_field in ("description_html", "close_reason_html"):
             rendered = todo[html_field]
             self.assertIn('target="_blank"', rendered)
@@ -849,38 +866,33 @@ class CoreTest(unittest.TestCase):
             self.assertNotIn('<a href=', rendered)
 
     def test_todo_delete_only_removes_closed_todo_and_keeps_material(self):
-        todo_id = create_todo(self.conn, {"title": "Temporary card", "description": "Delete me"})
+        todo_id = create_todo(self.conn, {"title": "Temporary card", "description": "Delete me"}, self.user_id)
         with self.assertRaises(ValidationError):
-            delete_todo(self.conn, todo_id)
-        material_id = close_todo(
-            self.conn, todo_id, {"reason": "Archived first", "project_id": self.project_id}
-        )
+            delete_todo(self.conn, todo_id, self.user_id)
+        material_id = close_todo(self.conn, todo_id, {"reason": "Archived first", "project_id": self.project_id}, self.user_id)
         material = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
         self.assertIsNotNone(material)
 
-        delete_todo(self.conn, todo_id)
+        delete_todo(self.conn, todo_id, self.user_id)
 
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM todos WHERE id = ?", (todo_id,)).fetchone()["n"], 0)
         kept = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
         self.assertIsNotNone(kept)
         self.assertEqual(kept["extracted_text"], material["extracted_text"])
         with self.assertRaises(ValidationError):
-            delete_todo(self.conn, todo_id)
+            delete_todo(self.conn, todo_id, self.user_id)
 
     def test_todo_close_requires_reason_and_optionally_archives_project_material(self):
-        todo_id = create_todo(self.conn, {"title": "Finish release", "description": "Validate TODO board"})
+        todo_id = create_todo(self.conn, {"title": "Finish release", "description": "Validate TODO board"}, self.user_id)
         with self.assertRaises(ValidationError):
-            close_todo(self.conn, todo_id, {"reason": "   ", "project_id": self.project_id})
+            close_todo(self.conn, todo_id, {"reason": "   ", "project_id": self.project_id}, self.user_id)
         open_row = self.conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
         self.assertEqual(open_row["status"], "todo")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM materials").fetchone()["n"], 0)
 
-        material_id = close_todo(
-            self.conn,
-            todo_id,
-            {"reason": "Acceptance checks passed", "project_id": self.project_id},
-        )
-        closed = todo_rows(self.conn)[0]
+        material_id = close_todo(self.conn, todo_id,
+            {"reason": "Acceptance checks passed", "project_id": self.project_id}, self.user_id)
+        closed = todo_rows(self.conn, self.user_id)[0]
         self.assertEqual(closed["status"], "closed")
         self.assertEqual(closed["close_reason"], "Acceptance checks passed")
         self.assertEqual(closed["project_name"], "Demo")
@@ -890,35 +902,32 @@ class CoreTest(unittest.TestCase):
         self.assertIn("Finish release", material["extracted_text"])
         self.assertIn("Acceptance checks passed", material["extracted_text"])
 
-        update_todo(
-            self.conn,
-            todo_id,
-            {"status": "closed", "title": "Finish polished release", "description": "**Verified** board"},
-        )
+        update_todo(self.conn, todo_id,
+            {"status": "closed", "title": "Finish polished release", "description": "**Verified** board"}, self.user_id)
         material = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
         self.assertIn("Finish polished release", material["extracted_text"])
         self.assertIn("**Verified** board", material["extracted_text"])
         self.assertIn("Acceptance checks passed", material["extracted_text"])
         with self.assertRaises(ValidationError):
-            update_todo(self.conn, todo_id, {"status": "doing"})
+            update_todo(self.conn, todo_id, {"status": "doing"}, self.user_id)
 
         with self.assertRaises(ValidationError):
-            close_todo(self.conn, todo_id, {"reason": "again", "project_id": self.project_id})
+            close_todo(self.conn, todo_id, {"reason": "again", "project_id": self.project_id}, self.user_id)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM materials").fetchone()["n"], 1)
 
     def test_todo_close_without_project_does_not_create_material(self):
-        todo_id = create_todo(self.conn, {"title": "Personal reminder"})
-        self.assertIsNone(close_todo(self.conn, todo_id, {"reason": "No longer needed"}))
+        todo_id = create_todo(self.conn, {"title": "Personal reminder"}, self.user_id)
+        self.assertIsNone(close_todo(self.conn, todo_id, {"reason": "No longer needed"}, self.user_id))
         row = self.conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
         self.assertEqual(row["status"], "closed")
         self.assertIsNone(row["project_id"])
         self.assertIsNone(row["material_id"])
 
     def test_update_closed_todo_rejected_once_archived_material_locks(self):
-        todo_id = create_todo(self.conn, {"title": "Ship board", "description": "original"})
-        material_id = close_todo(self.conn, todo_id, {"reason": "shipped", "project_id": self.project_id})
+        todo_id = create_todo(self.conn, {"title": "Ship board", "description": "original"}, self.user_id)
+        material_id = close_todo(self.conn, todo_id, {"reason": "shipped", "project_id": self.project_id}, self.user_id)
 
-        update_todo(self.conn, todo_id, {"status": "closed", "description": "fresh details"})
+        update_todo(self.conn, todo_id, {"status": "closed", "description": "fresh details"}, self.user_id)
         material = self.conn.execute(
             "SELECT extracted_text FROM materials WHERE id = ?", (material_id,)
         ).fetchone()
@@ -929,7 +938,7 @@ class CoreTest(unittest.TestCase):
             (material_id,),
         )
         with self.assertRaises(ValidationError) as ctx:
-            update_todo(self.conn, todo_id, {"status": "closed", "title": "Locked edit"})
+            update_todo(self.conn, todo_id, {"status": "closed", "title": "Locked edit"}, self.user_id)
         self.assertIn("locked", str(ctx.exception))
         material = self.conn.execute(
             "SELECT extracted_text FROM materials WHERE id = ?", (material_id,)
@@ -937,11 +946,8 @@ class CoreTest(unittest.TestCase):
         self.assertNotIn("Locked edit", material["extracted_text"])
 
         # Autosave fires even when nothing changed; an unchanged payload must stay allowed.
-        update_todo(
-            self.conn,
-            todo_id,
-            {"status": "closed", "title": "Ship board", "description": "fresh details"},
-        )
+        update_todo(self.conn, todo_id,
+            {"status": "closed", "title": "Ship board", "description": "fresh details"}, self.user_id)
         row = self.conn.execute("SELECT title, description FROM todos WHERE id = ?", (todo_id,)).fetchone()
         self.assertEqual(row["title"], "Ship board")
         self.assertEqual(row["description"], "fresh details")
@@ -1091,7 +1097,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             response = client.getresponse()
             state_payload = json.loads(response.read())
             client.close()
@@ -1105,7 +1111,7 @@ class CoreTest(unittest.TestCase):
                 ]
             })
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "POST",
                 f"/api/projects/{self.project_id}/materials",
                 body=payload,
@@ -1123,7 +1129,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual([row["summary_status"] for row in rows], ["generated", "generated"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", f"/api/projects/{self.project_id}/materials/{result['ids'][1]}")
+            self.api_request(client, "GET", f"/api/projects/{self.project_id}/materials/{result['ids'][1]}")
             response = client.getresponse()
             markdown_detail = json.loads(response.read())
             client.close()
@@ -1132,7 +1138,7 @@ class CoreTest(unittest.TestCase):
             self.assertIn("<p>second body</p>", markdown_detail["content_html"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", f"/api/projects/{self.project_id}/materials/{pdf_id}/content")
+            self.api_request(client, "GET", f"/api/projects/{self.project_id}/materials/{pdf_id}/content")
             response = client.getresponse()
             pdf_content = response.read()
             client.close()
@@ -1145,7 +1151,7 @@ class CoreTest(unittest.TestCase):
                 (manual_id, "complete manual content"),
             ):
                 client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-                client.request("GET", f"/api/projects/{self.project_id}/materials/{material_id}")
+                self.api_request(client, "GET", f"/api/projects/{self.project_id}/materials/{material_id}")
                 response = client.getresponse()
                 detail = json.loads(response.read())
                 client.close()
@@ -1153,7 +1159,7 @@ class CoreTest(unittest.TestCase):
                 self.assertEqual(detail["content"], expected_content)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", f"/api/projects/999/materials/{result['ids'][0]}")
+            self.api_request(client, "GET", f"/api/projects/999/materials/{result['ids'][0]}")
             response = client.getresponse()
             response.read()
             client.close()
@@ -1230,7 +1236,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("DELETE", f"/api/projects/{self.project_id}/materials/{current_id}")
+            self.api_request(client, "DELETE", f"/api/projects/{self.project_id}/materials/{current_id}")
             response = client.getresponse()
             deleted_workspace = json.loads(response.read())
             client.close()
@@ -1240,7 +1246,7 @@ class CoreTest(unittest.TestCase):
             self.assertFalse(current_path.exists())
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("DELETE", f"/api/projects/{self.project_id}/materials/{locked_id}")
+            self.api_request(client, "DELETE", f"/api/projects/{self.project_id}/materials/{locked_id}")
             response = client.getresponse()
             error = json.loads(response.read())
             client.close()
@@ -1451,7 +1457,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("DELETE", f"/api/projects/{self.project_id}/repos/{repo_id}")
+            self.api_request(client, "DELETE", f"/api/projects/{self.project_id}/repos/{repo_id}")
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
@@ -1459,7 +1465,7 @@ class CoreTest(unittest.TestCase):
             self.assertEqual([item["repo"] for item in payload["repos"]], [])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("DELETE", f"/api/projects/{self.project_id}/repos/{repo_id}")
+            self.api_request(client, "DELETE", f"/api/projects/{self.project_id}/repos/{repo_id}")
             response = client.getresponse()
             error = json.loads(response.read())
             client.close()
@@ -1869,7 +1875,7 @@ class CoreTest(unittest.TestCase):
         try:
             # app.js is large enough to cross the compression threshold
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/app.js", headers={"Accept-Encoding": "gzip"})
+            self.api_request(client, "GET", "/app.js", headers={"Accept-Encoding": "gzip"})
             response = client.getresponse()
             body = response.read()
             client.close()
@@ -1877,7 +1883,7 @@ class CoreTest(unittest.TestCase):
             self.assertGreater(len(gzip.decompress(body)), 1024)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/app.js")
+            self.api_request(client, "GET", "/app.js")
             response = client.getresponse()
             body = response.read()
             client.close()
@@ -2014,7 +2020,7 @@ class CoreTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "POST",
                 f"/api/projects/{self.project_id}/status",
                 body=json.dumps({"enabled": True}),
@@ -2138,6 +2144,9 @@ class InternalAgentTest(unittest.TestCase):
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
         init_db(self.db_path)
         self.conn = connect(self.db_path)
+        self.user = ensure_bootstrap_admin(self.conn)
+        self.user_id = self.user["id"]
+        self.conn.commit()
         self.project_id = create_project(
             self.conn,
             {
@@ -2146,9 +2155,23 @@ class InternalAgentTest(unittest.TestCase):
                 "timezone": "Asia/Shanghai",
                 "report_provider": "internal",
             },
+            self.user,
         )
         self.conn.commit()
         os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def session_token(self):
+        if not getattr(self, "_session_token", None):
+            self._session_token = auth.create_session(self.conn, self.user_id)
+            self.conn.commit()
+        return self._session_token
+
+    def api_request(self, client, method, path, body=None, headers=None):
+        merged = dict(headers or {})
+        merged.setdefault("Cookie", f"reports_session={self.session_token()}")
+        if body is not None:
+            merged.setdefault("Content-Type", "application/json")
+        client.request(method, path, body=body, headers=merged)
 
     def tearDown(self):
         self.conn.close()
@@ -2269,7 +2292,7 @@ class InternalAgentTest(unittest.TestCase):
                 "reports_app.internal_agent.internal_voice_todo_items",
                 return_value=[{"title": "买牛奶", "description": "两盒"}],
             ) as items_fn:
-                result = create_todos_from_voice(self.conn, "买牛奶 两盒", "internal")
+                result = create_todos_from_voice(self.conn, "买牛奶 两盒", "internal", user_id=self.user_id)
         self.assertFalse(result["fallback"])
         self.assertEqual(result["error"], "")
         self.assertEqual(len(result["ids"]), 1)
@@ -2280,10 +2303,10 @@ class InternalAgentTest(unittest.TestCase):
                 "reports_app.internal_agent.internal_voice_todo_items",
                 side_effect=RuntimeError("internal agent LLM call failed: boom"),
             ):
-                result = create_todos_from_voice(self.conn, "买牛奶 两盒", "internal")
+                result = create_todos_from_voice(self.conn, "买牛奶 两盒", "internal", user_id=self.user_id)
         self.assertTrue(result["fallback"])
         self.assertIn("boom", result["error"])
-        titles = [row["title"] for row in todo_rows(self.conn)]
+        titles = [row["title"] for row in todo_rows(self.conn, self.user_id)]
         self.assertIn("买牛奶 两盒", titles)
 
     def test_internal_agent_end_to_end_with_local_openai_compatible_server(self):
@@ -2356,7 +2379,7 @@ class InternalAgentTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
@@ -2380,7 +2403,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertNotIn("llm_api_key", payload)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
@@ -2400,7 +2423,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertTrue(payload["llm_api_key_set"], "empty llm_api_key must keep the stored key")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"voice_agent": "codex", "llm_provider": "gpt"}),
@@ -2412,7 +2435,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(response.status, 400)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"voice_agent": "codex", "llm_base_url": "http://"}),
@@ -2424,7 +2447,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(response.status, 400)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             response = client.getresponse()
             state_payload = json.loads(response.read())
             client.close()
@@ -2446,7 +2469,7 @@ class InternalAgentTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"voice_agent": "codex", "asr_language": "en"}),
@@ -2459,14 +2482,14 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(payload["asr_language"], "en")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             response = client.getresponse()
             state_payload = json.loads(response.read())
             client.close()
             self.assertEqual(state_payload["asr_language"], "en")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"voice_agent": "codex", "asr_language": "  "}),
@@ -2478,7 +2501,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(payload["asr_language"], DEFAULT_ASR_LANGUAGE, "blank asr_language resets to the Chinese default")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"voice_agent": "codex"}),
@@ -2504,12 +2527,12 @@ class InternalAgentTest(unittest.TestCase):
             # The cancel endpoint never reads its body; before the drain fix
             # the leftover "{}" was parsed as the next request line and the
             # browser saw 501 Unsupported method ('{}POST').
-            client.request("POST", "/api/voice-jobs/999/cancel", body="{}", headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", "/api/voice-jobs/999/cancel", body="{}", headers={"Content-Type": "application/json"})
             response = client.getresponse()
             response.read()
             self.assertEqual(response.status, 400)
 
-            client.request("POST", "/api/todos/voice", body=json.dumps({"text": "keepalive 下一条"}), headers={"Content-Type": "application/json"})
+            self.api_request(client, "POST", "/api/todos/voice", body=json.dumps({"text": "keepalive 下一条"}), headers={"Content-Type": "application/json"})
             response = client.getresponse()
             payload = json.loads(response.read())
             self.assertEqual(response.status, 202, "the next request on a reused connection must not see the previous body")
@@ -2527,7 +2550,7 @@ class InternalAgentTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
@@ -2548,7 +2571,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(payload["ui_mode"], "dark")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"asr_model": "whisper-medium"}),
@@ -2567,7 +2590,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(payload["ui_mode"], "dark")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request(
+            self.api_request(client, 
                 "PUT",
                 "/api/settings",
                 body=json.dumps({"ui_theme": "not a theme!"}),
@@ -2579,7 +2602,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(response.status, 400)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", "/api/state")
+            self.api_request(client, "GET", "/api/state")
             response = client.getresponse()
             state_payload = json.loads(response.read())
             client.close()
@@ -2606,7 +2629,7 @@ class InternalAgentTest(unittest.TestCase):
         thread.start()
         try:
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", f"/api/projects/{self.project_id}/reports/2026-W25")
+            self.api_request(client, "GET", f"/api/projects/{self.project_id}/reports/2026-W25")
             response = client.getresponse()
             payload = json.loads(response.read())
             client.close()
@@ -2616,7 +2639,7 @@ class InternalAgentTest(unittest.TestCase):
             self.assertNotIn("content_md", payload)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            client.request("GET", f"/api/projects/{self.project_id}/reports/1999-W01")
+            self.api_request(client, "GET", f"/api/projects/{self.project_id}/reports/1999-W01")
             response = client.getresponse()
             response.read()
             client.close()
@@ -2629,3 +2652,297 @@ class InternalAgentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserAuthTest(unittest.TestCase):
+    """Login, admin user management, and per-user data isolation."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        init_db(self.db_path)
+        self.conn = connect(self.db_path)
+        self.admin = ensure_bootstrap_admin(self.conn)
+        self.project_id = create_project(
+            self.conn,
+            {
+                "name": "Admin Project",
+                "start_date": "2026-06-27",
+                "timezone": "Asia/Shanghai",
+            },
+            self.admin,
+        )
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def tearDown(self):
+        self.conn.close()
+        os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        self.tmp.cleanup()
+
+    def start_server(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread
+
+    def login(self, port, username, password):
+        client = HTTPConnection("127.0.0.1", port, timeout=10)
+        client.request(
+            "POST",
+            "/api/auth/login",
+            body=json.dumps({"username": username, "password": password}),
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        payload = json.loads(response.read())
+        set_cookie = response.getheader("Set-Cookie") or ""
+        client.close()
+        return response.status, payload, set_cookie
+
+    def api(self, port, method, path, token, body=None):
+        client = HTTPConnection("127.0.0.1", port, timeout=10)
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Cookie"] = f"reports_session={token}"
+        client.request(method, path, body=body, headers=headers)
+        response = client.getresponse()
+        payload = json.loads(response.read())
+        client.close()
+        return response.status, payload
+
+    def test_login_sets_cookie_and_rejects_bad_credentials(self):
+        server, thread = self.start_server()
+        try:
+            status, payload, set_cookie = self.login(server.server_port, "darren", "changeme")
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["current_user"]["is_admin"])
+            self.assertIn("reports_session=", set_cookie)
+            self.assertIn("HttpOnly", set_cookie)
+
+            status, payload, _ = self.login(server.server_port, "darren", "wrong")
+            self.assertEqual(status, 400)
+            status, payload, _ = self.login(server.server_port, "ghost", "changeme")
+            self.assertEqual(status, 400)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_api_requires_authentication(self):
+        server, thread = self.start_server()
+        try:
+            status, payload = self.api(server.server_port, "GET", "/api/state", None)
+            self.assertEqual(status, 401)
+            status, payload = self.api(server.server_port, "GET", "/api/todos", None)
+            self.assertEqual(status, 401)
+            status, payload = self.api(server.server_port, "GET", "/api/auth/state", None)
+            self.assertEqual(status, 200)
+            self.assertFalse(payload["authenticated"])
+            status, payload = self.api(server.server_port, "GET", "/api/state", "bogus-token")
+            self.assertEqual(status, 401)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_user_management_requires_admin_and_guards_last_admin(self):
+        server, thread = self.start_server()
+        try:
+            _, payload, _ = self.login(server.server_port, "darren", "changeme")
+            admin_token = None
+            # pull the session token straight from the database for the cookie
+            row = self.conn.execute("SELECT token FROM sessions ORDER BY created_at DESC LIMIT 1").fetchone()
+            admin_token = row["token"]
+
+            status, payload = self.api(server.server_port, "GET", "/api/users", admin_token)
+            self.assertEqual(status, 200)
+            self.assertEqual([u["username"] for u in payload["users"]], ["darren"])
+
+            # create a plain member
+            status, payload = self.api(
+                server.server_port,
+                "POST",
+                "/api/users",
+                admin_token,
+                body=json.dumps({"username": "alice", "password": "secret1", "is_admin": False}),
+            )
+            self.assertEqual(status, 201)
+            alice_id = payload["user"]["id"]
+
+            # alice logs in with her own cookie
+            _, _, cookie = self.login(server.server_port, "alice", "secret1")
+            alice_token = cookie.split("reports_session=")[1].split(";")[0]
+            status, payload = self.api(server.server_port, "GET", "/api/users", alice_token)
+            self.assertEqual(status, 403)
+            status, payload = self.api(
+                server.server_port,
+                "POST",
+                "/api/users",
+                alice_token,
+                body=json.dumps({"username": "bob", "password": "secret2"}),
+            )
+            self.assertEqual(status, 403)
+
+            # alice cannot demote or delete herself, nor the last admin
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                f"/api/users/{alice_id}",
+                admin_token,
+                body=json.dumps({"is_admin": True}),
+            )
+            self.assertEqual(status, 200)
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/users/1",
+                admin_token,
+                body=json.dumps({"is_admin": False}),
+            )
+            self.assertEqual(status, 400)
+            status, payload = self.api(server.server_port, "DELETE", "/api/users/1", admin_token)
+            self.assertEqual(status, 400)
+
+            # demote alice again, then disable her; her sessions must be revoked
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                f"/api/users/{alice_id}",
+                admin_token,
+                body=json.dumps({"is_admin": False}),
+            )
+            self.assertEqual(status, 200)
+            status, payload = self.api(server.server_port, "GET", "/api/users", alice_token)
+            self.assertEqual(status, 403)
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                f"/api/users/{alice_id}",
+                admin_token,
+                body=json.dumps({"enabled": False}),
+            )
+            self.assertEqual(status, 200)
+            status, payload = self.api(server.server_port, "GET", "/api/state", alice_token)
+            self.assertEqual(status, 401)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_delete_user_blocked_while_user_still_owns_data(self):
+        other = auth.create_user(self.conn, "carol", "secret1", is_admin=False)
+        create_project(
+            self.conn,
+            {"name": "Carol Project", "start_date": "2026-06-27", "timezone": "Asia/Shanghai"},
+            {"id": other, "username": "carol"},
+        )
+        self.conn.commit()
+        server, thread = self.start_server()
+        try:
+            self.login(server.server_port, "darren", "changeme")
+            row = self.conn.execute("SELECT token FROM sessions ORDER BY created_at DESC LIMIT 1").fetchone()
+            admin_token = row["token"]
+            status, payload = self.api(server.server_port, "DELETE", f"/api/users/{other}", admin_token)
+            self.assertEqual(status, 400)
+            self.assertIn("projects", payload["error"])
+            self.assertIsNotNone(self.conn.execute("SELECT id FROM users WHERE id = ?", (other,)).fetchone())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_project_data_is_isolated_per_user(self):
+        other_id = auth.create_user(self.conn, "dave", "secret1", is_admin=False)
+        self.conn.commit()
+        other_project = create_project(
+            self.conn,
+            {"name": "Dave Project", "start_date": "2026-06-27", "timezone": "Asia/Shanghai"},
+            {"id": other_id, "username": "dave"},
+        )
+        self.conn.commit()
+
+        server, thread = self.start_server()
+        try:
+            _, _, cookie = self.login(server.server_port, "dave", "secret1")
+            dave_token = cookie.split("reports_session=")[1].split(";")[0]
+
+            status, payload = self.api(server.server_port, "GET", "/api/state", dave_token)
+            self.assertEqual(status, 200)
+            self.assertEqual([p["name"] for p in payload["projects"]], ["Dave Project"])
+
+            status, payload = self.api(server.server_port, "GET", f"/api/projects/{other_project}/workspace", dave_token)
+            self.assertEqual(status, 200)
+            status, payload = self.api(server.server_port, "GET", f"/api/projects/{self.project_id}/workspace", dave_token)
+            self.assertEqual(status, 404)
+
+            status, payload = self.api(server.server_port, "GET", "/api/todos", dave_token)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["todos"], [])
+
+            # the admin does not see dave's project either
+            self.login(server.server_port, "darren", "changeme")
+            row = self.conn.execute("SELECT token FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (self.admin["id"],)).fetchone()
+            admin_token = row["token"]
+            status, payload = self.api(server.server_port, "GET", f"/api/projects/{other_project}/workspace", admin_token)
+            self.assertEqual(status, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_legacy_rows_are_migrated_to_bootstrap_admin(self):
+        # simulate a pre-multiuser database: rows without an owner
+        now = iso_now()
+        cur = self.conn.execute(
+            "INSERT INTO projects (name, start_date, status, timezone, created_at, updated_at) VALUES ('Legacy', '2026-06-27', 'active', 'Asia/Shanghai', ?, ?)",
+            (now, now),
+        )
+        legacy_project = cur.lastrowid
+        self.conn.execute(
+            "INSERT INTO todos (title, status, created_at, updated_at) VALUES ('Legacy todo', 'todo', ?, ?)",
+            (now, now),
+        )
+        self.conn.execute(
+            "INSERT INTO voice_jobs (status, created_at, updated_at) VALUES ('failed', ?, ?)",
+            (now, now),
+        )
+        self.conn.commit()
+
+        init_db(self.db_path)
+
+        for table in ("projects", "todos", "voice_jobs"):
+            row = self.conn.execute(f"SELECT user_id FROM {table} WHERE user_id IS NULL LIMIT 1").fetchone()
+            self.assertIsNone(row, f"{table} rows must be assigned after migration")
+        row = self.conn.execute("SELECT user_id, owner FROM projects WHERE id = ?", (legacy_project,)).fetchone()
+        self.assertEqual(row["user_id"], self.admin["id"])
+        self.assertEqual(row["owner"], self.admin["username"])
+
+    def test_change_own_password(self):
+        server, thread = self.start_server()
+        try:
+            _, _, cookie = self.login(server.server_port, "darren", "changeme")
+            token = cookie.split("reports_session=")[1].split(";")[0]
+
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/auth/password",
+                token,
+                body=json.dumps({"old_password": "wrong", "new_password": "newpass1"}),
+            )
+            self.assertEqual(status, 400)
+            status, payload = self.api(
+                server.server_port,
+                "PUT",
+                "/api/auth/password",
+                token,
+                body=json.dumps({"old_password": "changeme", "new_password": "newpass1"}),
+            )
+            self.assertEqual(status, 200)
+            self.assertIsNotNone(auth.authenticate(self.conn, "darren", "newpass1"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)

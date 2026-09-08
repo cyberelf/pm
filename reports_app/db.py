@@ -1,8 +1,18 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 
-from .config import DATA_DIR, DB_PATH, DEFAULT_SYSTEM_PROMPT, DEFAULT_TIMEZONE, WORKSPACE_USER
+from . import auth
+from .config import (
+    ADMIN_PASSWORD_ENV_VAR,
+    BOOTSTRAP_ADMIN_USERNAME,
+    DATA_DIR,
+    DB_PATH,
+    DEFAULT_ADMIN_PASSWORD,
+    DEFAULT_SYSTEM_PROMPT,
+    DEFAULT_TIMEZONE,
+)
 from .timeutil import iso_now
 
 
@@ -179,6 +189,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE TABLE IF NOT EXISTS voice_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id),
     status TEXT NOT NULL DEFAULT 'transcribing',
     transcript TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
@@ -186,6 +197,30 @@ CREATE TABLE IF NOT EXISTS voice_jobs (
     todo_ids_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (user_id, key)
 );
 """
 
@@ -263,6 +298,83 @@ def migrate_schema(conn):
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_github_repos_project_mode_repo ON github_repos(project_id, git_mode, gitlab_server, repo)"
     )
+    table_columns = {
+        "projects": {row["name"] for row in conn.execute("PRAGMA table_info(projects)")},
+        "todos": {row["name"] for row in conn.execute("PRAGMA table_info(todos)")},
+        "voice_jobs": {row["name"] for row in conn.execute("PRAGMA table_info(voice_jobs)")},
+    }
+    for table, columns in table_columns.items():
+        if "user_id" not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER REFERENCES users(id)")
+    admin = ensure_bootstrap_admin(conn)
+    admin_id = admin["id"]
+    for table in table_columns:
+        conn.execute(f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL", (admin_id,))
+    conn.execute(
+        "UPDATE projects SET owner = ? WHERE owner = ?",
+        (admin["username"], "local-user"),
+    )
+
+
+def ensure_bootstrap_admin(conn):
+    """Guarantee at least one enabled admin exists so a fresh database (or one
+    whose only admin was removed) can always be signed into. The initial
+    password comes from REPORTS_ADMIN_PASSWORD or the built-in default."""
+    row = conn.execute(
+        "SELECT * FROM users WHERE username = ? ORDER BY id LIMIT 1",
+        (BOOTSTRAP_ADMIN_USERNAME,),
+    ).fetchone()
+    if row:
+        if not row["is_admin"] or not row["enabled"]:
+            conn.execute(
+                "UPDATE users SET is_admin = 1, enabled = 1, updated_at = ? WHERE id = ?",
+                (iso_now(), row["id"]),
+            )
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+        return row
+    if conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]:
+        row = conn.execute("SELECT * FROM users WHERE is_admin = 1 AND enabled = 1 ORDER BY id LIMIT 1").fetchone()
+        if row:
+            return row
+    password = os.environ.get(ADMIN_PASSWORD_ENV_VAR) or DEFAULT_ADMIN_PASSWORD
+    user_id = auth.create_user(conn, BOOTSTRAP_ADMIN_USERNAME, password, is_admin=True)
+    print(
+        f"bootstrap admin created: username={BOOTSTRAP_ADMIN_USERNAME} "
+        f"(password from {ADMIN_PASSWORD_ENV_VAR} or built-in default; change it after first login)",
+        flush=True,
+    )
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def get_user_setting(conn, user_id, key, default=""):
+    if not user_id:
+        return default
+    row = conn.execute(
+        "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+        (user_id, key),
+    ).fetchone()
+    if row and row["value"]:
+        return row["value"]
+    return default
+
+
+def set_user_setting(conn, user_id, key, value):
+    conn.execute(
+        """
+        INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?)
+        ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+        """,
+        (user_id, key, str(value)),
+    )
+
+
+def get_effective_user_setting(conn, user_id, key, default=""):
+    """User setting first, then the pre-multiuser global value in app_settings
+    (legacy ui_theme/ui_mode keep working after the upgrade)."""
+    value = get_user_setting(conn, user_id, key, "")
+    if value:
+        return value
+    return get_setting(conn, key, default)
 
 
 def row_to_dict(row):
@@ -275,20 +387,23 @@ def row_to_dict(row):
     return result
 
 
-def create_project(conn, data):
+def create_project(conn, data, user=None):
+    if user is None:
+        user = ensure_bootstrap_admin(conn)
     now = iso_now()
     cur = conn.execute(
         """
         INSERT INTO projects
-        (name, description, owner, start_date, end_date, status, timezone, report_provider,
+        (name, description, owner, user_id, start_date, end_date, status, timezone, report_provider,
          system_prompt, report_template, manual_background, manual_objectives, manual_constraints,
          created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data["name"].strip(),
             data.get("description", "").strip(),
-            WORKSPACE_USER,
+            user["username"],
+            user["id"],
             data["start_date"],
             data.get("end_date") or None,
             data.get("status") or "active",

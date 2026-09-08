@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import auth
 from .config import (
     ASR_ENDPOINT_SETTING,
     ASR_LANGUAGE_SETTING,
@@ -36,9 +37,18 @@ from .config import (
     UI_THEME_SETTING,
     UPLOAD_DIR,
     VOICE_AGENT_SETTING,
-    WORKSPACE_USER,
 )
-from .db import connect, create_project, get_setting, init_db, row_to_dict, set_setting
+from .db import (
+    connect,
+    create_project,
+    get_effective_user_setting,
+    get_setting,
+    get_user_setting,
+    init_db,
+    row_to_dict,
+    set_setting,
+    set_user_setting,
+)
 from .git_sources import check_repo, list_branches, refresh_repo
 from .markdown import render_markdown
 from .materials import (
@@ -94,6 +104,82 @@ from .validation import (
 )
 
 
+PUBLIC_API_ROUTES = {
+    ("GET", "/api/auth/state"),
+    ("POST", "/api/auth/login"),
+}
+
+ADMIN_ONLY_SETTING_KEYS = {
+    "voice_agent",
+    "asr_endpoint",
+    "asr_model",
+    "asr_language",
+    "llm_provider",
+    "llm_base_url",
+    "llm_model",
+    "llm_api_key",
+    "queue_capacity",
+    "queue_parallelism",
+}
+
+
+def update_user(conn, actor, target_id, payload):
+    target = conn.execute("SELECT * FROM users WHERE id = ?", (target_id,)).fetchone()
+    if not target:
+        raise ValidationError("user not found")
+    now = iso_now()
+    updates = {}
+    if "password" in payload and payload.get("password"):
+        auth.validate_new_password(payload.get("password"))
+        updates["password_hash"] = auth.hash_password(payload.get("password"))
+    if "is_admin" in payload:
+        updates["is_admin"] = 1 if payload.get("is_admin") else 0
+    if "enabled" in payload:
+        updates["enabled"] = 1 if payload.get("enabled") else 0
+    if not updates:
+        return auth.user_public(target)
+    if target_id == actor["id"] and (updates.get("is_admin") == 0 or updates.get("enabled") == 0):
+        raise ValidationError("you cannot demote or disable your own account")
+    becomes_weaker = updates.get("is_admin") == 0 or updates.get("enabled") == 0
+    if target["is_admin"] and target["enabled"] and becomes_weaker:
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND enabled = 1 AND id != ?",
+            (target_id,),
+        ).fetchone()["n"]
+        if not remaining:
+            raise ValidationError("the last enabled administrator cannot be demoted or disabled")
+    assignments = ", ".join(f"{name} = ?" for name in updates)
+    conn.execute(
+        f"UPDATE users SET {assignments}, updated_at = ? WHERE id = ?",
+        (*updates.values(), now, target_id),
+    )
+    if updates.get("enabled") == 0:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (target_id,))
+    return auth.user_public(conn.execute("SELECT * FROM users WHERE id = ?", (target_id,)).fetchone())
+
+
+def delete_user(conn, actor, target_id):
+    target = conn.execute("SELECT * FROM users WHERE id = ?", (target_id,)).fetchone()
+    if not target:
+        raise ValidationError("user not found")
+    if target_id == actor["id"]:
+        raise ValidationError("you cannot delete your own account")
+    if target["is_admin"] and target["enabled"]:
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND enabled = 1 AND id != ?",
+            (target_id,),
+        ).fetchone()["n"]
+        if not remaining:
+            raise ValidationError("the last enabled administrator cannot be deleted")
+    for table in ("projects", "todos", "voice_jobs"):
+        count = conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE user_id = ?", (target_id,)).fetchone()["n"]
+        if count:
+            raise ValidationError(
+                f"this user still owns {count} record(s) in {table}; reassign or remove their data first"
+            )
+    conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
+
+
 def llm_state(conn):
     """LLM provider settings as exposed to the frontend; the API key
     itself never leaves the server, only whether one is configured."""
@@ -108,19 +194,34 @@ def llm_state(conn):
     }
 
 
-def settings_state(conn):
+def settings_state(conn, user):
+    """Settings visible to the current user. Appearance and per-user git
+    credentials are scoped to the account; LLM, ASR, queue, and integration
+    switch configuration is administrative and only included for admins."""
+    is_admin = bool(user and user["is_admin"])
+    user_id = user["id"] if user else None
     state = {
-        "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
-        "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
-        "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
-        "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
-        "queue_capacity": queue_capacity(conn),
-        "queue_parallelism": queue_parallelism(conn),
-        "ui_theme": get_setting(conn, UI_THEME_SETTING, ""),
-        "ui_mode": get_setting(conn, UI_MODE_SETTING, ""),
+        "ui_theme": get_effective_user_setting(conn, user_id, UI_THEME_SETTING, ""),
+        "ui_mode": get_effective_user_setting(conn, user_id, UI_MODE_SETTING, ""),
     }
-    state.update(llm_state(conn))
+    if is_admin:
+        state.update(
+            {
+                "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
+                "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
+                "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
+                "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
+                "queue_capacity": queue_capacity(conn),
+                "queue_parallelism": queue_parallelism(conn),
+            }
+        )
+        state.update(llm_state(conn))
     return state
+
+
+def require_admin(user):
+    if not user or not user["is_admin"]:
+        raise PermissionError("administrator access required")
 
 
 def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
@@ -232,6 +333,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_api("GET", parsed.path, parse_qs(parsed.query))
             else:
                 self.serve_static(parsed.path)
+        except PermissionError as exc:
+            self.error(HTTPStatus.FORBIDDEN, str(exc))
         except Exception as exc:
             self.error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -290,6 +393,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(method, parsed.path, parse_qs(parsed.query))
         except QueueFullError as exc:
             self.error(HTTPStatus.CONFLICT, str(exc))
+        except PermissionError as exc:
+            self.error(HTTPStatus.FORBIDDEN, str(exc))
         except ValidationError as exc:
             self.error(HTTPStatus.BAD_REQUEST, str(exc))
         except Exception as exc:
@@ -305,20 +410,89 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(raw.decode("utf-8"))
 
+    def current_user(self, conn):
+        header = self.headers.get("Cookie") or ""
+        return auth.user_for_session(conn, auth.token_from_cookie_header(header))
+
     def handle_api(self, method, path, query):
         parts = [p for p in path.split("/") if p]
         with connect(self.server.db_path) as conn:
+            user = self.current_user(conn)
+            if (method, path) not in PUBLIC_API_ROUTES and user is None:
+                self.error(HTTPStatus.UNAUTHORIZED, "authentication required")
+                return
+            user_id = user["id"] if user else None
+            is_admin = bool(user and user["is_admin"])
+            if path == "/api/auth/state" and method == "GET":
+                self.json({"authenticated": bool(user), "current_user": auth.user_public(user)})
+                return
+            if path == "/api/auth/login" and method == "POST":
+                payload = self.body_json()
+                row = auth.authenticate(conn, payload.get("username"), payload.get("password"))
+                token = auth.create_session(conn, row["id"])
+                conn.commit()
+                self.json(
+                    {"current_user": auth.user_public(row)},
+                    extra_headers=[("Set-Cookie", auth.session_cookie_header(token))],
+                )
+                return
+            if path == "/api/auth/logout" and method == "POST":
+                token = auth.token_from_cookie_header(self.headers.get("Cookie") or "")
+                auth.delete_session(conn, token)
+                conn.commit()
+                self.json({"ok": True}, extra_headers=[("Set-Cookie", auth.clear_cookie_header())])
+                return
+            if path == "/api/auth/password" and method == "PUT":
+                payload = self.body_json()
+                auth.change_password(conn, user_id, payload.get("old_password"), payload.get("new_password"))
+                conn.commit()
+                self.json({"ok": True})
+                return
+            if path == "/api/users" and method == "GET":
+                require_admin(user)
+                rows = conn.execute("SELECT * FROM users ORDER BY username").fetchall()
+                self.json({"users": [auth.user_public(row) for row in rows]})
+                return
+            if path == "/api/users" and method == "POST":
+                require_admin(user)
+                payload = self.body_json()
+                new_id = auth.create_user(
+                    conn,
+                    payload.get("username"),
+                    payload.get("password"),
+                    is_admin=bool(payload.get("is_admin")),
+                )
+                conn.commit()
+                row = conn.execute("SELECT * FROM users WHERE id = ?", (new_id,)).fetchone()
+                self.json({"user": auth.user_public(row)}, HTTPStatus.CREATED)
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "users"] and parts[2].isdigit() and method == "PUT":
+                require_admin(user)
+                payload = self.body_json()
+                updated = update_user(conn, user, int(parts[2]), payload)
+                conn.commit()
+                self.json({"user": updated})
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "users"] and parts[2].isdigit() and method == "DELETE":
+                require_admin(user)
+                delete_user(conn, user, int(parts[2]))
+                conn.commit()
+                self.json({"ok": True})
+                return
             if path == "/api/state" and method == "GET":
                 projects = []
-                for row in conn.execute("SELECT * FROM projects ORDER BY updated_at DESC"):
+                for row in conn.execute(
+                    "SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
+                    (user_id,),
+                ):
                     project = dict(row)
                     project["progress_status"] = progress_status(conn, project["id"])
                     projects.append(project)
                 self.json(
                     {
                         "projects": projects,
-                        "workspace_user": WORKSPACE_USER,
-                        **settings_state(conn),
+                        "current_user": auth.user_public(user),
+                        **settings_state(conn, user),
                     }
                 )
                 return
@@ -328,17 +502,17 @@ class Handler(BaseHTTPRequestHandler):
                 validate_timezone(payload.get("timezone") or "Asia/Shanghai")
                 validate_provider(payload.get("report_provider") or "codex")
                 validate_project_status(payload.get("status") or "active")
-                project_id = create_project(conn, payload)
+                project_id = create_project(conn, payload, user)
                 conn.commit()
                 self.json({"id": project_id}, HTTPStatus.CREATED)
                 return
             if path == "/api/todos" and method == "GET":
-                self.json({"todos": todo_rows(conn)})
+                self.json({"todos": todo_rows(conn, user_id)})
                 return
             if path == "/api/todos" and method == "POST":
-                todo_id = create_todo(conn, self.body_json())
+                todo_id = create_todo(conn, self.body_json(), user_id)
                 conn.commit()
-                self.json({"id": todo_id, "todos": todo_rows(conn)}, HTTPStatus.CREATED)
+                self.json({"id": todo_id, "todos": todo_rows(conn, user_id)}, HTTPStatus.CREATED)
                 return
             if path == "/api/todos/voice" and method == "POST":
                 payload = self.body_json()
@@ -350,31 +524,39 @@ class Handler(BaseHTTPRequestHandler):
                     normalize_asr_endpoint(get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT)),
                     get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL) or DEFAULT_ASR_MODEL,
                     get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE) or DEFAULT_ASR_LANGUAGE,
+                    user_id,
                 )
                 conn.commit()
                 self.json({"id": job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
                 return
             if path == "/api/task-queue" and method == "GET":
-                self.json(task_queue_state(conn))
+                self.json(task_queue_state(conn, None if is_admin else user_id, is_admin=is_admin))
                 return
             if path == "/api/voice-jobs/active" and method == "GET":
-                self.json({"job": get_active_voice_job(conn)})
+                self.json({"job": get_active_voice_job(conn, user_id)})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "voice-jobs"] and parts[2].isdigit() and parts[3] == "cancel" and method == "POST":
-                job_id = cancel_voice_job(conn, int(parts[2]))
+                job_id = cancel_voice_job(conn, int(parts[2]), user_id)
                 conn.commit()
                 print(f"voice job {job_id}: cancel requested", flush=True)
                 self.json({"id": job_id, "status": "cancelled"})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "voice-jobs"] and parts[2].isdigit() and method == "GET":
-                job = get_voice_job(conn, int(parts[2]))
+                job = get_voice_job(conn, int(parts[2]), user_id)
                 self.json(job)
                 return
             if path == "/api/settings" and method == "PUT":
                 # Partial update: only the keys present in the payload are
-                # touched, so the voice, LLM, and appearance panels never
-                # reset each other's values.
+                # touched, so the appearance, git, and administrative panels
+                # never reset each other's values. Appearance preferences are
+                # per user; the rest of the keys are administrative.
                 payload = self.body_json()
+                if "ui_theme" in payload:
+                    set_user_setting(conn, user_id, UI_THEME_SETTING, validate_ui_theme(payload.get("ui_theme")))
+                if "ui_mode" in payload:
+                    set_user_setting(conn, user_id, UI_MODE_SETTING, validate_ui_mode(payload.get("ui_mode")))
+                if any(key in payload for key in ADMIN_ONLY_SETTING_KEYS):
+                    require_admin(user)
                 if "voice_agent" in payload:
                     voice_agent = payload.get("voice_agent") or DEFAULT_VOICE_AGENT
                     validate_provider(voice_agent)
@@ -399,34 +581,37 @@ class Handler(BaseHTTPRequestHandler):
                 api_key = (payload.get("llm_api_key") or "").strip()
                 if api_key:
                     set_setting(conn, LLM_API_KEY_SETTING, api_key)
-                if "ui_theme" in payload:
-                    set_setting(conn, UI_THEME_SETTING, validate_ui_theme(payload.get("ui_theme")))
-                if "ui_mode" in payload:
-                    set_setting(conn, UI_MODE_SETTING, validate_ui_mode(payload.get("ui_mode")))
                 if "queue_capacity" in payload:
                     set_setting(conn, QUEUE_CAPACITY_SETTING, str(validate_queue_capacity(payload.get("queue_capacity"))))
                 if "queue_parallelism" in payload:
                     set_setting(conn, QUEUE_PARALLELISM_SETTING, str(validate_queue_parallelism(payload.get("queue_parallelism"))))
                 conn.commit()
-                self.json(settings_state(conn))
+                self.json(settings_state(conn, user))
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "PUT":
-                update_todo(conn, int(parts[2]), self.body_json())
+                update_todo(conn, int(parts[2]), self.body_json(), user_id)
                 conn.commit()
-                self.json({"todos": todo_rows(conn)})
+                self.json({"todos": todo_rows(conn, user_id)})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "todos"] and parts[3] == "close" and method == "POST":
-                material_id = close_todo(conn, int(parts[2]), self.body_json())
+                material_id = close_todo(conn, int(parts[2]), self.body_json(), user_id)
                 conn.commit()
-                self.json({"material_id": material_id, "todos": todo_rows(conn)})
+                self.json({"material_id": material_id, "todos": todo_rows(conn, user_id)})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "DELETE":
-                delete_todo(conn, int(parts[2]))
+                delete_todo(conn, int(parts[2]), user_id)
                 conn.commit()
-                self.json({"todos": todo_rows(conn)})
+                self.json({"todos": todo_rows(conn, user_id)})
                 return
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects":
                 project_id = int(parts[2])
+                owned = conn.execute(
+                    "SELECT id FROM projects WHERE id = ? AND user_id = ?",
+                    (project_id, user_id),
+                ).fetchone()
+                if not owned:
+                    self.error(HTTPStatus.NOT_FOUND, "project not found")
+                    return
                 if len(parts) == 4 and parts[3] == "workspace" and method == "GET":
                     self.json(workspace(conn, project_id))
                     return
@@ -558,7 +743,10 @@ class Handler(BaseHTTPRequestHandler):
                 status = parts[3]
                 if status not in {"dismissed", "resolved"}:
                     raise ValidationError("invalid risk status")
-                conn.execute("UPDATE risk_warnings SET status = ?, updated_at = ? WHERE id = ?", (status, iso_now(), int(parts[2])))
+                conn.execute(
+                    "UPDATE risk_warnings SET status = ?, updated_at = ? WHERE id = ? AND project_id IN (SELECT id FROM projects WHERE user_id = ?)",
+                    (status, iso_now(), int(parts[2]), user_id),
+                )
                 conn.commit()
                 self.json({"ok": True})
                 return
@@ -580,9 +768,9 @@ class Handler(BaseHTTPRequestHandler):
         data = file_path.read_bytes()
         self._send_bytes(data, content_type)
 
-    def json(self, payload, status=HTTPStatus.OK):
+    def json(self, payload, status=HTTPStatus.OK, extra_headers=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self._send_bytes(data, "application/json; charset=utf-8", status=status)
+        self._send_bytes(data, "application/json; charset=utf-8", status=status, extra_headers=extra_headers)
 
     def bytes_response(self, data, content_type, filename=None, status=HTTPStatus.OK):
         extra = [("Content-Disposition", f'attachment; filename="{filename}"')] if filename else None

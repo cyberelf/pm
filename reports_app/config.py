@@ -38,6 +38,9 @@ def load_env_file(path=None):
     return applied
 
 WORKSPACE_USER = "local-user"
+BOOTSTRAP_ADMIN_USERNAME = "darren"
+ADMIN_PASSWORD_ENV_VAR = "REPORTS_ADMIN_PASSWORD"
+DEFAULT_ADMIN_PASSWORD = "changeme"
 SUPPORTED_PROVIDERS = {"codex", "claude", "internal"}
 INTERNAL_AGENT = "internal"
 VOICE_AGENT_SETTING = "voice_agent"

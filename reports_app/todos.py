@@ -9,16 +9,18 @@ from .validation import ValidationError
 OPEN_STATUSES = {"todo", "doing"}
 
 
-def todo_rows(conn):
+def todo_rows(conn, user_id):
     rows = []
     for row in conn.execute(
             """
             SELECT todos.*, projects.name AS project_name
             FROM todos
             LEFT JOIN projects ON projects.id = todos.project_id
+            WHERE todos.user_id = ?
             ORDER BY CASE todos.status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END,
                      todos.updated_at DESC, todos.id DESC
-            """
+            """,
+            (user_id,),
         ):
         item = dict(row)
         item["description_html"] = _render_todo_markdown(item["description"])
@@ -35,22 +37,22 @@ def _render_todo_markdown(md):
     )
 
 
-def create_todo(conn, payload):
+def create_todo(conn, payload, user_id):
     title = _required_text(payload.get("title"), "TODO title is required", 200)
     description = (payload.get("description") or "").strip()[:4000]
     now = iso_now()
     cur = conn.execute(
         """
-        INSERT INTO todos (title, description, status, created_at, updated_at)
-        VALUES (?, ?, 'todo', ?, ?)
+        INSERT INTO todos (title, description, status, user_id, created_at, updated_at)
+        VALUES (?, ?, 'todo', ?, ?, ?)
         """,
-        (title, description, now, now),
+        (title, description, user_id, now, now),
     )
     return cur.lastrowid
 
 
-def update_todo(conn, todo_id, payload):
-    row = _todo(conn, todo_id)
+def update_todo(conn, todo_id, payload, user_id):
+    row = _todo(conn, todo_id, user_id)
     status = payload.get("status", row["status"])
     if row["status"] == "closed" and status != "closed":
         raise ValidationError("closed TODO status cannot be changed")
@@ -89,17 +91,17 @@ def update_todo(conn, todo_id, payload):
         )
 
 
-def delete_todo(conn, todo_id):
+def delete_todo(conn, todo_id, user_id):
     """Delete a closed TODO. The archived weekly-report material
     (material_id) is intentionally left untouched."""
-    row = _todo(conn, todo_id)
+    row = _todo(conn, todo_id, user_id)
     if row["status"] != "closed":
         raise ValidationError("only closed TODO items can be deleted")
     conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
 
 
-def close_todo(conn, todo_id, payload):
-    row = _todo(conn, todo_id)
+def close_todo(conn, todo_id, payload, user_id):
+    row = _todo(conn, todo_id, user_id)
     if row["status"] == "closed":
         raise ValidationError("TODO is already closed")
     reason = _required_text(payload.get("reason"), "close reason is required", 4000)
@@ -111,7 +113,9 @@ def close_todo(conn, todo_id, payload):
             project_id = int(raw_project_id)
         except (TypeError, ValueError) as exc:
             raise ValidationError("invalid project") from exc
-        project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
+        ).fetchone()
         if not project:
             raise ValidationError("project not found")
         material_id = store_manual_material(
@@ -148,8 +152,8 @@ def _assert_material_unlocked(conn, row):
         raise ValidationError("previous-week materials are locked; closed TODO cannot be updated")
 
 
-def _todo(conn, todo_id):
-    row = conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
+def _todo(conn, todo_id, user_id):
+    row = conn.execute("SELECT * FROM todos WHERE id = ? AND user_id = ?", (todo_id, user_id)).fetchone()
     if not row:
         raise ValidationError("TODO not found")
     return row
