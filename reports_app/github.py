@@ -101,12 +101,29 @@ def check_repo(repo, token="", timeout=20):
     if status_code == 404:
         # GitHub answers 404 both for unknown repos and for private repos the
         # token cannot see; one anonymous probe tells the two apart.
+        owner = repo.split("/", 1)[0]
         if token:
             _, anon_status, _ = _request(f"/repos/{quote(repo, safe='/')}", "", timeout)
             if anon_status == 200:
                 return {
                     "status": "inaccessible",
                     "status_message": "仓库存在但当前令牌无权访问：fine-grained token 需在 Repository access 中包含该仓库（Contents: Read-only），经典 token 需 repo 权限",
+                    "activity_summary": "",
+                    "last_activity_at": None,
+                }
+            # owner is an organization? org repos additionally require the
+            # token's resource owner to be that org plus org approval
+            # (fine-grained) or a SAML SSO authorization (classic).
+            org_data, org_status, _ = _request(f"/orgs/{quote(owner, safe='')}", token, timeout)
+            if org_status == 200 and org_data and org_data.get("login", "").lower() == owner.lower():
+                return {
+                    "status": "inaccessible",
+                    "status_message": (
+                        f"{owner} 是组织，组织仓库对令牌有额外要求：fine-grained token 的 "
+                        "Resource owner 必须选该组织、Repository access 勾选该仓库（Contents: Read-only），"
+                        "并且组织需在 Settings → Third-party access 批准该令牌；"
+                        "经典 token 需 repo 权限并在组织的 SAML SSO 中授权"
+                    ),
                     "activity_summary": "",
                     "last_activity_at": None,
                 }

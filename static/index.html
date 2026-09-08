@@ -143,7 +143,7 @@
                 <label>Token
                   <input id="github-token-input" type="password" autocomplete="off" placeholder="ghp_...">
                 </label>
-                <small class="git-provider-hint">只读即可：Fine-grained token 选 Contents: Read-only（自动附带 Metadata），并在 Repository access 中勾选要访问的仓库；经典 token 勾 public_repo（公开仓库）或 repo（含私有）。仓库显示 inaccessible/404 通常是路径有误，或私有仓库未授权给该令牌。</small>
+                <small class="git-provider-hint">只读即可：Fine-grained token 选 Contents: Read-only（自动附带 Metadata），并在 Repository access 中勾选要访问的仓库；经典 token 勾 public_repo（公开仓库）或 repo（含私有）。访问组织仓库时，fine-grained token 的 Resource owner 必须选该组织，且组织需在 Settings → Third-party access 批准；经典 token 若组织启用 SAML SSO 还需对令牌执行 SSO 授权。仓库显示 inaccessible/404 通常是路径有误或令牌未被授权。</small>
               </div>
               <div class="git-provider-row">
                 <div class="git-provider-name"><span class="status connected">GitLab</span><small>gitlab.com 或自建实例</small></div>

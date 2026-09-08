@@ -1468,6 +1468,23 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(result["status"], "inaccessible")
         self.assertIn("路径有误", result["status_message"])
 
+    def test_github_404_org_repo_reports_org_requirements(self):
+        def org_scoped(path, token, timeout):
+            if path.startswith("/repos/") and token:
+                return None, 404, '{"status":"404"}'
+            if path.startswith("/repos/"):
+                return None, 404, '{"status":"404"}'
+            if path.startswith("/orgs/"):
+                return {"login": "acme"}, 200, None
+            return None, 404, ""
+
+        with mock.patch("reports_app.github._request", side_effect=org_scoped):
+            result = github_check_repo("acme/infra", token="ghp_x")
+        self.assertEqual(result["status"], "inaccessible")
+        self.assertIn("acme 是组织", result["status_message"])
+        self.assertIn("Resource owner", result["status_message"])
+        self.assertIn("SAML SSO", result["status_message"])
+
     def test_gitlab_404_reports_path_or_permission(self):
         with mock.patch("reports_app.gitlab._request", return_value=(None, 404, '{"message":"404 Project Not Found"}')):
             result = gitlab_check_repo("group/ghost", server="https://gitlab.example.com", token="glpat_x")
