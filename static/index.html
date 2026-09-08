@@ -154,7 +154,8 @@
                 <label>Token
                   <input id="gitlab-token-input" type="password" autocomplete="off" placeholder="glpat-...">
                 </label>
-                <small class="git-provider-hint">最小范围 read_api（个人访问令牌，只读 API）；访问私有项目需要 Reporter 及以上角色。</small>
+                <label class="switch-row"><span class="switch"><input id="gitlab-skip-verify-input" type="checkbox"><span class="switch-slider"></span></span><span>跳过 SSL 证书校验（自签名证书）</span></label>
+                <small class="git-provider-hint">最小范围 read_api（个人访问令牌，只读 API）；访问私有项目需要 Reporter 及以上角色。自建实例使用自签名证书时，连接会报 certificate verify failed（含 EE certificate key too weak），勾选跳过校验即可。</small>
               </div>
               <div class="voice-settings">
                 <button id="save-git-settings" class="primary" type="button">保存</button>

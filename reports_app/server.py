@@ -54,6 +54,7 @@ from .config import (
     GITHUB_TOKEN_SETTING,
     GITHUB_TOKENS_SETTING,
     GITLAB_ENABLED_SETTING,
+    GITLAB_SKIP_VERIFY_SETTING,
     GITLAB_TOKEN_SETTING,
     GITLAB_URL_SETTING,
 )
@@ -226,6 +227,7 @@ def settings_state(conn, user):
         ],
         "gitlab_token_set": bool(get_user_setting(conn, user_id, GITLAB_TOKEN_SETTING)),
         "gitlab_url": get_user_setting(conn, user_id, GITLAB_URL_SETTING),
+        "gitlab_skip_verify": get_user_setting(conn, user_id, GITLAB_SKIP_VERIFY_SETTING) == "1",
     }
     if is_admin:
         state.update(
@@ -610,6 +612,13 @@ class Handler(BaseHTTPRequestHandler):
                         user_id,
                         GITLAB_URL_SETTING,
                         validate_gitlab_server(payload.get(GITLAB_URL_SETTING)),
+                    )
+                if GITLAB_SKIP_VERIFY_SETTING in payload:
+                    set_user_setting(
+                        conn,
+                        user_id,
+                        GITLAB_SKIP_VERIFY_SETTING,
+                        "1" if payload.get(GITLAB_SKIP_VERIFY_SETTING) else "0",
                     )
                 if any(key in payload for key in ADMIN_ONLY_SETTING_KEYS):
                     require_admin(user)

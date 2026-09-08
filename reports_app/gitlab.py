@@ -7,6 +7,7 @@ CLI, which cannot isolate credentials per user.)
 """
 
 import json
+import ssl
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -20,6 +21,22 @@ API_PREFIX = "api/v4"
 PAGE_SIZE = 100
 MAX_PAGES = 5
 USER_AGENT = "weekly-reports"
+
+_insecure_context = None
+
+
+def _ssl_context(skip_verify):
+    """TLS context for self-signed / internal-CA GitLab instances; None keeps
+    default certificate verification."""
+    global _insecure_context
+    if not skip_verify:
+        return None
+    if _insecure_context is None:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        _insecure_context = context
+    return _insecure_context
 
 
 def resolve_server(server):
@@ -37,7 +54,7 @@ def project_path(repo):
     return quote(str(repo or "").strip(), safe="")
 
 
-def _request(server, path, token, timeout):
+def _request(server, path, token, timeout, skip_verify=False):
     """One GET against the GitLab v4 API with the same result contract as
     github._request: (payload, status_code, error)."""
     url = f"{resolve_server(server).rstrip('/')}/{API_PREFIX}/{path}"
@@ -48,7 +65,7 @@ def _request(server, path, token, timeout):
     if token:
         request.add_header("PRIVATE-TOKEN", token)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=_ssl_context(skip_verify)) as response:
             raw = response.read().decode("utf-8")
         try:
             return json.loads(raw or "null"), 200, None
@@ -71,24 +88,31 @@ def _api_error(status_code, error):
     return text
 
 
+def _unreachable_message(error):
+    text = f"GitLab server unreachable: {error}"
+    if "certificate verify failed" in str(error):
+        text += "；GitLab 证书校验失败（自签名或内部 CA），可在 全局设置 → Git 集成 勾选「跳过 SSL 证书校验」后重试"
+    return text
+
+
 def _unreachable(error):
     return {
         "status": "disconnected",
-        "status_message": f"GitLab server unreachable: {error}",
+        "status_message": _unreachable_message(error),
         "activity_summary": "",
         "last_activity_at": None,
     }
 
 
-def _paginate(server, path, token, timeout):
+def _paginate(server, path, token, timeout, skip_verify=False):
     items = []
     for page in range(1, MAX_PAGES + 1):
         separator = "&" if "?" in path else "?"
         payload, status_code, error = _request(
-            server, f"{path}{separator}per_page={PAGE_SIZE}&page={page}", token, timeout
+            server, f"{path}{separator}per_page={PAGE_SIZE}&page={page}", token, timeout, skip_verify=skip_verify
         )
         if status_code is None:
-            return None, f"GitLab server unreachable: {error}"
+            return None, _unreachable_message(error)
         if status_code != 200:
             return None, _api_error(status_code, error)
         if not isinstance(payload, list):
@@ -99,9 +123,9 @@ def _paginate(server, path, token, timeout):
     return items, None
 
 
-def check_repo(repo, server="", token="", timeout=20):
+def check_repo(repo, server="", token="", timeout=20, skip_verify=False):
     encoded = project_path(repo)
-    data, status_code, error = _request(server, f"projects/{encoded}", token, timeout)
+    data, status_code, error = _request(server, f"projects/{encoded}", token, timeout, skip_verify=skip_verify)
     if status_code is None:
         return _unreachable(error)
     if status_code == 401:
@@ -131,12 +155,14 @@ def check_repo(repo, server="", token="", timeout=20):
         f"projects/{encoded}/merge_requests?scope=all&state=all&per_page=10&order_by=updated_at",
         token,
         timeout,
+        skip_verify=skip_verify,
     )
     issues, _, _ = _request(
         server,
         f"projects/{encoded}/issues?scope=all&state=all&per_page=10",
         token,
         timeout,
+        skip_verify=skip_verify,
     )
     parts = [f"Repository {data.get('path_with_namespace') or repo}"]
     if data.get("description"):
@@ -158,8 +184,10 @@ def check_repo(repo, server="", token="", timeout=20):
     }
 
 
-def list_branches(repo, server="", token="", timeout=30):
-    items, error = _paginate(server, f"projects/{project_path(repo)}/repository/branches", token, timeout)
+def list_branches(repo, server="", token="", timeout=30, skip_verify=False):
+    items, error = _paginate(
+        server, f"projects/{project_path(repo)}/repository/branches", token, timeout, skip_verify=skip_verify
+    )
     if error:
         return {
             "repo": repo,
@@ -175,12 +203,12 @@ def list_branches(repo, server="", token="", timeout=30):
     }
 
 
-def weekly_commits(repo, since, until, branches=None, server="", token="", timeout=30):
+def weekly_commits(repo, since, until, branches=None, server="", token="", timeout=30, skip_verify=False):
     tracked_branches = normalize_branches(branches)
     branch_names = tracked_branches
     tracking_all = TRACK_ALL_BRANCHES in tracked_branches
     if tracking_all:
-        branch_result = list_branches(repo, server=server, token=token, timeout=timeout)
+        branch_result = list_branches(repo, server=server, token=token, timeout=timeout, skip_verify=skip_verify)
         if branch_result["status"] != "ok":
             return {
                 "repo": repo,
@@ -200,7 +228,7 @@ def weekly_commits(repo, since, until, branches=None, server="", token="", timeo
             f"projects/{project_path(repo)}/repository/commits"
             f"?ref_name={quote(branch, safe='')}&since={quote(since_q, safe='')}&until={quote(until_q, safe='')}"
         )
-        items, error = _paginate(server, endpoint, token, timeout)
+        items, error = _paginate(server, endpoint, token, timeout, skip_verify=skip_verify)
         if error:
             errors.append(f"{branch}: {error}")
             continue

@@ -14,6 +14,7 @@ from .config import (
     GITHUB_TOKEN_SETTING,
     GITHUB_TOKENS_SETTING,
     GITLAB_ENABLED_SETTING,
+    GITLAB_SKIP_VERIFY_SETTING,
     GITLAB_TOKEN_SETTING,
     GITLAB_URL_SETTING,
 )
@@ -75,6 +76,7 @@ def git_auth_for_user(conn, user_id):
         "github_tokens": load_github_tokens(conn, user_id),
         "gitlab_token": get_user_setting(conn, user_id, GITLAB_TOKEN_SETTING),
         "gitlab_url": get_user_setting(conn, user_id, GITLAB_URL_SETTING),
+        "gitlab_skip_verify": get_user_setting(conn, user_id, GITLAB_SKIP_VERIFY_SETTING) == "1",
         "github_enabled": get_setting(conn, GITHUB_ENABLED_SETTING, "1") != "0",
         "gitlab_enabled": get_setting(conn, GITLAB_ENABLED_SETTING, "1") != "0",
     }
@@ -101,7 +103,11 @@ def check_repo(repo, git_mode="github", auth_info=None, timeout=20):
         if not info.get("gitlab_enabled", True):
             return _disabled_result("GitLab 集成已在全局设置中停用，无法读取该仓库")
         return gitlab_check_repo(
-            repo, server=_gitlab_server(info), token=info.get("gitlab_token", ""), timeout=timeout
+            repo,
+            server=_gitlab_server(info),
+            token=info.get("gitlab_token", ""),
+            timeout=timeout,
+            skip_verify=bool(info.get("gitlab_skip_verify")),
         )
     if not info.get("github_enabled", True):
         return _disabled_result("GitHub 集成已在全局设置中停用，无法读取该仓库")
@@ -130,7 +136,11 @@ def list_branches(repo, git_mode="github", auth_info=None, timeout=30):
                 "branches": [],
             }
         return gitlab_list_branches(
-            repo, server=_gitlab_server(info), token=info.get("gitlab_token", ""), timeout=timeout
+            repo,
+            server=_gitlab_server(info),
+            token=info.get("gitlab_token", ""),
+            timeout=timeout,
+            skip_verify=bool(info.get("gitlab_skip_verify")),
         )
     if not info.get("github_enabled", True):
         return {
@@ -162,6 +172,7 @@ def weekly_commits(repo, since, until, branches=None, git_mode="github", auth_in
             server=_gitlab_server(info),
             token=info.get("gitlab_token", ""),
             timeout=timeout,
+            skip_verify=bool(info.get("gitlab_skip_verify")),
         )
     if not info.get("github_enabled", True):
         return {

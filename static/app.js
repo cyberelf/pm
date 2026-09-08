@@ -236,6 +236,7 @@ async function loadState() {
   state.githubTokens = data.github_tokens || [];
   state.gitlabTokenSet = !!data.gitlab_token_set;
   state.gitlabUrl = data.gitlab_url || "";
+  state.gitlabSkipVerify = !!data.gitlab_skip_verify;
   state.asrEndpoint = data.asr_endpoint || "";
   state.asrModel = data.asr_model || "";
   state.asrLanguage = data.asr_language || "zh";
@@ -1065,6 +1066,8 @@ function renderGitSettings() {
   const gitlabToken = $("gitlab-token-input");
   gitlabToken.value = "";
   gitlabToken.placeholder = state.gitlabTokenSet ? "已配置，留空保持不变" : "glpat-...";
+  const gitlabSkipVerify = $("gitlab-skip-verify-input");
+  if (gitlabSkipVerify) gitlabSkipVerify.checked = !!state.gitlabSkipVerify;
   const githubEnabled = $("github-enabled-input");
   if (githubEnabled) githubEnabled.checked = state.githubEnabled !== false;
   const gitlabEnabled = $("gitlab-enabled-input");
@@ -1077,6 +1080,7 @@ async function saveGitSettings() {
   if (githubTokenRows.length) payload.github_tokens = githubTokenRows;
   const gitlabToken = $("gitlab-token-input")?.value.trim();
   if (gitlabToken) payload.gitlab_token = gitlabToken;
+  payload.gitlab_skip_verify = !!($("gitlab-skip-verify-input")?.checked);
   if (state.isAdmin) {
     payload.github_enabled = !!($("github-enabled-input")?.checked);
     payload.gitlab_enabled = !!($("gitlab-enabled-input")?.checked);
@@ -1088,6 +1092,7 @@ async function saveGitSettings() {
   state.githubTokens = data.github_tokens || [];
   state.gitlabTokenSet = !!data.gitlab_token_set;
   state.gitlabUrl = data.gitlab_url || "";
+  state.gitlabSkipVerify = !!data.gitlab_skip_verify;
   renderGitSettings();
   toast("Git 集成设置已保存");
 }

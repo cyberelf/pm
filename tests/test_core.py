@@ -705,6 +705,40 @@ class CoreTest(unittest.TestCase):
         set_setting(self.conn, "queue_parallelism", "-4")
         self.assertEqual(queue_capacity(self.conn), 20)
         self.assertEqual(queue_parallelism(self.conn), 1)
+
+    def test_settings_roundtrip_gitlab_skip_verify(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"gitlab_skip_verify": True}),
+                headers={"Content-Type": "application/json"},
+            )
+            settings = json.loads(client.getresponse().read())
+            client.close()
+            self.assertTrue(settings["gitlab_skip_verify"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                "/api/settings",
+                body=json.dumps({"gitlab_skip_verify": False}),
+                headers={"Content-Type": "application/json"},
+            )
+            settings = json.loads(client.getresponse().read())
+            client.close()
+            self.assertFalse(settings["gitlab_skip_verify"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
         set_setting(self.conn, "queue_capacity", "not-a-number")
         set_setting(self.conn, "queue_parallelism", "")
         self.assertEqual(queue_capacity(self.conn), 5)
@@ -1403,7 +1437,7 @@ class CoreTest(unittest.TestCase):
             thread.join(timeout=2)
 
     def test_gitlab_check_repo_uses_configured_token(self):
-        def fake_request(server, path, token, timeout):
+        def fake_request(server, path, token, timeout, skip_verify=False):
             self.assertEqual(server, "gitlab.example.com")
             self.assertEqual(token, "glpat-x")
             if "merge_requests" in path:
@@ -1503,7 +1537,7 @@ class CoreTest(unittest.TestCase):
             "web_url": "https://gitlab.example.com/group/proj/-/commit/aaa1112223334445",
         }
 
-        def fake_request(server, path, token, timeout):
+        def fake_request(server, path, token, timeout, skip_verify=False):
             self.assertEqual(token, "glpat-x")
             self.assertIn("projects/group%2Fsub%2Fproj/repository/commits", path)
             self.assertIn("per_page=100&page=1", path)
@@ -1548,7 +1582,7 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(develop_commit["message"], "develop only")
 
     def test_gitlab_list_branches_stops_at_short_page(self):
-        def fake_request(server, path, token, timeout):
+        def fake_request(server, path, token, timeout, skip_verify=False):
             self.assertIn("projects/group%2Fproj/repository/branches", path)
             items = [{"name": f"feature/{index}"} for index in range(100)] if path.endswith("page=1") else [{"name": "release/next"}]
             return items, 200, None
@@ -1566,8 +1600,14 @@ class CoreTest(unittest.TestCase):
             "reports_app.git_sources.github_check_repo"
         ) as gh_check:
             glab_check.return_value = {"status": "connected"}
-            git_sources.check_repo("group/proj", "gitlab", auth_info={"gitlab_url": "https://gitlab.example.com"})
-        glab_check.assert_called_once_with("group/proj", server="https://gitlab.example.com", token="", timeout=20)
+            git_sources.check_repo(
+                "group/proj",
+                "gitlab",
+                auth_info={"gitlab_url": "https://gitlab.example.com", "gitlab_skip_verify": True},
+            )
+        glab_check.assert_called_once_with(
+            "group/proj", server="https://gitlab.example.com", token="", timeout=20, skip_verify=True
+        )
         gh_check.assert_not_called()
 
         with mock.patch("reports_app.git_sources.gitlab_weekly_commits") as glab_commits, mock.patch(
@@ -1599,7 +1639,7 @@ class CoreTest(unittest.TestCase):
                 git_mode="gitlab",
                 auth_info={"gitlab_token": "glpat-y", "gitlab_enabled": True},
             )
-        glab_commits.assert_called_once_with("group/proj", start, end, ["main"], server="", token="glpat-y", timeout=30)
+        glab_commits.assert_called_once_with("group/proj", start, end, ["main"], server="", token="glpat-y", timeout=30, skip_verify=False)
 
         auth_info = git_sources.git_auth_for_user(self.conn, self.user_id)
         self.assertTrue(auth_info["github_enabled"])
@@ -1674,15 +1714,58 @@ class CoreTest(unittest.TestCase):
             glab_check.return_value = {"status": "connected"}
             git_sources.check_repo("group/proj", "gitlab", auth_info={"gitlab_url": "https://gitlab.example.com"})
         glab_check.assert_called_once_with(
-            "group/proj", server="https://gitlab.example.com", token="", timeout=20
+            "group/proj", server="https://gitlab.example.com", token="", timeout=20, skip_verify=False
         )
         # without a configured URL the request goes out empty and gitlab.resolve_server falls back to gitlab.com
         with mock.patch("reports_app.git_sources.gitlab_check_repo") as glab_check:
             glab_check.return_value = {"status": "connected"}
             git_sources.check_repo("group/proj", "gitlab", auth_info={})
         glab_check.assert_called_once_with(
-            "group/proj", server="", token="", timeout=20
+            "group/proj", server="", token="", timeout=20, skip_verify=False
         )
+
+        auth_info = git_sources.git_auth_for_user(self.conn, self.user_id)
+        self.assertFalse(auth_info["gitlab_skip_verify"])
+        set_user_setting(self.conn, self.user_id, "gitlab_skip_verify", "1")
+        auth_info = git_sources.git_auth_for_user(self.conn, self.user_id)
+        self.assertTrue(auth_info["gitlab_skip_verify"])
+
+    def test_gitlab_skip_verify_uses_unverified_tls_context(self):
+        project_payload = json.dumps({"default_branch": "main", "path_with_namespace": "group/proj"}).encode()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return project_payload
+
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = FakeResponse()
+            gitlab_check_repo("group/proj", server="https://gitlab.example.com", skip_verify=True)
+        context = urlopen.call_args.kwargs["context"]
+        self.assertEqual(context.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(context.check_hostname)
+
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value = FakeResponse()
+            gitlab_check_repo("group/proj", server="https://gitlab.example.com")
+        self.assertIsNone(urlopen.call_args.kwargs["context"])
+
+    def test_gitlab_ssl_verify_failure_suggests_skip_verify(self):
+        weak_key_error = "[SSL: certificate verify failed] EE certificate key too weak (_ssl.c:1000)"
+        with mock.patch("reports_app.gitlab._request", return_value=(None, None, weak_key_error)):
+            result = gitlab_check_repo("group/proj")
+        self.assertEqual(result["status"], "disconnected")
+        self.assertIn("跳过 SSL 证书校验", result["status_message"])
+
+        with mock.patch("reports_app.gitlab._request", return_value=(None, None, "connection refused")):
+            result = gitlab_list_branches("group/proj")
+        self.assertIn("connection refused", result["status_message"])
+        self.assertNotIn("跳过 SSL 证书校验", result["status_message"])
 
     def test_gitlab_repo_mode_is_persisted_and_unique_per_mode(self):
         connected = {
