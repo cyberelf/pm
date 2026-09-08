@@ -52,6 +52,24 @@ def _request(path, token, timeout):
         return None, None, str(exc)
 
 
+def token_kind(token):
+    """classic / fine-grained / unknown, detected from the token prefix."""
+    token = token or ""
+    if token.startswith("github_pat_"):
+        return "fine-grained"
+    if token.startswith(("ghp_", "gho_", "ghu_", "ghs_", "ghr_")):
+        return "classic"
+    return "unknown"
+
+
+def _token_access_hint(token_kind_value):
+    if token_kind_value == "fine-grained":
+        return "fine-grained token 需在 Repository access 中包含该仓库（Contents: Read-only）；组织仓库还要求 Resource owner 选对组织并由组织批准"
+    if token_kind_value == "classic":
+        return "经典 token 需勾选 repo 权限（public_repo 仅公开仓库）；组织启用 SAML SSO 时还需在令牌设置里对该组织执行 SSO 授权"
+    return "fine-grained token 需在 Repository access 中包含该仓库（Contents: Read-only），经典 token 需 repo 权限"
+
+
 def _api_error(status_code, error):
     text = f"GitHub API error {status_code}: {(error or '').strip()[:300]}"
     if status_code == 404:
@@ -100,14 +118,16 @@ def check_repo(repo, token="", timeout=20):
         }
     if status_code == 404:
         # GitHub answers 404 both for unknown repos and for private repos the
-        # token cannot see; one anonymous probe tells the two apart.
+        # token cannot see; one anonymous probe tells the two apart. Guidance
+        # is tailored to the detected token type.
         owner = repo.split("/", 1)[0]
+        kind = token_kind(token)
         if token:
             _, anon_status, _ = _request(f"/repos/{quote(repo, safe='/')}", "", timeout)
             if anon_status == 200:
                 return {
                     "status": "inaccessible",
-                    "status_message": "仓库存在但当前令牌无权访问：fine-grained token 需在 Repository access 中包含该仓库（Contents: Read-only），经典 token 需 repo 权限",
+                    "status_message": f"仓库存在但当前令牌无权访问：{_token_access_hint(kind)}",
                     "activity_summary": "",
                     "last_activity_at": None,
                 }
@@ -118,12 +138,7 @@ def check_repo(repo, token="", timeout=20):
             if org_status == 200 and org_data and org_data.get("login", "").lower() == owner.lower():
                 return {
                     "status": "inaccessible",
-                    "status_message": (
-                        f"{owner} 是组织，组织仓库对令牌有额外要求：fine-grained token 的 "
-                        "Resource owner 必须选该组织、Repository access 勾选该仓库（Contents: Read-only），"
-                        "并且组织需在 Settings → Third-party access 批准该令牌；"
-                        "经典 token 需 repo 权限并在组织的 SAML SSO 中授权"
-                    ),
+                    "status_message": f"{owner} 是组织，组织仓库对令牌有额外要求：{_token_access_hint(kind)}",
                     "activity_summary": "",
                     "last_activity_at": None,
                 }

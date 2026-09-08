@@ -50,18 +50,23 @@ def load_github_tokens(conn, user_id):
     return result
 
 
-def github_token_for(info, repo):
-    """Pick the token for a repo: a per-org entry matching the repo's owner
-    wins, then the ownerless (classic / personal) entry."""
+def github_token_candidates(info, repo):
+    """Ordered token entries for a repo: a per-org entry matching the repo's
+    owner first, then the ownerless (classic / personal) entry, then the
+    legacy single token."""
     owner = (repo or "").split("/", 1)[0].strip().lower()
     entries = info.get("github_tokens") or []
-    for entry in entries:
-        if entry["owner"] and entry["owner"] == owner and entry["token"]:
-            return entry["token"]
-    for entry in entries:
-        if not entry["owner"] and entry["token"]:
-            return entry["token"]
-    return info.get("github_token", "")
+    ordered = [entry for entry in entries if entry["owner"] and entry["owner"] == owner and entry["token"]]
+    ordered += [entry for entry in entries if not entry["owner"] and entry["token"]]
+    legacy = info.get("github_token", "")
+    if legacy and not any(entry["token"] == legacy for entry in ordered):
+        ordered.append({"label": "旧令牌", "owner": "", "token": legacy})
+    return ordered
+
+
+def github_token_for(info, repo):
+    candidates = github_token_candidates(info, repo)
+    return candidates[0]["token"] if candidates else ""
 
 
 def git_auth_for_user(conn, user_id):
@@ -100,7 +105,18 @@ def check_repo(repo, git_mode="github", gitlab_server="", auth_info=None, timeou
         )
     if not info.get("github_enabled", True):
         return _disabled_result("GitHub 集成已在全局设置中停用，无法读取该仓库")
-    return github_check_repo(repo, token=github_token_for(info, repo), timeout=timeout)
+    candidates = github_token_candidates(info, repo)
+    result = github_check_repo(repo, token=candidates[0]["token"] if candidates else "", timeout=timeout)
+    if candidates and result.get("status") in {"inaccessible", "unauthenticated"}:
+        # the primary token may simply not cover this repo; probe the other
+        # configured tokens before reporting the repo inaccessible
+        for candidate in candidates[1:]:
+            retry = github_check_repo(repo, token=candidate["token"], timeout=timeout)
+            if retry.get("status") == "connected":
+                label = candidate.get("label") or candidate.get("owner") or "通用令牌"
+                retry["status_message"] = f"首选令牌无权访问该仓库，已自动改用「{label}」"
+                return retry
+    return result
 
 
 def list_branches(repo, git_mode="github", gitlab_server="", auth_info=None, timeout=30):

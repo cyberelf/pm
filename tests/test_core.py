@@ -41,7 +41,7 @@ from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
 from reports_app.gitlab import list_branches as gitlab_list_branches
 from reports_app.gitlab import weekly_commits as gitlab_weekly_commits
-from reports_app.github import check_repo as github_check_repo
+from reports_app.github import check_repo as github_check_repo, token_kind
 from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
@@ -1482,8 +1482,11 @@ class CoreTest(unittest.TestCase):
             result = github_check_repo("acme/infra", token="ghp_x")
         self.assertEqual(result["status"], "inaccessible")
         self.assertIn("acme 是组织", result["status_message"])
-        self.assertIn("Resource owner", result["status_message"])
-        self.assertIn("SAML SSO", result["status_message"])
+        self.assertIn("SAML SSO", result["status_message"], "classic tokens get the SSO hint")
+
+        with mock.patch("reports_app.github._request", side_effect=org_scoped):
+            result = github_check_repo("acme/infra", token="github_pat_x")
+        self.assertIn("Resource owner", result["status_message"], "fine-grained tokens get the resource-owner hint")
 
     def test_gitlab_404_reports_path_or_permission(self):
         with mock.patch("reports_app.gitlab._request", return_value=(None, 404, '{"message":"404 Project Not Found"}')):
@@ -1607,6 +1610,43 @@ class CoreTest(unittest.TestCase):
         auth_info = git_sources.git_auth_for_user(self.conn, self.user_id)
         self.assertEqual(auth_info["github_token"], "ghp-secret")
         self.assertFalse(auth_info["github_enabled"])
+
+    def test_token_kind_detection_and_automatic_fallback(self):
+        self.assertEqual(token_kind("github_pat_ABCD1234"), "fine-grained")
+        self.assertEqual(token_kind("ghp_ABCD1234"), "classic")
+        self.assertEqual(token_kind("gho_ABCD1234"), "classic")
+        self.assertEqual(token_kind("weird-custom-token"), "unknown")
+
+        # refresh path: the org-matched token fails, the general token connects
+        info = {
+            "github_tokens": [
+                {"label": "acme", "owner": "acme", "token": "github_pat_ORG"},
+                {"label": "general", "owner": "", "token": "ghp_ALL"},
+            ],
+            "github_enabled": True,
+        }
+
+        def fake_check(repo, token="", timeout=20):
+            if token == "github_pat_ORG":
+                return {"status": "inaccessible", "status_message": "404", "activity_summary": "", "last_activity_at": None}
+            return {
+                "status": "connected",
+                "status_message": "connected through GitHub API",
+                "activity_summary": "ok",
+                "last_activity_at": "2026-09-08T00:00:00Z",
+                "default_branch": "main",
+            }
+
+        with mock.patch("reports_app.git_sources.github_check_repo", side_effect=fake_check) as check:
+            result = git_sources.check_repo("acme/infra", "github", "", auth_info=info)
+        self.assertEqual(check.call_count, 2)
+        self.assertEqual(result["status"], "connected")
+        self.assertIn("自动改用「general」", result["status_message"])
+
+        # candidates: org entry first, then ownerless, then the legacy token
+        info_legacy = {"github_tokens": [], "github_token": "ghp_LEGACY", "github_enabled": True}
+        candidates = git_sources.github_token_candidates(info_legacy, "acme/infra")
+        self.assertEqual([entry["token"] for entry in candidates], ["ghp_LEGACY"])
 
     def test_github_token_selection_prefers_matching_org_entry(self):
         set_user_setting(
@@ -3097,6 +3137,8 @@ class GitSettingsApiTest(unittest.TestCase):
             self.assertEqual(len(payload["github_tokens"]), 2)
             self.assertEqual(payload["github_tokens"][0]["owner"], "acme", "owner is normalized (lowercase, no @)")
             self.assertTrue(all(entry["hint"].startswith("····") for entry in payload["github_tokens"]))
+            self.assertEqual(payload["github_tokens"][0]["kind"], "classic")
+            self.assertEqual(payload["github_tokens"][1]["kind"], "classic")
             self.assertNotIn("ghp_org1", json.dumps(payload), "raw tokens never leave the server")
             row = self.conn.execute(
                 "SELECT value FROM user_settings WHERE user_id = ? AND key = 'github_tokens'", (self.member_id,)

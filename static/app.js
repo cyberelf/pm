@@ -1017,19 +1017,24 @@ async function saveQueueSettings() {
   toast("任务队列设置已保存");
 }
 
+const GITHUB_TOKEN_KIND_LABELS = { classic: "经典", "fine-grained": "细粒度" };
+
 function renderGithubTokenList() {
   const list = $("github-token-list");
   if (!list) return;
-  const rows = state.githubTokens.map((entry) => ({ label: entry.label || "", owner: entry.owner || "", hint: entry.hint || "" }));
-  if (!rows.length) rows.push({ label: "", owner: "", hint: "" });
-  list.innerHTML = rows.map((entry, index) => `
+  const rows = state.githubTokens.map((entry) => ({ label: entry.label || "", owner: entry.owner || "", hint: entry.hint || "", kind: entry.kind || "" }));
+  if (!rows.length) rows.push({ label: "", owner: "", hint: "", kind: "" });
+  list.innerHTML = rows.map((entry) => {
+    const kindLabel = GITHUB_TOKEN_KIND_LABELS[entry.kind] || "";
+    return `
     <div class="github-token-row" data-github-token-row>
       <input data-github-token-label placeholder="名称（可选）" value="${escapeAttr(entry.label)}">
       <input data-github-token-owner placeholder="组织名，留空=个人/通用" value="${escapeAttr(entry.owner)}">
       <input data-github-token-value type="password" autocomplete="off" placeholder="${entry.hint ? `已配置 ${entry.hint}，留空保持不变` : "ghp_... / github_pat_..."}">
+      ${kindLabel ? `<span class="status connected" title="按 token 前缀自动识别">${kindLabel}</span>` : "<span></span>"}
       <button type="button" class="danger" onclick="removeGithubTokenRow(this)">删除</button>
     </div>
-  `).join("");
+  `;}).join("");
 }
 
 function collectGithubTokenRows() {

@@ -1208,7 +1208,7 @@ body.logged-out .voice-todo-widget { visibility: hidden; }
 .git-provider-name small { color: var(--muted); }
 .git-provider-hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .github-token-list { display: grid; gap: 8px; }
-.github-token-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(130px, 1.2fr) minmax(180px, 2fr) auto; gap: 8px; align-items: center; }
+.github-token-row { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(120px, 1.2fr) minmax(160px, 2fr) auto auto; gap: 8px; align-items: center; }
 @media (max-width: 767px) {
   .github-token-row { grid-template-columns: 1fr 1fr; }
   .github-token-row input[data-github-token-value] { grid-column: 1 / -1; }

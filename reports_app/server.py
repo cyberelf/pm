@@ -57,6 +57,7 @@ from .config import (
     GITLAB_URL_SETTING,
 )
 from .git_sources import check_repo, git_auth_for_user, list_branches, load_github_tokens, refresh_repo
+from .github import token_kind as github_token_kind
 from .markdown import render_markdown
 from .materials import (
     delete_material,
@@ -219,6 +220,7 @@ def settings_state(conn, user):
                 "label": entry["label"],
                 "owner": entry["owner"],
                 "hint": f"····{entry['token'][-4:]}" if entry["token"] else "",
+                "kind": github_token_kind(entry["token"]),
             }
             for entry in load_github_tokens(conn, user_id)
         ],
