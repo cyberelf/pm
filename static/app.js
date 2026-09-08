@@ -223,6 +223,7 @@ function toast(message) {
 async function loadState() {
   const data = await api("/api/state");
   state.projects = data.projects;
+  renderVersion(data.version);
   state.currentUser = data.current_user || null;
   state.isAdmin = !!(data.current_user && data.current_user.is_admin);
   $("sidebar-user").textContent = state.currentUser
@@ -2504,9 +2505,19 @@ $("close-todo-form").onsubmit = async (event) => {
 };
 document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => switchTab(btn.dataset.tab));
 
+function renderVersion(version) {
+  if (!version) return;
+  const text = `v${version}`;
+  for (const id of ["login-version", "sidebar-version"]) {
+    const el = $(id);
+    if (el) el.textContent = text;
+  }
+}
+
 (async () => {
   try {
     const authState = await api("/api/auth/state");
+    renderVersion(authState.version);
     if (authState.authenticated) {
       hideLoginView();
       await loadState();

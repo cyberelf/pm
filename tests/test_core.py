@@ -20,6 +20,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 from reports_app.config import (
+    APP_VERSION,
     DEFAULT_ASR_LANGUAGE,
     DEFAULT_LLM_BASE_URLS,
     LLM_API_KEY_SETTING,
@@ -2810,6 +2811,7 @@ class UserAuthTest(unittest.TestCase):
             status, payload = self.api(server.server_port, "GET", "/api/auth/state", None)
             self.assertEqual(status, 200)
             self.assertFalse(payload["authenticated"])
+            self.assertEqual(payload["version"], APP_VERSION)
             status, payload = self.api(server.server_port, "GET", "/api/state", "bogus-token")
             self.assertEqual(status, 401)
         finally:

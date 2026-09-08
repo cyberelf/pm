@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=51" />
+    <link rel="stylesheet" href="/styles.css?v=52" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -25,6 +25,7 @@
         </label>
         <button id="login-submit" class="primary full" type="submit">登录</button>
         <p id="login-error" class="login-error hidden"></p>
+        <span id="login-version" class="app-version"></span>
       </form>
     </div>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
@@ -45,6 +46,7 @@
           <div>
             <strong>周报工作台</strong>
             <span id="sidebar-user">Local workspace</span>
+            <span id="sidebar-version" class="app-version"></span>
           </div>
         </div>
         <button id="new-project" class="primary full">新建项目</button>
@@ -403,6 +405,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=47"></script>
+    <script src="/app.js?v=48"></script>
   </body>
 </html>

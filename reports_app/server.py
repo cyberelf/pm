@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import auth
 from .config import (
+    APP_VERSION,
     ASR_ENDPOINT_SETTING,
     ASR_LANGUAGE_SETTING,
     ASR_MODEL_SETTING,
@@ -440,14 +441,14 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in path.split("/") if p]
         with connect(self.server.db_path) as conn:
             user = self.current_user(conn)
+            if (method, path) == ("GET", "/api/auth/state"):
+                self.json({"authenticated": bool(user), "current_user": auth.user_public(user), "version": APP_VERSION})
+                return
             if (method, path) not in PUBLIC_API_ROUTES and user is None:
                 self.error(HTTPStatus.UNAUTHORIZED, "authentication required")
                 return
             user_id = user["id"] if user else None
             is_admin = bool(user and user["is_admin"])
-            if path == "/api/auth/state" and method == "GET":
-                self.json({"authenticated": bool(user), "current_user": auth.user_public(user)})
-                return
             if path == "/api/auth/login" and method == "POST":
                 payload = self.body_json()
                 row = auth.authenticate(conn, payload.get("username"), payload.get("password"))
@@ -514,6 +515,7 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "projects": projects,
                         "current_user": auth.user_public(user),
+                        "version": APP_VERSION,
                         **settings_state(conn, user),
                     }
                 )
