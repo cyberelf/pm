@@ -21,7 +21,6 @@ const state = {
   pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   settingsView: false,
-  voiceAgent: "codex",
   asrEndpoint: "",
   asrModel: "whisper",
   asrLanguage: "zh",
@@ -168,7 +167,6 @@ function toast(message) {
 async function loadState() {
   const data = await api("/api/state");
   state.projects = data.projects;
-  state.voiceAgent = ["codex", "claude", "internal"].includes(data.voice_agent) ? data.voice_agent : "codex";
   state.asrEndpoint = data.asr_endpoint || "";
   state.asrModel = data.asr_model || "";
   state.asrLanguage = data.asr_language || "zh";
@@ -868,9 +866,6 @@ function renderVoiceJobProgress() {
 }
 
 function renderVoiceSettings() {
-  const select = $("voice-agent-select");
-  if (!select) return;
-  select.value = ["codex", "claude", "internal"].includes(state.voiceAgent) ? state.voiceAgent : "codex";
   const endpoint = $("asr-endpoint-input");
   if (endpoint) endpoint.value = state.asrEndpoint || "";
   const model = $("asr-model-input");
@@ -880,18 +875,14 @@ function renderVoiceSettings() {
 }
 
 async function saveVoiceSettings() {
-  const select = $("voice-agent-select");
-  if (!select) return;
   const data = await api("/api/settings", {
     method: "PUT",
     body: JSON.stringify({
-      voice_agent: select.value,
       asr_endpoint: $("asr-endpoint-input")?.value || "",
       asr_model: $("asr-model-input")?.value || "",
       asr_language: $("asr-language-select")?.value || "",
     }),
   });
-  state.voiceAgent = data.voice_agent;
   state.asrEndpoint = data.asr_endpoint;
   state.asrModel = data.asr_model;
   state.asrLanguage = data.asr_language;
@@ -1101,7 +1092,6 @@ function renderSettings(ws) {
       ${input("start_date", "开始日期", p.start_date, "date")}
       ${input("end_date", "结束日期", p.end_date || "", "date")}
       ${timezoneSelect("timezone", "时区", p.timezone)}
-      <label>生成器<select name="report_provider"><option value="codex" ${p.report_provider === "codex" ? "selected" : ""}>Codex CLI</option><option value="claude" ${p.report_provider === "claude" ? "selected" : ""}>Claude Code CLI</option><option value="internal" ${p.report_provider === "internal" ? "selected" : ""}>内部 Agent</option></select></label>
       ${textarea("description", "描述", p.description, "wide")}
       ${textarea("manual_background", "背景", p.manual_background, "wide")}
       ${textarea("manual_objectives", "目标", p.manual_objectives, "wide")}
@@ -1594,8 +1584,8 @@ async function deleteRepo(id) {
 
 async function loadRepoBranches(id) {
   const repo = (state.workspace.repos || []).find((item) => item.id === id);
-  const via = repo && repo.git_mode === "gitlab" ? "glab" : "gh";
-  const data = await withBusy("正在读取分支", `正在通过本地 ${via} 获取仓库分支列表...`, async () => (
+  const via = repo && repo.git_mode === "gitlab" ? "GitLab" : "GitHub";
+  const data = await withBusy("正在读取分支", `正在通过 ${via} API 获取仓库分支列表...`, async () => (
     api(`/api/projects/${state.projectId}/repos/${id}/branches`)
   ));
   if (data.status !== "ok") {

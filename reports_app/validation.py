@@ -1,5 +1,4 @@
 import re
-import shutil
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -36,7 +35,7 @@ def require_project_name(data):
 
 def validate_provider(provider):
     if provider not in SUPPORTED_PROVIDERS:
-        raise ValidationError("unsupported report provider")
+        raise ValidationError("only the internal agent is supported; set report_provider to 'internal'")
 
 
 def _validate_bounded_int(value, label, maximum):
@@ -166,9 +165,3 @@ def validate_material_filename(filename):
     if ext not in SUPPORTED_MATERIAL_EXTENSIONS:
         raise ValidationError("unsupported file type; upload Markdown, plain text, or PDF")
     return ext
-
-
-def gh_status():
-    if not shutil.which("gh"):
-        return "missing", "local GitHub CLI (`gh`) is not installed"
-    return "available", "local GitHub CLI is available"

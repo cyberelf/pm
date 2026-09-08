@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -100,9 +99,8 @@ def summarize_uploaded_materials(conn, project_id, material_ids, timeout=120):
         for row in rows
     ]
     fallbacks = {item["id"]: fallback_summary(item["filename"], item["text_start"]) for item in items}
-    provider_row = conn.execute("SELECT report_provider FROM projects WHERE id = ?", (project_id,)).fetchone()
     try:
-        generated = generate_ai_summaries(provider_row["report_provider"], items, timeout)
+        generated = generate_ai_summaries(items, timeout)
     except Exception as exc:
         for item in items:
             conn.execute(
@@ -124,23 +122,17 @@ def summarize_uploaded_materials(conn, project_id, material_ids, timeout=120):
             )
 
 
-def generate_ai_summaries(provider, items, timeout=120):
-    from .reports import fake_provider_enabled, provider_command, run_provider_command
+def generate_ai_summaries(items, timeout=120):
+    """Material summaries run through the internal agent; REPORTS_FAKE_PROVIDER
+    keeps tests and dry runs offline."""
+    from .reports import fake_provider_enabled
 
     if fake_provider_enabled():
         return {item["id"]: fallback_summary(item["filename"], item["text_start"]) for item in items}
-    prompt = build_summary_prompt(items)
-    with tempfile.TemporaryDirectory(prefix="material-summary-") as tmp:
-        tmp_path = Path(tmp)
-        output_path = (tmp_path / "summaries.json").resolve()
-        command = provider_command(provider, prompt, tmp_path, output_path)
-        if provider == "claude" and not os.environ.get("REPORTS_CLAUDE_CMD"):
-            result = run_provider_command(command, tmp, timeout, input_text=prompt)
-            raw = result.stdout
-        else:
-            result = run_provider_command(command, tmp, timeout)
-            raw = output_path.read_text(encoding="utf-8") if output_path.exists() else result.stdout
-        return parse_summary_output(raw, items)
+    from .internal_agent import internal_chat, resolve_llm_settings
+
+    raw = internal_chat(build_summary_prompt(items), resolve_llm_settings(), timeout=timeout, temperature=0)
+    return parse_summary_output(raw, items)
 
 
 def build_summary_prompt(items):

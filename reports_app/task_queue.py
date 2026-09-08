@@ -179,7 +179,7 @@ def enqueue_report_generation(conn, db_path, project_id, trigger_type, force=Fal
     return job_id
 
 
-def enqueue_voice_job(conn, db_path, payload, voice_agent, asr_endpoint, asr_model, asr_language, user_id):
+def enqueue_voice_job(conn, db_path, payload, asr_endpoint, asr_model, asr_language, user_id):
     """Insert a queued voice job and hand it to the shared task queue with the
     same capacity accounting as report generation."""
     conn.execute("BEGIN IMMEDIATE")
@@ -193,7 +193,7 @@ def enqueue_voice_job(conn, db_path, payload, voice_agent, asr_endpoint, asr_mod
         conn.rollback()
         raise
     get_task_queue(db_path).submit(
-        run_voice_job, db_path, job_id, payload, voice_agent, asr_endpoint, asr_model, asr_language
+        run_voice_job, db_path, job_id, payload, asr_endpoint, asr_model, asr_language
     )
     return job_id
 

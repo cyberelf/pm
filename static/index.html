@@ -128,19 +128,12 @@
                     <option value="auto">自动检测</option>
                   </select>
                 </label>
-                <label>转换 Agent
-                  <select id="voice-agent-select">
-                    <option value="codex">Codex CLI</option>
-                    <option value="claude">Claude Code CLI</option>
-                    <option value="internal">内部 Agent</option>
-                  </select>
-                </label>
                 <button id="save-voice-settings" class="primary" type="button">保存</button>
-                <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本再由所选 Agent 整理成 TODO 项，整理失败时按原始转写创建。</small>
+                <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本由内部 Agent 整理成 TODO 项，整理失败时按原始转写创建。</small>
               </div>
             </div>
             <div class="panel">
-              <div class="panel-head"><h2>内部 Agent LLM</h2><span>生成器或语音转换选择“内部 Agent”时使用</span></div>
+              <div class="panel-head"><h2>内部 Agent LLM</h2><span>周报生成与语音 TODO 整理都通过内部 Agent 调用</span></div>
               <div class="voice-settings">
                 <label>LLM Provider
                   <select id="llm-provider-select">
@@ -189,12 +182,6 @@
         <label>Timezone
           <select name="timezone">
             <option value="Asia/Shanghai">中国标准时间 (Asia/Shanghai)</option>
-          </select>
-        </label>
-        <label>生成器
-          <select name="report_provider">
-            <option value="codex">Codex CLI</option>
-            <option value="claude">Claude Code CLI</option>
           </select>
         </label>
         <div class="modal-actions">

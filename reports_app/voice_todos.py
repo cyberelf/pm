@@ -1,10 +1,7 @@
 import json
-import os
 import re
 import sys
-import tempfile
 import time
-from pathlib import Path
 
 from .asr import transcribe_audio, validate_asr_audio
 from .config import DEFAULT_ASR_LANGUAGE
@@ -131,10 +128,10 @@ def _update_voice_job_if_status(conn, job_id, expected, **fields):
     )
 
 
-def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model, asr_language=DEFAULT_ASR_LANGUAGE):
+def run_voice_job(db_path, job_id, payload, asr_endpoint, asr_model, asr_language=DEFAULT_ASR_LANGUAGE):
     """Task-queue worker: transcribe the recording, structure it into TODO
-    items, and record stage timings so failures are diagnosable from
-    server.log. Opens its own database connection."""
+    items with the internal agent, and record stage timings so failures are
+    diagnosable from server.log. Opens its own database connection."""
     started = time.monotonic()
     try:
         with connect(db_path) as conn:
@@ -174,7 +171,7 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
             _update_voice_job(conn, job_id, status="structuring", transcript=transcript)
             conn.commit()
         structure_started = time.monotonic()
-        items, error = convert_transcript_to_todos(transcript[:MAX_VOICE_TEXT_LENGTH], voice_agent)
+        items, error = convert_transcript_to_todos(transcript[:MAX_VOICE_TEXT_LENGTH], "internal")
         with connect(db_path) as conn:
             if _voice_job_status(conn, job_id) == "cancelled":
                 _log_voice_job(job_id, "cancelled during structuring; discarding results")
@@ -207,32 +204,17 @@ def run_voice_job(db_path, job_id, payload, voice_agent, asr_endpoint, asr_model
 
 
 def convert_transcript_to_todos(transcript, provider, timeout=120):
-    """Returns (items, error). When the agent CLI fails, error explains why and
-    items fall back to TODOs built from the raw transcript so nothing is lost."""
-    from .reports import fake_provider_enabled, provider_command, run_provider_command
+    """Returns (items, error). The internal agent is the only structuring
+    path; when it fails, error explains why and items fall back to TODOs
+    built from the raw transcript so nothing is lost."""
+    from .reports import fake_provider_enabled
 
     if fake_provider_enabled():
         return fallback_voice_items(transcript), ""
-    if provider == "internal":
-        from .internal_agent import internal_voice_todo_items
+    from .internal_agent import internal_voice_todo_items
 
-        try:
-            return internal_voice_todo_items(transcript, timeout=timeout), ""
-        except Exception as exc:
-            return fallback_voice_items(transcript), str(exc)[:2000]
-    prompt = build_voice_todo_prompt(transcript)
     try:
-        with tempfile.TemporaryDirectory(prefix="voice-todo-") as tmp:
-            tmp_path = Path(tmp)
-            output_path = (tmp_path / "todos.json").resolve()
-            command = provider_command(provider, prompt, tmp_path, output_path)
-            if provider == "claude" and not os.environ.get("REPORTS_CLAUDE_CMD"):
-                result = run_provider_command(command, tmp, timeout, input_text=prompt)
-                raw = result.stdout
-            else:
-                result = run_provider_command(command, tmp, timeout)
-                raw = output_path.read_text(encoding="utf-8") if output_path.exists() else result.stdout
-        return parse_voice_todo_output(raw), ""
+        return internal_voice_todo_items(transcript, timeout=timeout), ""
     except Exception as exc:
         return fallback_voice_items(transcript), str(exc)[:2000]
 

@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_ADMIN_PASSWORD,
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TIMEZONE,
+    REPORT_PROVIDER,
 )
 from .timeutil import iso_now
 
@@ -314,6 +315,9 @@ def migrate_schema(conn):
         "UPDATE projects SET owner = ? WHERE owner = ?",
         (admin["username"], "local-user"),
     )
+    # the Codex/Claude CLI providers are gone; every project now generates
+    # through the internal agent
+    conn.execute("UPDATE projects SET report_provider = ? WHERE report_provider != ?", (REPORT_PROVIDER, REPORT_PROVIDER))
 
 
 def ensure_bootstrap_admin(conn):
@@ -408,7 +412,7 @@ def create_project(conn, data, user=None):
             data.get("end_date") or None,
             data.get("status") or "active",
             data.get("timezone") or DEFAULT_TIMEZONE,
-            data.get("report_provider") or "codex",
+            data.get("report_provider") or REPORT_PROVIDER,
             data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT,
             data.get("report_template") or "",
             data.get("manual_background") or "",

@@ -55,7 +55,7 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import assemble_context, build_claude_evidence_prompt, build_internal_evidence_prompt, build_tool_prompt, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, provider_command, transient_provider_error
+from reports_app.reports import assemble_context, build_internal_evidence_prompt, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider
 from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
@@ -88,7 +88,7 @@ class CoreTest(unittest.TestCase):
                 "name": "Demo",
                 "start_date": "2026-06-27",
                 "timezone": "Asia/Shanghai",
-                "report_provider": "codex",
+                "report_provider": "internal",
             },
             self.user,
         )
@@ -153,14 +153,14 @@ class CoreTest(unittest.TestCase):
                 "start_date": "2026-06-27",
                 "timezone": "Asia/Shanghai",
                 "status": "active",
-                "report_provider": "claude",
+                "report_provider": "internal",
                 "system_prompt": "prompt",
                 "report_template": "# T",
                 "schedules": [{"weekday": 5, "local_time": "18:00", "timezone": "Asia/Shanghai"}],
             },
         )
         row = self.conn.execute("SELECT report_provider FROM projects WHERE id = ?", (self.project_id,)).fetchone()
-        self.assertEqual(row["report_provider"], "claude")
+        self.assertEqual(row["report_provider"], "internal")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM update_schedules").fetchone()["n"], 1)
 
     def test_todo_open_workflow_requires_valid_title_and_status(self):
@@ -201,7 +201,6 @@ class CoreTest(unittest.TestCase):
             payload = json.loads(response.read())
             client.close()
             self.assertEqual(response.status, 200)
-            self.assertIn("voice_agent", payload)
         finally:
             tls_server.shutdown()
             tls_server.server_close()
@@ -360,7 +359,7 @@ class CoreTest(unittest.TestCase):
 
     def test_create_todos_from_voice_with_fake_provider(self):
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
-            result = create_todos_from_voice(self.conn, "给后端日志加上脱敏处理", "claude", user_id=self.user_id)
+            result = create_todos_from_voice(self.conn, "给后端日志加上脱敏处理", "internal", user_id=self.user_id)
         self.assertFalse(result["fallback"])
         self.assertEqual(len(result["ids"]), 1)
         todo = next(row for row in todo_rows(self.conn, self.user_id) if row["id"] == result["ids"][0])
@@ -370,16 +369,16 @@ class CoreTest(unittest.TestCase):
     def test_create_todos_from_voice_falls_back_when_provider_fails(self):
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):
             with mock.patch(
-                "reports_app.reports.run_provider_command",
+                "reports_app.internal_agent.internal_voice_todo_items",
                 side_effect=RuntimeError("provider exploded"),
             ):
-                result = create_todos_from_voice(self.conn, "盘点仓库权限", "codex", user_id=self.user_id)
+                result = create_todos_from_voice(self.conn, "盘点仓库权限", "internal", user_id=self.user_id)
         self.assertTrue(result["fallback"])
         self.assertIn("provider exploded", result["error"])
         todo = next(row for row in todo_rows(self.conn, self.user_id) if row["id"] == result["ids"][0])
         self.assertEqual(todo["title"], "盘点仓库权限")
         with self.assertRaises(ValidationError):
-            create_todos_from_voice(self.conn, "   ", "codex")
+            create_todos_from_voice(self.conn, "   ", "internal")
 
     def _poll_voice_job(self, server_port, job_id, timeout=30):
         deadline = time.time() + timeout
@@ -619,7 +618,7 @@ class CoreTest(unittest.TestCase):
         self.conn.commit()
         other_project = create_project(
             self.conn,
-            {"name": "Other", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "codex"},
+            {"name": "Other", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "internal"},
             self.user,
         )
         self.conn.commit()
@@ -767,7 +766,6 @@ class CoreTest(unittest.TestCase):
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
-                    "voice_agent": "claude",
                     "asr_endpoint": f"http://127.0.0.1:{asr_server.server_port}/inference",
                     "asr_model": "whisper",
                 }),
@@ -777,16 +775,8 @@ class CoreTest(unittest.TestCase):
             payload = json.loads(response.read())
             client.close()
             self.assertEqual(response.status, 200)
-            self.assertEqual(payload["voice_agent"], "claude")
             self.assertEqual(payload["asr_endpoint"], f"http://127.0.0.1:{asr_server.server_port}/inference")
             self.assertEqual(payload["asr_model"], "whisper")
-
-            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
-            self.api_request(client, "PUT", "/api/settings", body=json.dumps({"voice_agent": "gpt"}), headers={"Content-Type": "application/json"})
-            response = client.getresponse()
-            response.read()
-            client.close()
-            self.assertEqual(response.status, 400)
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             self.api_request(client, "PUT", "/api/settings", body=json.dumps({"asr_endpoint": "not-a-url"}), headers={"Content-Type": "application/json"})
@@ -801,7 +791,6 @@ class CoreTest(unittest.TestCase):
             state_payload = json.loads(response.read())
             client.close()
             self.assertEqual(response.status, 200)
-            self.assertEqual(state_payload["voice_agent"], "claude")
             self.assertEqual(state_payload["asr_endpoint"], f"http://127.0.0.1:{asr_server.server_port}/inference")
             self.assertEqual(state_payload["asr_model"], "whisper")
 
@@ -962,7 +951,7 @@ class CoreTest(unittest.TestCase):
                 "start_date": "2026-06-27",
                 "timezone": "Asia/Shanghai",
                 "status": "active",
-                "report_provider": "codex",
+                "report_provider": "internal",
                 "manual_background": "background",
                 "manual_objectives": "profile objective",
                 "manual_constraints": "constraint",
@@ -1293,72 +1282,9 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(context["git_commits_this_week"][0]["commits"][0]["message"], "ship")
         self.assertEqual(context["github_activity"][0]["tracked_branches"], ["main", "release"])
 
-    def test_agent_prompt_uses_platform_cli_instead_of_inline_context(self):
-        store_manual_material(self.conn, self.project_id, {"title": "manual", "content": "sentinel manual context"})
-        self.conn.execute(
-            """
-            INSERT INTO github_repos
-            (project_id, repo, status, status_message, activity_summary, created_at, updated_at)
-            VALUES (?, 'owner/repo', 'connected', 'ok', 'summary', '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
-            """,
-            (self.project_id,),
-        )
-        with mock.patch("reports_app.reports.weekly_commits") as commits:
-            commits.return_value = {
-                "repo": "owner/repo",
-                "status": "ok",
-                "status_message": "1 commits",
-                "commits": [{"sha": "abc", "message": "sentinel commit", "author": "A", "date": "2026-06-27T00:00:00Z", "url": ""}],
-            }
-            context, _hash = assemble_context(self.conn, self.project_id)
-        prompt = build_tool_prompt(context, "claude")
-        self.assertIn("scripts/report_context.py", prompt)
-        self.assertIn("overview", prompt)
-        self.assertIn("Do not run `gh`", prompt)
-        self.assertNotIn("sentinel manual context", prompt)
-        self.assertNotIn("sentinel commit", prompt)
-
-    def test_claude_prompt_uses_bounded_platform_evidence(self):
-        store_manual_material(self.conn, self.project_id, {"title": "manual", "content": "manual context"})
-        context, _hash = assemble_context(self.conn, self.project_id)
-        prompt = build_claude_evidence_prompt(context)
-        self.assertIn("Evidence JSON", prompt)
-        self.assertIn("platform context CLI", prompt)
-        self.assertIn("manual context", prompt)
-        self.assertIn("Do not run `gh`", prompt)
-
-    def test_claude_default_command_reads_prompt_from_stdin(self):
-        command = provider_command("claude", "", Path(self.tmp.name), Path(self.tmp.name) / "report.md")
-        self.assertEqual(command, ["claude", "--print", "--permission-mode", "dontAsk", "--no-session-persistence"])
-
     def test_previous_report_compaction_does_not_inline_body(self):
         compacted = compact_previous_report({"updated_at": "t", "content_md": "sentinel body"})
         self.assertEqual(compacted, {"available": True, "updated_at": "t"})
-
-    def test_agent_context_cli_progressively_discloses_materials(self):
-        material_id = store_manual_material(
-            self.conn,
-            self.project_id,
-            {"title": "manual", "content": "manual body for cli"},
-        )
-        self.conn.commit()
-        base = [
-            "python3",
-            "scripts/report_context.py",
-            "--db",
-            os.fspath(self.db_path),
-            "--project-id",
-            str(self.project_id),
-            "--week-key",
-            current_week_key("Asia/Shanghai"),
-        ]
-        overview = json.loads(subprocess.check_output(base + ["overview"], text=True))
-        self.assertEqual(overview["project"]["name"], "Demo")
-        materials = json.loads(subprocess.check_output(base + ["materials"], text=True))
-        self.assertEqual(materials["materials"][0]["id"], material_id)
-        self.assertNotIn("excerpt", materials["materials"][0])
-        detail = json.loads(subprocess.check_output(base + ["material", "--id", str(material_id)], text=True))
-        self.assertEqual(detail["material"]["extracted_text"], "manual body for cli")
 
     def test_github_repo_is_unique_and_notes_enter_report_context(self):
         with mock.patch("reports_app.server.check_repo") as mocked:
@@ -1866,10 +1792,6 @@ class CoreTest(unittest.TestCase):
         os.environ["REPORTS_FAKE_PROVIDER"] = "1"
         self.assertTrue(fake_provider_enabled())
 
-    def test_transient_provider_error_detection(self):
-        self.assertTrue(transient_provider_error("API Error: 529 模型当前访问量过大，请稍后再试"))
-        self.assertFalse(transient_provider_error("unsupported report provider"))
-
     def test_iso_week_boundary(self):
         self.assertRegex(current_week_key("Asia/Shanghai"), r"^\d{4}-W\d{2}$")
 
@@ -1963,7 +1885,7 @@ class CoreTest(unittest.TestCase):
                 "start_date": "2026-06-27",
                 "timezone": "Asia/Shanghai",
                 "status": "active",
-                "report_provider": "codex",
+                "report_provider": "internal",
                 "manual_background": "new background",
                 "manual_objectives": "new objective",
                 "manual_constraints": "new constraint",
@@ -2004,7 +1926,7 @@ class CoreTest(unittest.TestCase):
                     "start_date": "2026-06-27",
                     "timezone": "Asia/Shanghai",
                     "status": "active",
-                    "report_provider": "codex",
+                    "report_provider": "internal",
                     "schedules": [{"weekday": 5, "local_time": "18:00", "timezone": "Asia/Shanghai"}],
                 },
             )
@@ -2021,7 +1943,7 @@ class CoreTest(unittest.TestCase):
                 "start_date": "2026-06-27",
                 "timezone": "Asia/Shanghai",
                 "status": "paused",
-                "report_provider": "codex",
+                "report_provider": "internal",
                 "schedules": [{"weekday": 5, "local_time": "18:00", "timezone": "Asia/Shanghai"}],
             },
         )
@@ -2201,9 +2123,12 @@ class InternalAgentTest(unittest.TestCase):
         os.environ.pop("REPORTS_FAKE_PROVIDER", None)
         self.tmp.cleanup()
 
-    def test_internal_agent_is_a_supported_provider(self):
+    def test_internal_agent_is_the_only_supported_provider(self):
         validate_provider("internal")
-        validate_provider("codex")
+        with self.assertRaises(ValidationError):
+            validate_provider("codex")
+        with self.assertRaises(ValidationError):
+            validate_provider("claude")
         with self.assertRaises(ValidationError):
             validate_provider("gpt")
         validate_llm_provider("openai")
@@ -2406,7 +2331,6 @@ class InternalAgentTest(unittest.TestCase):
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
-                    "voice_agent": "internal",
                     "llm_provider": "openai",
                     "llm_base_url": "http://127.0.0.1:1234/v1",
                     "llm_model": "gpt-4o-mini",
@@ -2418,7 +2342,6 @@ class InternalAgentTest(unittest.TestCase):
             payload = json.loads(response.read())
             client.close()
             self.assertEqual(response.status, 200)
-            self.assertEqual(payload["voice_agent"], "internal")
             self.assertEqual(payload["llm_provider"], "openai")
             self.assertEqual(payload["llm_base_url"], "http://127.0.0.1:1234/v1")
             self.assertEqual(payload["llm_model"], "gpt-4o-mini")
@@ -2430,7 +2353,6 @@ class InternalAgentTest(unittest.TestCase):
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
-                    "voice_agent": "codex",
                     "llm_provider": "anthropic",
                     "llm_base_url": "",
                     "llm_model": "claude-opus-5",
@@ -2449,7 +2371,7 @@ class InternalAgentTest(unittest.TestCase):
             self.api_request(client, 
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"voice_agent": "codex", "llm_provider": "gpt"}),
+                body=json.dumps({"llm_provider": "gpt"}),
                 headers={"Content-Type": "application/json"},
             )
             response = client.getresponse()
@@ -2461,7 +2383,7 @@ class InternalAgentTest(unittest.TestCase):
             self.api_request(client, 
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"voice_agent": "codex", "llm_base_url": "http://"}),
+                body=json.dumps({"llm_base_url": "http://"}),
                 headers={"Content-Type": "application/json"},
             )
             response = client.getresponse()
@@ -2495,7 +2417,7 @@ class InternalAgentTest(unittest.TestCase):
             self.api_request(client, 
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"voice_agent": "codex", "asr_language": "en"}),
+                body=json.dumps({"asr_language": "en"}),
                 headers={"Content-Type": "application/json"},
             )
             response = client.getresponse()
@@ -2515,7 +2437,7 @@ class InternalAgentTest(unittest.TestCase):
             self.api_request(client, 
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"voice_agent": "codex", "asr_language": "  "}),
+                body=json.dumps({"asr_language": "  "}),
                 headers={"Content-Type": "application/json"},
             )
             response = client.getresponse()
@@ -2527,7 +2449,7 @@ class InternalAgentTest(unittest.TestCase):
             self.api_request(client, 
                 "PUT",
                 "/api/settings",
-                body=json.dumps({"voice_agent": "codex"}),
+                body=json.dumps({}),
                 headers={"Content-Type": "application/json"},
             )
             response = client.getresponse()
@@ -2577,7 +2499,6 @@ class InternalAgentTest(unittest.TestCase):
                 "PUT",
                 "/api/settings",
                 body=json.dumps({
-                    "voice_agent": "internal",
                     "asr_language": "zh",
                     "llm_provider": "openai",
                     "llm_model": "gpt-4o-mini",
@@ -2605,7 +2526,6 @@ class InternalAgentTest(unittest.TestCase):
             client.close()
             self.assertEqual(response.status, 200)
             self.assertEqual(payload["asr_model"], "whisper-medium")
-            self.assertEqual(payload["voice_agent"], "internal", "keys absent from the payload must not be reset")
             self.assertEqual(payload["llm_model"], "gpt-4o-mini")
             self.assertTrue(payload["llm_api_key_set"])
             self.assertEqual(payload["asr_language"], "zh")

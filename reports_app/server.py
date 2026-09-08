@@ -24,7 +24,6 @@ from .config import (
     DEFAULT_ASR_MODEL,
     DEFAULT_LLM_BASE_URLS,
     DEFAULT_LLM_PROVIDER,
-    DEFAULT_VOICE_AGENT,
     LLM_API_KEY_ENV_VARS,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
@@ -32,11 +31,11 @@ from .config import (
     LLM_PROVIDER_SETTING,
     QUEUE_CAPACITY_SETTING,
     QUEUE_PARALLELISM_SETTING,
+    REPORT_PROVIDER,
     STATIC_DIR,
     UI_MODE_SETTING,
     UI_THEME_SETTING,
     UPLOAD_DIR,
-    VOICE_AGENT_SETTING,
 )
 from .db import (
     connect,
@@ -116,7 +115,6 @@ PUBLIC_API_ROUTES = {
 }
 
 ADMIN_ONLY_SETTING_KEYS = {
-    "voice_agent",
     "asr_endpoint",
     "asr_model",
     "asr_language",
@@ -219,7 +217,6 @@ def settings_state(conn, user):
     if is_admin:
         state.update(
             {
-                "voice_agent": get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
                 "asr_endpoint": get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT),
                 "asr_model": get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL),
                 "asr_language": get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE),
@@ -512,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self.body_json()
                 require_project_name(payload)
                 validate_timezone(payload.get("timezone") or "Asia/Shanghai")
-                validate_provider(payload.get("report_provider") or "codex")
+                validate_provider(payload.get("report_provider") or REPORT_PROVIDER)
                 validate_project_status(payload.get("status") or "active")
                 project_id = create_project(conn, payload, user)
                 conn.commit()
@@ -532,7 +529,6 @@ class Handler(BaseHTTPRequestHandler):
                     conn,
                     self.server.db_path,
                     payload,
-                    get_setting(conn, VOICE_AGENT_SETTING, DEFAULT_VOICE_AGENT),
                     normalize_asr_endpoint(get_setting(conn, ASR_ENDPOINT_SETTING, DEFAULT_ASR_ENDPOINT)),
                     get_setting(conn, ASR_MODEL_SETTING, DEFAULT_ASR_MODEL) or DEFAULT_ASR_MODEL,
                     get_setting(conn, ASR_LANGUAGE_SETTING, DEFAULT_ASR_LANGUAGE) or DEFAULT_ASR_LANGUAGE,
@@ -579,10 +575,6 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, GITHUB_ENABLED_SETTING, "1" if payload.get(GITHUB_ENABLED_SETTING) else "0")
                 if GITLAB_ENABLED_SETTING in payload:
                     set_setting(conn, GITLAB_ENABLED_SETTING, "1" if payload.get(GITLAB_ENABLED_SETTING) else "0")
-                if "voice_agent" in payload:
-                    voice_agent = payload.get("voice_agent") or DEFAULT_VOICE_AGENT
-                    validate_provider(voice_agent)
-                    set_setting(conn, VOICE_AGENT_SETTING, voice_agent)
                 if "asr_endpoint" in payload:
                     set_setting(conn, ASR_ENDPOINT_SETTING, normalize_asr_endpoint(payload.get("asr_endpoint") or DEFAULT_ASR_ENDPOINT))
                 if "asr_model" in payload:
@@ -1031,7 +1023,7 @@ def material_detail(conn, project_id, material_id):
 
 def update_settings(conn, project_id, payload):
     validate_timezone(payload.get("timezone") or "Asia/Shanghai")
-    validate_provider(payload.get("report_provider") or "codex")
+    validate_provider(payload.get("report_provider") or REPORT_PROVIDER)
     validate_project_status(payload.get("status") or "active")
     for item in payload.get("schedules") or []:
         validate_schedule_item(item)
@@ -1051,7 +1043,7 @@ def update_settings(conn, project_id, payload):
             payload.get("end_date") or None,
             payload.get("status") or "active",
             payload.get("timezone") or "Asia/Shanghai",
-            payload.get("report_provider") or "codex",
+            payload.get("report_provider") or REPORT_PROVIDER,
             payload.get("system_prompt") or "",
             payload.get("report_template") or "",
             payload.get("manual_background") or "",

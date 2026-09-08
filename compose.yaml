@@ -5,9 +5,9 @@
 #
 # Host-side configuration comes from the repo-root .env (git-ignored):
 # PORT, REPORTS_TLS_PORT, REPORTS_FAKE_PROVIDER, REPORTS_QUEUE_CAPACITY,
-# REPORTS_QUEUE_PARALLELISM, plus the pass-through credential variables
-# commented below. Container-internal values (bind address, inner port) are
-# fixed here on purpose; reachability is controlled by the port mappings.
+# REPORTS_QUEUE_PARALLELISM, REPORTS_ADMIN_PASSWORD, plus the LLM fallback
+# keys commented below. Container-internal values (bind address, inner port)
+# are fixed here on purpose; reachability is controlled by the port mappings.
 
 name: weekly-reports
 
@@ -46,19 +46,16 @@ services:
       REPORTS_FAKE_PROVIDER: "${REPORTS_FAKE_PROVIDER:-0}"
       REPORTS_QUEUE_CAPACITY: "${REPORTS_QUEUE_CAPACITY:-}"
       REPORTS_QUEUE_PARALLELISM: "${REPORTS_QUEUE_PARALLELISM:-}"
+      # Password for the bootstrapped admin account (default: changeme).
+      REPORTS_ADMIN_PASSWORD: "${REPORTS_ADMIN_PASSWORD:-}"
       TZ: Asia/Shanghai
       NO_PROXY: "127.0.0.1,localhost,host.docker.internal"
-      # Provider/CLI credentials passed straight through to the app and CLIs.
-      # Leave unset in .env to configure the internal agent in 全局设置 or log
-      # in interactively instead (logins persist under data/home/).
-      GH_TOKEN: "${GH_TOKEN:-}"
-      GITLAB_TOKEN: "${GITLAB_TOKEN:-}"
-      ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
-      ANTHROPIC_AUTH_TOKEN: "${ANTHROPIC_AUTH_TOKEN:-}"
+      # LLM fallback keys for the internal agent when 全局设置 has no stored
+      # key. Git tokens are per-user values configured in 全局设置 instead.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/state', timeout=5)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/auth/state', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3

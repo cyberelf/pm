@@ -1,13 +1,8 @@
 import hashlib
 import json
 import os
-import shlex
-import subprocess
-import tempfile
-import time
-from pathlib import Path
 
-from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT, ROOT_DIR
+from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT
 from .db import connect
 from .git_sources import git_auth_for_user, weekly_commits
 from .risks import evaluate_risks
@@ -289,184 +284,18 @@ def fail_stale_generation_jobs(db_path):
 
 
 def invoke_provider(provider, context, timeout=300):
-    if provider == "internal" and not fake_provider_enabled():
-        from .internal_agent import generate_internal_report
+    """Report generation now always runs through the in-process internal
+    agent; REPORTS_FAKE_PROVIDER keeps tests and dry runs offline."""
+    if fake_provider_enabled():
+        return fake_report(context)
+    from .internal_agent import generate_internal_report
 
-        return generate_internal_report(context, timeout=timeout)
-    with tempfile.TemporaryDirectory(prefix="weekly-report-") as tmp:
-        tmp_path = Path(tmp)
-        output_path = (tmp_path / "report.md").resolve()
-        if fake_provider_enabled():
-            output_path.write_text(fake_report(context), encoding="utf-8")
-        else:
-            if provider == "claude" and not os.environ.get("REPORTS_CLAUDE_CMD"):
-                prompt = build_claude_evidence_prompt(context)
-                command = provider_command(provider, "", tmp_path, output_path)
-                result = run_provider_command(command, tmp, timeout, input_text=prompt)
-                output_path.write_text(result.stdout, encoding="utf-8")
-            else:
-                prompt = build_tool_prompt(context, provider)
-                command = provider_command(provider, prompt, tmp_path, output_path)
-                run_provider_command(command, tmp, timeout)
-        if not output_path.exists() or not output_path.read_text(encoding="utf-8").strip():
-            raise RuntimeError("expected Markdown output file was missing or empty")
-        return output_path.read_text(encoding="utf-8")
-
-
-def provider_command(provider, prompt, cwd, output_path):
-    if provider == "codex":
-        custom = os.environ.get("REPORTS_CODEX_CMD")
-        if custom:
-            return shlex.split(custom) + [prompt]
-        return ["codex", "exec", "--skip-git-repo-check", "-C", os.fspath(cwd), "-o", os.fspath(output_path), prompt]
-    if provider == "claude":
-        custom = os.environ.get("REPORTS_CLAUDE_CMD")
-        if custom:
-            return shlex.split(custom) + [prompt]
-        command = ["claude", "--print", "--permission-mode", "dontAsk", "--no-session-persistence"]
-        if prompt:
-            command.append(prompt)
-        return command
-    raise ValueError("unsupported report provider")
-
-
-def run_provider_command(command, cwd, timeout, attempts=2, input_text=None):
-    last_error = None
-    per_attempt_timeout = min(timeout, 120)
-    for attempt in range(1, attempts + 1):
-        try:
-            return subprocess.run(
-                command,
-                cwd=cwd,
-                input=input_text,
-                text=True,
-                capture_output=True,
-                timeout=per_attempt_timeout,
-                check=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            last_error = provider_error(command, exc)
-            if attempt < attempts and transient_provider_error(last_error):
-                time.sleep(5 * attempt)
-                continue
-            raise RuntimeError(last_error) from exc
-        except subprocess.TimeoutExpired as exc:
-            last_error = provider_timeout_error(command, per_attempt_timeout, exc)
-            if attempt < attempts:
-                time.sleep(5 * attempt)
-                continue
-            raise RuntimeError(last_error) from exc
-    raise RuntimeError(last_error or "provider command failed")
-
-
-def provider_error(command, exc):
-    details = [
-        f"Command exited with status {exc.returncode}",
-        f"command={shlex.join(command)}",
-    ]
-    if exc.stdout:
-        details.append(f"stdout:\n{exc.stdout[-4000:]}")
-    if exc.stderr:
-        details.append(f"stderr:\n{exc.stderr[-4000:]}")
-    return "\n".join(details)
-
-
-def provider_timeout_error(command, timeout, exc):
-    details = [
-        f"Command timed out after {timeout} seconds",
-        f"command={shlex.join(command)}",
-    ]
-    if exc.stdout:
-        details.append(f"stdout:\n{str(exc.stdout)[-4000:]}")
-    if exc.stderr:
-        details.append(f"stderr:\n{str(exc.stderr)[-4000:]}")
-    return "\n".join(details)
-
-
-def transient_provider_error(message):
-    lowered = message.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "api error: 529",
-            "overloaded",
-            "temporarily unavailable",
-            "try again",
-            "rate limit",
-            "访问量过大",
-            "稍后再试",
-        )
-    )
+    return generate_internal_report(context, timeout=timeout)
 
 
 def fake_provider_enabled():
     value = os.environ.get("REPORTS_FAKE_PROVIDER", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def build_tool_prompt(context, provider):
-    tool = agent_tool_command(context)
-    output_instruction = "Return Markdown only as your final response."
-    if provider == "codex":
-        output_instruction = "Return Markdown only as your final response; the runner will save that response as the report."
-    return (
-        f"{context['system_prompt']}\n\n"
-        "You are generating a weekly project report. "
-        f"{output_instruction} Do not describe your process.\n\n"
-        "You MUST get all project/platform information through this read-only platform CLI. "
-        "Do not read application files, uploaded files, SQLite databases, or git hosting services directly. "
-        "Do not run `gh` or `glab`; repository activity and commits must come from the platform CLI.\n\n"
-        f"Platform CLI base command:\n`{tool}`\n\n"
-        "Start with:\n"
-        f"`{tool} overview`\n\n"
-        "Then call only the subcommands you need, for example:\n"
-        f"- `{tool} project`\n"
-        f"- `{tool} plan`\n"
-        f"- `{tool} weekly-update`\n"
-        f"- `{tool} materials`\n"
-        f"- `{tool} material --id <material_id>`\n"
-        f"- `{tool} repos`\n"
-        f"- `{tool} commits`\n"
-        f"- `{tool} commits --repo <repo path>`\n"
-        f"- `{tool} history`\n"
-        f"- `{tool} report --week-key <YYYY-Www>`\n"
-        f"- `{tool} template`\n\n"
-        "Use project profile and plan to understand description, background, objectives, constraints, milestones, and deliverables. "
-        "Evaluate this week's progress against plan and weekly planned outcomes. "
-        "Use repository notes to interpret what each repo means in this project. "
-        "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
-        "If you need full material content, fetch it with `material --id`; do not infer from filenames alone. "
-        "For every connected repository, include a short per-repo section. "
-        "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "
-        "If there are no new materials, say so explicitly. "
-        "The risk section must include deterministic risks from the context plus your forecast from the evidence, "
-        "and must mention any risk caused by missing or stale project profile, objectives, constraints, plan, or weekly outcomes.\n\n"
-        "Required Markdown structure:\n\n"
-        f"{context['report_template']}"
-    )
-
-
-def build_claude_evidence_prompt(context):
-    evidence = compact_evidence(context)
-    return (
-        f"{context['system_prompt']}\n\n"
-        "You are generating a weekly project report. Return Markdown only. Do not describe your process.\n\n"
-        "Claude Code CLI tool execution is disabled for this provider path. "
-        "The application has retrieved the following bounded evidence through its read-only platform context CLI. "
-        "Use only this evidence. Do not read application files, uploaded files, SQLite databases, or git hosting services directly. Do not run `gh` or `glab`.\n\n"
-        "Use project profile and plan to understand description, background, objectives, constraints, milestones, and deliverables. "
-        "Evaluate this week's progress against plan and weekly planned outcomes. "
-        "Use repository notes to interpret what each repo means in this project. "
-        "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
-        "For every connected repository, include a short per-repo section. "
-        "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "
-        "If there are no new materials, say so explicitly. "
-        "The risk section must include observed risks plus your forecast from the evidence.\n\n"
-        "Required Markdown structure:\n\n"
-        f"{context['report_template']}\n\n"
-        "Evidence JSON:\n\n"
-        f"```json\n{json.dumps(evidence, ensure_ascii=False, indent=2)}\n```"
-    )
 
 
 def build_internal_evidence_prompt(context):
@@ -523,13 +352,6 @@ def compact_previous_report(report):
         "available": True,
         "updated_at": report.get("updated_at"),
     }
-
-
-def agent_tool_command(context):
-    script = ROOT_DIR / "scripts" / "report_context.py"
-    project_id = int(context["project"]["id"])
-    week_key = context["week_key"]
-    return f"python3 {shlex.quote(os.fspath(script))} --project-id {project_id} --week-key {shlex.quote(week_key)}"
 
 
 def fake_report(context):

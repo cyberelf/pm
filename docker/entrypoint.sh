@@ -6,9 +6,9 @@ set -eu
 
 cd /app
 
-# CLI config (gh, glab, claude) lives under HOME, which sits on the data
-# volume so logins survive container recreation. The OCI runtime sets HOME=/
-# for numeric users without a passwd entry, so treat that as unset too.
+# HOME sits on the data volume so runtime state survives container
+# recreation. The OCI runtime sets HOME=/ for numeric users without a passwd
+# entry, so treat that as unset too.
 case "${HOME:-}" in
     ""|"/") export HOME=/app/data/home ;;
 esac
