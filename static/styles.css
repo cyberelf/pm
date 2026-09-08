@@ -1170,3 +1170,35 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .message-box { grid-template-columns: 44px minmax(0, 1fr); }
   .message-icon { width: 44px; height: 44px; }
 }
+
+/* Login view and account panels */
+.login-view {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--surface-dark);
+}
+body.logged-out .app-shell,
+body.logged-out .page-corner,
+body.logged-out .mobile-tabbar,
+body.logged-out .voice-todo-widget { visibility: hidden; }
+.login-card {
+  display: grid;
+  gap: 14px;
+  width: min(360px, 100%);
+  padding: 28px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-elevated);
+}
+.login-card .brand { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+.login-error { margin: 0; color: var(--danger, #dc2626); font-size: 13px; }
+.switch-row { display: flex; align-items: center; gap: 10px; margin: 0; }
+.switch-row.compact { gap: 8px; white-space: nowrap; }
+.git-integration-admin { display: grid; gap: 10px; margin-bottom: 12px; }
+.user-create-row { flex-wrap: wrap; align-items: center; }
+.user-create-row input { min-width: 140px; }

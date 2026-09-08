@@ -5,9 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=49" />
+    <link rel="stylesheet" href="/styles.css?v=50" />
   </head>
   <body>
+    <div id="login-view" class="login-view hidden">
+      <form id="login-form" class="login-card">
+        <div class="brand">
+          <div class="brand-mark">WR</div>
+          <div>
+            <strong>周报工作台</strong>
+            <span>登录后开始工作</span>
+          </div>
+        </div>
+        <label>用户名
+          <input id="login-username" name="username" autocomplete="username" required />
+        </label>
+        <label>密码
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button id="login-submit" class="primary full" type="submit">登录</button>
+        <p id="login-error" class="login-error hidden"></p>
+      </form>
+    </div>
     <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
       <span class="page-corner-current">
         <small>当前页面</small>
@@ -25,7 +44,7 @@
           <div class="brand-mark">WR</div>
           <div>
             <strong>周报工作台</strong>
-            <span>Local workspace</span>
+            <span id="sidebar-user">Local workspace</span>
           </div>
         </div>
         <button id="new-project" class="primary full">新建项目</button>
@@ -35,6 +54,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path><circle cx="14.5" cy="7" r="2.5" fill="currentColor"></circle><circle cx="9.5" cy="17" r="2.5" fill="currentColor"></circle></svg>
           全局设置
         </button>
+        <button id="logout-button" class="sidebar-settings" type="button">退出登录</button>
       </aside>
 
       <div class="page-shell">
@@ -99,13 +119,13 @@
             <div>
               <div class="project-heading">
                 <h1>全局设置</h1>
-                <p>外观与偏好，对所有项目生效</p>
+                <p id="settings-subtitle">外观与偏好，只影响当前账号</p>
               </div>
             </div>
           </header>
           <section class="settings-panels">
             <div class="panel">
-              <div class="panel-head"><h2>外观</h2><span>背景深浅与主题色，TODO 看板同步跟随</span></div>
+              <div class="panel-head"><h2>外观</h2><span>背景深浅与主题色，仅当前账号生效</span></div>
               <div class="mode-switch" role="group" aria-label="背景深浅色">
                 <button type="button" class="mode-option active" data-mode-option="light" onclick="applyAppearance('light')">浅色</button>
                 <button type="button" class="mode-option" data-mode-option="dark" onclick="applyAppearance('dark')">深色</button>
@@ -113,26 +133,23 @@
               <div id="appearance-swatches" class="theme-swatches"></div>
             </div>
             <div class="panel">
-              <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO</span></div>
+              <div class="panel-head"><h2>Git 集成</h2><span>配置你自己的 GitHub / GitLab 访问令牌</span></div>
+              <div id="git-integration-admin" class="git-integration-admin hidden">
+                <label class="switch-row"><span class="switch"><input id="github-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitHub 集成（全局，仅管理员可改）</span></label>
+                <label class="switch-row"><span class="switch"><input id="gitlab-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitLab 集成（全局，仅管理员可改）</span></label>
+              </div>
               <div class="voice-settings">
-                <label>识别服务地址
-                  <input id="asr-endpoint-input" placeholder="http://127.0.0.1:8766/inference">
+                <label>GitHub Token
+                  <input id="github-token-input" type="password" autocomplete="off" placeholder="ghp_...">
                 </label>
-                <label>识别模型名
-                  <input id="asr-model-input" placeholder="whisper">
+                <label>GitLab Token
+                  <input id="gitlab-token-input" type="password" autocomplete="off" placeholder="glpat-...">
                 </label>
-                <label>识别语言
-                  <select id="asr-language-select">
-                    <option value="zh">中文</option>
-                    <option value="en">English</option>
-                    <option value="auto">自动检测</option>
-                  </select>
-                </label>
-                <button id="save-voice-settings" class="primary" type="button">保存</button>
-                <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本由内部 Agent 整理成 TODO 项，整理失败时按原始转写创建。</small>
+                <button id="save-git-settings" class="primary" type="button">保存</button>
+                <small>令牌只保存在服务器数据库，与账号绑定，接口不会回传；留空表示保持已保存的值。配置后仓库状态读取和 commits 抓取通过 GitHub / GitLab REST API 使用你的令牌；GitHub 未配置令牌时只能访问公开仓库。GitLab 服务器地址在每个项目的仓库设置里填写。</small>
               </div>
             </div>
-            <div class="panel">
+            <div class="panel admin-only hidden">
               <div class="panel-head"><h2>内部 Agent LLM</h2><span>周报生成与语音 TODO 整理都通过内部 Agent 调用</span></div>
               <div class="voice-settings">
                 <label>LLM Provider
@@ -154,7 +171,27 @@
                 <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。</small>
               </div>
             </div>
-            <div class="panel">
+            <div class="panel admin-only hidden">
+              <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO</span></div>
+              <div class="voice-settings">
+                <label>识别服务地址
+                  <input id="asr-endpoint-input" placeholder="http://127.0.0.1:8766/inference">
+                </label>
+                <label>识别模型名
+                  <input id="asr-model-input" placeholder="whisper">
+                </label>
+                <label>识别语言
+                  <select id="asr-language-select">
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                    <option value="auto">自动检测</option>
+                  </select>
+                </label>
+                <button id="save-voice-settings" class="primary" type="button">保存</button>
+                <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本由内部 Agent 整理成 TODO 项，整理失败时按原始转写创建。</small>
+              </div>
+            </div>
+            <div class="panel admin-only hidden">
               <div class="panel-head"><h2>任务队列</h2><span>周报生成与语音 TODO 共用的后台队列</span></div>
               <div class="voice-settings">
                 <label>队列容量
@@ -165,6 +202,30 @@
                 </label>
                 <button id="save-queue-settings" class="primary" type="button">保存</button>
                 <small>提交超过容量时新任务会被拒绝；并行执行数决定同时运行的任务数，其余在队列中按提交顺序等待。修改立即生效，无需重启服务。</small>
+              </div>
+            </div>
+            <div class="panel admin-only hidden">
+              <div class="panel-head"><h2>用户管理</h2><span>只有系统管理员可以管理账号</span></div>
+              <div class="voice-settings">
+                <div class="row user-create-row">
+                  <input id="new-user-username" placeholder="用户名">
+                  <input id="new-user-password" type="password" placeholder="密码（至少 6 位）" autocomplete="new-password">
+                  <label class="switch-row compact"><span class="switch"><input id="new-user-admin" type="checkbox"><span class="switch-slider"></span></span><span>管理员</span></label>
+                  <button type="button" onclick="createUser()">添加用户</button>
+                </div>
+                <table class="table"><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="user-table-body"></tbody></table>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>修改密码</h2><span>修改当前登录账号的密码</span></div>
+              <div class="voice-settings">
+                <label>当前密码
+                  <input id="password-old-input" type="password" autocomplete="current-password">
+                </label>
+                <label>新密码（至少 6 位）
+                  <input id="password-new-input" type="password" autocomplete="new-password">
+                </label>
+                <button id="save-password" class="primary" type="button">更新密码</button>
               </div>
             </div>
           </section>
@@ -300,6 +361,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=43"></script>
+    <script src="/app.js?v=44"></script>
   </body>
 </html>

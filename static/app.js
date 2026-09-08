@@ -21,6 +21,8 @@ const state = {
   pendingDeleteTodoId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   settingsView: false,
+  currentUser: null,
+  isAdmin: false,
   asrEndpoint: "",
   asrModel: "whisper",
   asrLanguage: "zh",
@@ -129,8 +131,61 @@ async function api(path, options = {}) {
     // surface a clear message with the status and body head instead.
     throw new Error(`服务响应异常（HTTP ${res.status}）: ${text.slice(0, 100) || "空响应"}`);
   }
+  if (res.status === 401) {
+    showLoginView();
+    throw new Error(data.error || "登录已过期，请重新登录");
+  }
   if (!res.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
   return data;
+}
+
+function showLoginView() {
+  state.currentUser = null;
+  state.isAdmin = false;
+  $("login-view").classList.remove("hidden");
+  document.body.classList.add("logged-out");
+  const password = $("login-password");
+  if (password) password.value = "";
+}
+
+function hideLoginView() {
+  $("login-view").classList.add("hidden");
+  document.body.classList.remove("logged-out");
+}
+
+async function login(event) {
+  event.preventDefault();
+  const button = $("login-submit");
+  const error = $("login-error");
+  error.classList.add("hidden");
+  button.disabled = true;
+  try {
+    await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("login-username").value.trim(),
+        password: $("login-password").value,
+      }),
+    });
+    hideLoginView();
+    await loadState();
+    toast("已登录");
+  } catch (err) {
+    error.textContent = err.message;
+    error.classList.remove("hidden");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function logout() {
+  try {
+    await api("/api/auth/logout", { method: "POST", body: "{}" });
+  } catch {
+    // the session may already be gone; the login view shows regardless
+  }
+  showLoginView();
+  toast("已退出登录");
 }
 
 async function withBusy(title, detail, fn) {
@@ -167,6 +222,16 @@ function toast(message) {
 async function loadState() {
   const data = await api("/api/state");
   state.projects = data.projects;
+  state.currentUser = data.current_user || null;
+  state.isAdmin = !!(data.current_user && data.current_user.is_admin);
+  $("sidebar-user").textContent = state.currentUser
+    ? `${state.currentUser.username}${state.isAdmin ? " · 管理员" : ""}`
+    : "";
+  document.querySelectorAll(".admin-only").forEach((el) => el.classList.toggle("hidden", !state.isAdmin));
+  state.githubEnabled = data.github_enabled !== false;
+  state.gitlabEnabled = data.gitlab_enabled !== false;
+  state.githubTokenSet = !!data.github_token_set;
+  state.gitlabTokenSet = !!data.gitlab_token_set;
   state.asrEndpoint = data.asr_endpoint || "";
   state.asrModel = data.asr_model || "";
   state.asrLanguage = data.asr_language || "zh";
@@ -181,6 +246,10 @@ async function loadState() {
   renderVoiceSettings();
   renderLlmSettings();
   renderQueueSettings();
+  renderGitSettings();
+  if (state.isAdmin) {
+    loadUsers().catch(() => {});
+  }
   if (!state.projectId && state.projects.length) state.projectId = state.projects[0].id;
   if (state.projectId && !state.projects.some((p) => p.id === state.projectId)) {
     state.projectId = state.projects.length ? state.projects[0].id : null;
@@ -945,6 +1014,144 @@ async function saveQueueSettings() {
   toast("任务队列设置已保存");
 }
 
+function renderGitSettings() {
+  const githubToken = $("github-token-input");
+  if (!githubToken) return;
+  githubToken.value = "";
+  githubToken.placeholder = state.githubTokenSet ? "已配置，留空保持不变" : "ghp-...";
+  const gitlabToken = $("gitlab-token-input");
+  gitlabToken.value = "";
+  gitlabToken.placeholder = state.gitlabTokenSet ? "已配置，留空保持不变" : "glpat-...";
+  const githubEnabled = $("github-enabled-input");
+  if (githubEnabled) githubEnabled.checked = state.githubEnabled !== false;
+  const gitlabEnabled = $("gitlab-enabled-input");
+  if (gitlabEnabled) gitlabEnabled.checked = state.gitlabEnabled !== false;
+}
+
+async function saveGitSettings() {
+  const payload = {};
+  const githubToken = $("github-token-input")?.value.trim();
+  const gitlabToken = $("gitlab-token-input")?.value.trim();
+  if (githubToken) payload.github_token = githubToken;
+  if (gitlabToken) payload.gitlab_token = gitlabToken;
+  if (state.isAdmin) {
+    payload.github_enabled = !!($("github-enabled-input")?.checked);
+    payload.gitlab_enabled = !!($("gitlab-enabled-input")?.checked);
+  }
+  const data = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+  state.githubEnabled = data.github_enabled !== false;
+  state.gitlabEnabled = data.gitlab_enabled !== false;
+  state.githubTokenSet = !!data.github_token_set;
+  state.gitlabTokenSet = !!data.gitlab_token_set;
+  renderGitSettings();
+  toast("Git 集成设置已保存");
+}
+
+async function loadUsers() {
+  const data = await api("/api/users");
+  state.users = data.users || [];
+  renderUsers();
+}
+
+function renderUsers() {
+  const body = $("user-table-body");
+  if (!body) return;
+  body.innerHTML = (state.users || []).map((user) => `
+    <tr>
+      <td data-label="用户名"><strong>${escapeHtml(user.username)}</strong>${user.id === state.currentUser?.id ? '<small>（当前账号）</small>' : ""}</td>
+      <td data-label="角色">${user.is_admin ? '<span class="status connected">管理员</span>' : "成员"}</td>
+      <td data-label="状态">${user.enabled ? '<span class="status active">启用</span>' : '<span class="status disabled">停用</span>'}</td>
+      <td data-label="操作"><div class="table-actions">
+        <button type="button" onclick="resetUserPassword(${user.id})">重置密码</button>
+        <button type="button" onclick="setUserAdmin(${user.id}, ${user.is_admin ? "false" : "true"})">${user.is_admin ? "收回管理员" : "设为管理员"}</button>
+        ${user.enabled
+          ? `<button type="button" onclick="setUserEnabled(${user.id}, false)">停用</button>`
+          : `<button type="button" onclick="setUserEnabled(${user.id}, true)">启用</button>`}
+        <button type="button" class="danger" onclick="deleteUserAccount(${user.id})">删除</button>
+      </div></td>
+    </tr>
+  `).join("") || "<tr><td colspan='4'>暂无用户。</td></tr>";
+}
+
+async function createUser() {
+  const username = $("new-user-username").value.trim();
+  const password = $("new-user-password").value;
+  if (!username || !password) return toast("请填写用户名和密码");
+  try {
+    await api("/api/users", {
+      method: "POST",
+      body: JSON.stringify({ username, password, is_admin: $("new-user-admin").checked }),
+    });
+    $("new-user-username").value = "";
+    $("new-user-password").value = "";
+    $("new-user-admin").checked = false;
+    await loadUsers();
+    toast("用户已创建");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function resetUserPassword(id) {
+  const user = (state.users || []).find((item) => item.id === id);
+  const password = window.prompt(`为「${user ? user.username : id}」设置新密码（至少 6 位）：`);
+  if (password === null) return;
+  try {
+    await api(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ password }) });
+    toast("密码已重置");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function setUserAdmin(id, isAdmin) {
+  try {
+    await api(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ is_admin: isAdmin }) });
+    await loadUsers();
+    toast(isAdmin ? "已设为管理员" : "已收回管理员");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function setUserEnabled(id, enabled) {
+  try {
+    await api(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ enabled }) });
+    await loadUsers();
+    toast(enabled ? "已启用该账号" : "已停用该账号");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteUserAccount(id) {
+  const user = (state.users || []).find((item) => item.id === id);
+  if (!window.confirm(`确定删除用户「${user ? user.username : id}」？该账号名下的项目与数据必须先迁移或删除。`)) return;
+  try {
+    await api(`/api/users/${id}`, { method: "DELETE" });
+    await loadUsers();
+    toast("用户已删除");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function changeOwnPassword() {
+  const oldPassword = $("password-old-input")?.value || "";
+  const newPassword = $("password-new-input")?.value || "";
+  try {
+    await api("/api/auth/password", {
+      method: "PUT",
+      body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+    });
+    $("password-old-input").value = "";
+    $("password-new-input").value = "";
+    toast("密码已更新");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function projectPaused(p) {
   return p.status === "paused";
 }
@@ -1108,7 +1315,7 @@ function renderSettings(ws) {
     <div class="panel">
       <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
       <div class="row">
-        <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式"><option value="github">GitHub</option><option value="gitlab">GitLab</option></select>
+        <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
         <input id="repo-input" placeholder="owner/repo">
         <input id="repo-server-input" placeholder="GitLab 服务器地址，如 https://gitlab.example.com" class="hidden">
         <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
@@ -1750,8 +1957,9 @@ function renderQueueProgress(data) {
   }
   const running = tasks.filter((task) => task.status === "running").length;
   const queued = tasks.length - running;
+  const limits = data.parallelism && data.capacity ? `（并行 ${data.parallelism} · 上限 ${data.capacity}）` : "";
   bubble.classList.remove("hidden");
-  bubble.innerHTML = `<small>任务队列：${running} 生成中 · ${queued} 排队（并行 ${data.parallelism} · 上限 ${data.capacity}）</small>${tasks.map((task) =>
+  bubble.innerHTML = `<small>任务队列：${running} 生成中 · ${queued} 排队${limits}</small>${tasks.map((task) =>
     `<span class="queue-task-line">${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.project_name || "")} ${escapeHtml(task.week_key || "")}</span>`).join("")}`;
 }
 
@@ -2172,6 +2380,10 @@ $("open-global-settings").onclick = () => toggleSettingsView(true);
 $("save-voice-settings").onclick = () => saveVoiceSettings().catch((error) => toast(error.message));
 $("save-llm-settings").onclick = () => saveLlmSettings().catch((error) => toast(error.message));
 $("save-queue-settings").onclick = () => saveQueueSettings().catch((error) => toast(error.message));
+$("save-git-settings").onclick = () => saveGitSettings().catch((error) => toast(error.message));
+$("save-password").onclick = () => changeOwnPassword().catch((error) => toast(error.message));
+$("login-form").onsubmit = login;
+$("logout-button").onclick = logout;
 setupVoiceTodoFab();
 restoreQueues();
 $("page-corner").onkeydown = (event) => {
@@ -2216,4 +2428,17 @@ $("close-todo-form").onsubmit = async (event) => {
 };
 document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => switchTab(btn.dataset.tab));
 
-loadState().catch(err => toast(err.message));
+(async () => {
+  try {
+    const authState = await api("/api/auth/state");
+    if (authState.authenticated) {
+      hideLoginView();
+      await loadState();
+    } else {
+      showLoginView();
+    }
+  } catch (err) {
+    showLoginView();
+    toast(err.message);
+  }
+})();
