@@ -104,7 +104,7 @@ Supported project material types:
 - Plain text: `.txt`
 - PDF: `.pdf`
 
-Markdown and plain text are extracted as UTF-8. PDF files are stored and surfaced in report context with extraction status; this standard-library MVP marks PDF text extraction as failed until a PDF parser is added.
+Markdown and plain text are extracted as UTF-8. PDF files are stored and surfaced in report context with extraction status; text extraction itself is not implemented yet — tracked in [TODO.md](TODO.md).
 
 ## Report Context
 
