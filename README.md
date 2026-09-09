@@ -4,13 +4,10 @@ Local project management workspace for weekly plans, updates, source materials, 
 
 ## Run
 
-Install Python dependencies:
+Install Python dependencies and start the server (on Windows use the `py` launcher — `py -m pip install -r requirements.txt`, `py run.py` — or run the commands below from Git Bash):
 
 ```bash
 python3 -m pip install --user -r requirements.txt
-```
-
-```bash
 python3 run.py
 ```
 
@@ -31,7 +28,7 @@ scripts/start_server.sh
 scripts/stop_server.sh
 ```
 
-Set `PORT=9000` to choose another port.
+Set `PORT=9000` to choose another port. These scripts need bash (macOS, Linux, WSL, or Git Bash on Windows).
 
 Or keep machine-local settings in a `.env` file at the repo root (git-ignored):
 
@@ -44,12 +41,18 @@ Both `python3 run.py` and `scripts/install_service.sh` read `.env` for `PORT`, `
 
 The service also listens on HTTPS port `8443` (set `REPORTS_TLS_PORT` to change or set it empty to disable) with a self-signed certificate generated at `data/tls/`. Phones need this HTTPS listener to use microphone access for voice TODOs: open `https://<host>:8443` and accept the certificate warning once.
 
-On macOS, use a LaunchAgent for the most stable local service:
+For the most stable local service, install it as a per-user login service (restarts with the machine, same `.env`/port knobs):
 
 ```bash
 PORT=8765 scripts/install_service.sh
-scripts/uninstall_service.sh
+scripts/uninstall_service.sh            # add "asr" to remove the voice service instead
 ```
+
+One script, three platforms:
+
+- macOS: LaunchAgent (launchd), as before.
+- Linux: systemd user service `weekly-reports.service`; run `sudo loginctl enable-linger $USER` once so it also survives logout.
+- Windows: a `.bat` in the Start Menu Startup folder (run the script from Git Bash); a console window appears at login — minimize it. Inside WSL2, use the Linux flow instead.
 
 ## Docker Compose
 
