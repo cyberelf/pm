@@ -6,8 +6,9 @@
 # Host-side configuration comes from the repo-root .env (git-ignored):
 # PORT, REPORTS_TLS_PORT, REPORTS_FAKE_PROVIDER, REPORTS_QUEUE_CAPACITY,
 # REPORTS_QUEUE_PARALLELISM, REPORTS_ADMIN_PASSWORD, plus the LLM fallback
-# keys commented below. Container-internal values (bind address, inner port)
-# are fixed here on purpose; reachability is controlled by the port mappings.
+# keys commented below. ASR_* and WHISPER_CPP_VERSION configure the asr
+# service. Container-internal values (bind address, inner port) are fixed
+# here on purpose; reachability is controlled by the port mappings.
 
 name: weekly-reports
 
@@ -49,7 +50,7 @@ services:
       # Password for the bootstrapped admin account (default: changeme).
       REPORTS_ADMIN_PASSWORD: "${REPORTS_ADMIN_PASSWORD:-}"
       TZ: Asia/Shanghai
-      NO_PROXY: "127.0.0.1,localhost,host.docker.internal"
+      NO_PROXY: "127.0.0.1,localhost,host.docker.internal,asr"
       # LLM fallback keys for the internal agent when 全局设置 has no stored
       # key. Git tokens are per-user values configured in 全局设置 instead.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
@@ -60,6 +61,43 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  # Local voice model for voice TODOs: whisper.cpp server serving /inference.
+  # Requires a GGML model file in ./data/models (see README → Voice TODO);
+  # set the ASR endpoint in 全局设置 to http://asr:8766/inference. The host
+  # port stays free for the native service by default via ASR_PORT — when
+  # both modes run on one machine, set ASR_PORT to something else in .env.
+  asr:
+    build:
+      context: ./docker/asr
+      args:
+        APT_MIRROR: "${APT_MIRROR:-}"
+        WHISPER_CPP_VERSION: "${WHISPER_CPP_VERSION:-v1.9.3}"
+    image: weekly-reports-asr:latest
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "${ASR_PORT:-8766}:8766"
+    volumes:
+      # One shared model directory: the native install_service flow and this
+      # container both read from data/models; never written by the server.
+      - ./data/models:/models:ro
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8766"
+      - "--model"
+      - "/models/${ASR_MODEL:-ggml-large-v3-turbo-q5_0.bin}"
+      - "--language"
+      - "auto"
+    healthcheck:
+      # bash's /dev/tcp probe: no extra packages needed in the slim image.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8766"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
 volumes:
   reports-data:

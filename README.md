@@ -53,19 +53,20 @@ scripts/uninstall_service.sh
 
 ## Docker Compose
 
-An alternative server deployment mode that runs the backend in a container, with the same data layout as the native service:
+An alternative server deployment mode that runs the backend and the local voice model as containers, with the same data layout as the native service:
 
 ```bash
 docker compose up -d --build
 curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/auth/state"
 ```
 
+- Two services: `reports` (the backend) and `asr` (a local voice model — the whisper.cpp server built from source at `docker/asr/Dockerfile`, pinned by `WHISPER_CPP_VERSION`, default `v1.9.3`). The first build compiles whisper.cpp and takes a few minutes.
 - Data (SQLite, uploads, TLS certificates) lives in a docker-managed named volume (`weekly-reports_reports-data`), never in the checkout and never in the native service's `data/` directory — the volume starts empty and the two modes never share state. It survives `docker compose down`; remove it with `docker compose down -v`, and back it up with `docker compose cp reports:/app/data ./data-backup`.
-- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`, `REPORTS_ADMIN_PASSWORD`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
+- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`, `REPORTS_ADMIN_PASSWORD`, and for the asr service `ASR_PORT`, `ASR_MODEL`, `WHISPER_CPP_VERSION`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
 - The image ships chromium for PDF export with CJK fonts. Set `REPORTS_ADMIN_PASSWORD` in `.env` before the first start so the bootstrapped `darren` admin does not use the default password.
-- Voice TODOs: the whisper.cpp ASR service stays on the host machine; set the ASR endpoint in 全局设置 to `http://host.docker.internal:8766/inference` (the host is reachable through the `host-gateway` mapping).
+- Voice TODOs: put the GGML model in `data/models/` (see Voice TODO below) before starting — the `asr` container mounts that directory read-only and serves `/inference` on container port 8766. Set the ASR endpoint in 全局设置 to `http://asr:8766/inference` (container-to-container over the compose network). The port is also published on the host as `${ASR_PORT:-8766}`; if the native whisper service already listens there, set `ASR_PORT` in `.env` to a different host port. To use a natively installed whisper service instead of the container, point the endpoint at `http://host.docker.internal:8766/inference` (reachable through the `host-gateway` mapping).
 - The self-signed TLS certificate is generated at startup. `REPORTS_TLS_SAN` (defaulting to `REPORTS_HOST` from `.env`) is added to the certificate SANs so the address phones use is covered.
-- On networks where `deb.debian.org` is unreachable, set `APT_MIRROR` (for example `mirrors.tuna.tsinghua.edu.cn`) in `.env` before building.
+- On networks where `deb.debian.org` is unreachable, set `APT_MIRROR` (for example `mirrors.tuna.tsinghua.edu.cn`) in `.env` before building — it applies to both images.
 
 ## Local Tools
 
@@ -79,7 +80,15 @@ curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/auth/state"
 
 - A floating microphone button at the bottom right records while held. The browser only captures audio and converts it to a 16 kHz mono WAV locally (no speech leaves the machine at this stage); Safari and Chrome are supported. Microphone access requires a secure context: use `localhost` or the HTTPS listener (`https://<host>:8443`) from phones.
 - On release, the WAV goes to `POST /api/todos/voice`, which starts a background voice job and returns immediately. Only one voice job runs at a time; while one is active the mic button becomes a stop button that cancels it (`POST /api/voice-jobs/{id}/cancel`), and the progress bubble with the transcript survives page reloads (`GET /api/voice-jobs/active`). The internal agent structures the transcript into one or more TODO items.
-- The ASR service is any OpenAI-compatible transcription endpoint. The default is the bundled whisper.cpp server (`/inference` on port 8766, large-v3-turbo model); install it with `scripts/install_asr_service.sh` after `brew install whisper-cpp` and placing a GGML model under `data/models/`.
+- The ASR service is any OpenAI-compatible transcription endpoint. The bundled choice is the whisper.cpp server (`/inference` on port 8766, large-v3-turbo model), registered as a per-user login service by `scripts/install_asr_service.sh` — same three-platform flow as the main service (macOS LaunchAgent / Linux systemd user unit / Windows Startup-folder `.bat` from Git Bash; inside WSL2 use the Linux flow; `scripts/uninstall_service.sh asr` removes it). It needs two things first:
+  1. a `whisper-server` binary — macOS: `brew install whisper-cpp`; Linux: build once (`git clone https://github.com/ggml-org/whisper.cpp && cmake -S whisper.cpp -B whisper.cpp/build && cmake --build whisper.cpp/build --target whisper-server`, keep `build/bin/whisper-server` on `PATH` or point `WHISPER_SERVER` at it); Windows: a build from the [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases) (or the same CMake build), with `WHISPER_SERVER` pointing at the `.exe`.
+  2. the GGML model under `data/models/` (same file the docker `asr` container mounts):
+
+     ```bash
+     curl -L -o data/models/ggml-large-v3-turbo-q5_0.bin \
+       https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+     # if huggingface.co is unreachable: https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+     ```
 - Transcription requests carry a `language` hint from the 识别语言 dropdown, defaulting to 中文 (`zh`) so short Chinese clips are not mis-detected as English. `自动检测` omits the field so the service decides.
 - Appearance (theme color and light/dark mode) is stored per account server-side; `PUT /api/settings` is a partial update, so each settings panel only writes the keys it manages.
 - If the configured agent fails, the raw transcript still creates TODO item(s) and the UI reports the fallback.
