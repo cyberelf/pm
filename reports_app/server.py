@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import auth
+from . import device_auth
 from .config import (
     APP_VERSION,
     ASR_ENDPOINT_SETTING,
@@ -116,6 +117,11 @@ from .validation import (
 PUBLIC_API_ROUTES = {
     ("GET", "/api/auth/state"),
     ("POST", "/api/auth/login"),
+    # the OAuth-style device flow for CLI clients: start and poll run
+    # without a session (the poll handshake itself is the credential);
+    # approve/deny below require a signed-in browser session
+    ("POST", "/api/device/auth/start"),
+    ("POST", "/api/device/auth/poll"),
 }
 
 ADMIN_ONLY_SETTING_KEYS = {
@@ -435,6 +441,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8"))
 
     def current_user(self, conn):
+        bearer = auth.token_from_bearer_header(self.headers.get("Authorization") or "")
+        if bearer:
+            return auth.user_for_session(conn, bearer)
         header = self.headers.get("Cookie") or ""
         return auth.user_for_session(conn, auth.token_from_cookie_header(header))
 
@@ -461,7 +470,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/auth/logout" and method == "POST":
-                token = auth.token_from_cookie_header(self.headers.get("Cookie") or "")
+                # browsers log out through the cookie, CLI clients through
+                # their Bearer token; both end up deleting the same session
+                token = auth.token_from_bearer_header(self.headers.get("Authorization") or "") or auth.token_from_cookie_header(
+                    self.headers.get("Cookie") or ""
+                )
                 auth.delete_session(conn, token)
                 conn.commit()
                 self.json({"ok": True}, extra_headers=[("Set-Cookie", auth.clear_cookie_header())])
@@ -469,6 +482,27 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/auth/password" and method == "PUT":
                 payload = self.body_json()
                 auth.change_password(conn, user_id, payload.get("old_password"), payload.get("new_password"))
+                conn.commit()
+                self.json({"ok": True})
+                return
+            if path == "/api/device/auth/start" and method == "POST":
+                payload = device_auth.start_device_auth(conn)
+                conn.commit()
+                self.json(payload)
+                return
+            if path == "/api/device/auth/poll" and method == "POST":
+                result = device_auth.poll_device_auth(conn, self.body_json().get("device_code"))
+                conn.commit()
+                self.json(result)
+                return
+            if path == "/api/device/auth/approve" and method == "POST":
+                payload = self.body_json()
+                device_auth.approve_device_auth(conn, payload.get("user_code"), user_id)
+                conn.commit()
+                self.json({"ok": True})
+                return
+            if path == "/api/device/auth/deny" and method == "POST":
+                device_auth.deny_device_auth(conn, self.body_json().get("user_code"))
                 conn.commit()
                 self.json({"ok": True})
                 return
@@ -820,6 +854,9 @@ class Handler(BaseHTTPRequestHandler):
     def serve_static(self, path):
         if path in {"", "/"}:
             file_path = STATIC_DIR / "index.html"
+        elif path == "/device":
+            # standalone device-authorization page for CLI logins
+            file_path = STATIC_DIR / "device.html"
         else:
             file_path = STATIC_DIR / path.lstrip("/")
         if not file_path.exists() or not file_path.is_file():

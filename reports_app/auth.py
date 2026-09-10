@@ -97,9 +97,9 @@ def change_password(conn, user_id, old_password, new_password):
     )
 
 
-def create_session(conn, user_id):
+def create_session(conn, user_id, ttl_days=None):
     token = secrets.token_urlsafe(32)
-    expires = (utc_now() + timedelta(days=SESSION_TTL_DAYS)).isoformat()
+    expires = (utc_now() + timedelta(days=ttl_days or SESSION_TTL_DAYS)).isoformat()
     conn.execute(
         "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
         (token, user_id, iso_now(), expires),
@@ -163,3 +163,13 @@ def token_from_cookie_header(header):
         return ""
     morsel = cookie.get(SESSION_COOKIE)
     return morsel.value if morsel else ""
+
+
+def token_from_bearer_header(header):
+    """Token from an 'Authorization: Bearer <token>' header (CLI clients);
+    empty string when the header is absent or not a bearer token."""
+    header = (header or "").strip()
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return ""
+    return token.strip()

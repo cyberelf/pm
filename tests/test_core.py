@@ -178,6 +178,137 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             update_todo(self.conn, todo_id, {"status": "closed"}, self.user_id)
 
+    def _live_server(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread
+
+    def _raw_request(self, client, method, path, body=None, headers=None):
+        """Request without the default session cookie (device-flow clients,
+        Bearer-token checks)."""
+        client.request(
+            method,
+            path,
+            body=body,
+            headers=dict(headers or {}, **({"Content-Type": "application/json"} if body else {})),
+        )
+        response = client.getresponse()
+        return response.status, json.loads(response.read())
+
+    def test_device_auth_flow_issues_bearer_session(self):
+        server, thread = self._live_server()
+        try:
+            port = server.server_port
+            client = HTTPConnection("127.0.0.1", port, timeout=10)
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/start", body="{}")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["interval"], 5)
+            self.assertLessEqual(payload["expires_in"], 900)
+            device_code, user_code = payload["device_code"], payload["user_code"]
+
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/poll", body=json.dumps({"device_code": device_code}))
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["status"], "pending")
+
+            status, _ = self._raw_request(client, "POST", "/api/device/auth/approve", body=json.dumps({"user_code": user_code}))
+            self.assertEqual(status, 401)
+
+            status, _ = self._raw_request(
+                client,
+                "POST",
+                "/api/device/auth/approve",
+                body=json.dumps({"user_code": user_code.lower().replace("-", "")}),
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 200)
+
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/poll", body=json.dumps({"device_code": device_code}))
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["status"], "approved")
+            token = payload["access_token"]
+            self.assertEqual(payload["user"]["username"], self.user["username"])
+            client.close()
+
+            client = HTTPConnection("127.0.0.1", port, timeout=10)
+            status, payload = self._raw_request(client, "GET", "/api/todos", headers={"Authorization": f"Bearer {token}"})
+            self.assertEqual(status, 200)
+            self.assertIn("todos", payload)
+            client.close()
+
+            client = HTTPConnection("127.0.0.1", port, timeout=10)
+            status, _ = self._raw_request(client, "POST", "/api/auth/logout", body="{}", headers={"Authorization": f"Bearer {token}"})
+            self.assertEqual(status, 200)
+            client.close()
+
+            client = HTTPConnection("127.0.0.1", port, timeout=10)
+            status, _ = self._raw_request(client, "GET", "/api/todos", headers={"Authorization": f"Bearer {token}"})
+            self.assertEqual(status, 401)
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_device_auth_deny_expiry_and_unknown_codes(self):
+        server, thread = self._live_server()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/start", body="{}")
+            self.assertEqual(status, 200)
+            device_code, user_code = payload["device_code"], payload["user_code"]
+
+            status, _ = self._raw_request(
+                client,
+                "POST",
+                "/api/device/auth/approve",
+                body=json.dumps({"user_code": "ZZZZ-ZZZZ"}),
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 400)
+
+            status, _ = self._raw_request(
+                client,
+                "POST",
+                "/api/device/auth/deny",
+                body=json.dumps({"user_code": user_code}),
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 200)
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/poll", body=json.dumps({"device_code": device_code}))
+            self.assertEqual(payload["status"], "denied")
+
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/poll", body=json.dumps({"device_code": "missing"}))
+            self.assertEqual(payload["status"], "expired")
+
+            # an expired code is cleaned up on the next start and cannot be approved
+            row = self.conn.execute("SELECT * FROM device_auth_codes WHERE user_code = ?", (user_code,)).fetchone()
+            self.assertIsNone(row)
+
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/start", body="{}")
+            device_code, user_code = payload["device_code"], payload["user_code"]
+            self.conn.execute(
+                "UPDATE device_auth_codes SET expires_at = ? WHERE device_code = ?",
+                ("2000-01-01T00:00:00+00:00", device_code),
+            )
+            self.conn.commit()
+            status, _ = self._raw_request(
+                client,
+                "POST",
+                "/api/device/auth/approve",
+                body=json.dumps({"user_code": user_code}),
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 400)
+            status, payload = self._raw_request(client, "POST", "/api/device/auth/poll", body=json.dumps({"device_code": device_code}))
+            self.assertEqual(payload["status"], "expired")
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_tls_listener_serves_api_for_secure_context_clients(self):
         openssl = shutil.which("openssl")
         if not openssl:
