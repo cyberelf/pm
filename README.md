@@ -111,7 +111,7 @@ Supported project material types:
 - Plain text: `.txt`
 - PDF: `.pdf`
 
-Markdown and plain text are extracted as UTF-8. PDF files are stored and surfaced in report context with extraction status; text extraction itself is not implemented yet — tracked in [TODO.md](TODO.md).
+Markdown and plain text are extracted as UTF-8. PDF files are parsed server-side with pypdf and surfaced in report context with extraction status; scans or unreadable PDFs are marked failed instead of blocking the report.
 
 ## Report Context
 
@@ -128,6 +128,26 @@ The prompt explicitly asks the model to use these as primary evidence and to say
 python3 -m unittest
 openspec validate "add-weekly-project-management-system"
 ```
+
+## CLI Client
+
+`reports_cli.py` is a standard-library command-line client. Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
+
+```bash
+python3 reports_cli.py login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port
+python3 reports_cli.py whoami
+python3 reports_cli.py projects
+python3 reports_cli.py materials add 周报系统 --text "本周完成设备授权" --title 进展
+python3 reports_cli.py materials add 周报系统 --text - < notes.txt      # pipe content through stdin
+python3 reports_cli.py materials add 周报系统 --file notes.md 设计稿.pdf
+python3 reports_cli.py todos
+python3 reports_cli.py todo add "整理部署文档" -d "补充 GPU compose 说明"
+python3 reports_cli.py todo status 3 doing
+python3 reports_cli.py todo done 3 --project 周报系统 --reason "文档已合并"
+```
+
+- The login exchanges a device code for a long-lived session token (365 days) stored in `<config>/weekly-reports/cli.json` with `0600` permissions; `logout` revokes it server-side. Disabling or deleting a user revokes their CLI sessions too.
+- Requests carry `Authorization: Bearer`, so every authenticated `/api` route works unchanged for CLI clients. The client always bypasses system proxy variables. The global flags `--server`, `--token`, `--insecure`, and `--config` allow scripting without touching the stored credentials.
 
 ## Android Client
 
