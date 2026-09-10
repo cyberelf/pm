@@ -131,7 +131,7 @@ openspec validate "add-weekly-project-management-system"
 
 ## CLI Client
 
-`reports_cli.py` is a standard-library command-line client. Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
+`reports_cli.py` is a standard-library command-line client. To use it as a command, symlink it onto your PATH (`ln -sf "$PWD/reports_cli.py" ~/.local/bin/reports-cli`; on Windows create a `reports-cli.cmd` shim running `python path\to\reports_cli.py %*`). Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
 
 ```bash
 python3 reports_cli.py login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port
