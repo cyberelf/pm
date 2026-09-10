@@ -131,19 +131,19 @@ openspec validate "add-weekly-project-management-system"
 
 ## CLI Client
 
-`zr` is the standard-library command-line client (`zr.py` in the repo root). To use it as a command, symlink it onto your PATH (`ln -sf "$PWD/zr.py" ~/.local/bin/zr`; on Windows create a `zr.cmd` shim running `@python path\to\zr.py %*`). Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
+`zreport` is the standard-library command-line client (`zreport.py` in the repo root). To use it as a command, symlink it onto your PATH (`ln -sf "$PWD/zreport.py" ~/.local/bin/zreport`; on Windows create a `zreport.cmd` shim running `@python path\to\zreport.py %*`). Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
 
 ```bash
-zr login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port
-zr whoami
-zr projects
-zr materials add 周报系统 --text "本周完成设备授权" --title 进展
-zr materials add 周报系统 --text - < notes.txt      # pipe content through stdin
-zr materials add 周报系统 --file notes.md 设计稿.pdf
-zr todos
-zr todo add "整理部署文档" -d "补充 GPU compose 说明"
-zr todo status 3 doing
-zr todo done 3 --project 周报系统 --reason "文档已合并"
+zreport login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port
+zreport whoami
+zreport projects
+zreport materials add 周报系统 --text "本周完成设备授权" --title 进展
+zreport materials add 周报系统 --text - < notes.txt      # pipe content through stdin
+zreport materials add 周报系统 --file notes.md 设计稿.pdf
+zreport todos
+zreport todo add "整理部署文档" -d "补充 GPU compose 说明"
+zreport todo status 3 doing
+zreport todo done 3 --project 周报系统 --reason "文档已合并"
 ```
 
 - The login exchanges a device code for a long-lived session token (365 days) stored in `<config>/zreport/cli.json` with `0600` permissions; `logout` revokes it server-side. Disabling or deleting a user revokes their CLI sessions too.
