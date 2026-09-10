@@ -11,7 +11,7 @@ OS="$(uname -s)"
 STARTUP_DIR="${APPDATA:-$HOME/AppData/Roaming}/Microsoft/Windows/Start Menu/Programs/Startup"
 
 case "$TARGET" in
-  reports) LABEL="com.cyberelf.weeklyreports"; UNIT_NAME="weekly-reports" ;;
+  reports) LABEL="com.cyberelf.zreport"; UNIT_NAME="zreport" ;;
   asr)     LABEL="com.cyberelf.whisperasr";    UNIT_NAME="whisper-asr" ;;
   *) echo "unknown target: $TARGET (use 'reports' or 'asr')" >&2; exit 1 ;;
 esac

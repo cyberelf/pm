@@ -124,7 +124,7 @@ Linux)
 
   cat > "$UNIT" <<EOF
 [Unit]
-Description=whisper.cpp ASR server for weekly reports
+Description=whisper.cpp ASR server for zreport
 
 [Service]
 ExecStart="$SERVER" --host 127.0.0.1 --port $ASR_PORT --model "$MODEL" --language auto

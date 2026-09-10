@@ -1,4 +1,4 @@
-# Weekly Reports Workspace
+# zreport (Zero Report)
 
 Local project management workspace for weekly plans, updates, source materials, GitHub/GitLab activity, generated Markdown reports, and deterministic risk warnings. Accounts are managed by a system administrator; every user only sees their own projects, TODOs, and voice jobs.
 
@@ -51,7 +51,7 @@ scripts/uninstall_service.sh            # add "asr" to remove the voice service 
 One script, three platforms:
 
 - macOS: LaunchAgent (launchd), as before.
-- Linux: systemd user service `weekly-reports.service`; run `sudo loginctl enable-linger $USER` once so it also survives logout.
+- Linux: systemd user service `zreport.service`; run `sudo loginctl enable-linger $USER` once so it also survives logout.
 - Windows: a `.bat` in the Start Menu Startup folder (run the script from Git Bash); a console window appears at login — minimize it. Inside WSL2, use the Linux flow instead.
 
 ## Docker Compose
@@ -64,7 +64,7 @@ curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/auth/state"
 ```
 
 - Two services: `reports` (the backend) and `asr` (a local voice model — the whisper.cpp server built from source at `docker/asr/Dockerfile`, pinned by `WHISPER_CPP_VERSION`, default `v1.9.3`). The first build compiles whisper.cpp and takes a few minutes.
-- Data (SQLite, uploads, TLS certificates) lives in a docker-managed named volume (`weekly-reports_reports-data`), never in the checkout and never in the native service's `data/` directory — the volume starts empty and the two modes never share state. It survives `docker compose down`; remove it with `docker compose down -v`, and back it up with `docker compose cp reports:/app/data ./data-backup`.
+- Data (SQLite, uploads, TLS certificates) lives in a docker-managed named volume (`zreport_reports-data`), never in the checkout and never in the native service's `data/` directory — the volume starts empty and the two modes never share state. It survives `docker compose down`; remove it with `docker compose down -v`, and back it up with `docker compose cp reports:/app/data ./data-backup`. Deployments from before the zreport rename still hold their data in `weekly-reports_reports-data`; copy it across once with `docker run --rm -v weekly-reports_reports-data:/from -v zreport_reports-data:/to alpine sh -c 'cp -a /from/. /to/'`.
 - Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`, `REPORTS_ADMIN_PASSWORD`, and for the asr service `ASR_PORT`, `ASR_MODEL`, `WHISPER_CPP_VERSION`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
 - The image ships chromium for PDF export with CJK fonts. Set `REPORTS_ADMIN_PASSWORD` in `.env` before the first start so the bootstrapped `darren` admin does not use the default password.
 - Voice TODOs: put the GGML model in `data/models/` (see Voice TODO below) before starting — the `asr` container mounts that directory read-only and serves `/inference` on container port 8766. Set the ASR endpoint in 全局设置 to `http://asr:8766/inference` (container-to-container over the compose network). The port is also published on the host as `${ASR_PORT:-8766}`; if the native whisper service already listens there, set `ASR_PORT` in `.env` to a different host port. To use a natively installed whisper service instead of the container, point the endpoint at `http://host.docker.internal:8766/inference` (reachable through the `host-gateway` mapping).

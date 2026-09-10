@@ -36,9 +36,9 @@ if [ -n "$tls_port" ] && command -v openssl >/dev/null 2>&1 && [ ! -f "$tls_cert
     done
     if ! openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
         -keyout "$tls_key" -out "$tls_cert" \
-        -subj "/CN=weeklyreports" -addext "subjectAltName=$san" >/dev/null 2>&1; then
+        -subj "/CN=zreport" -addext "subjectAltName=$san" >/dev/null 2>&1; then
         openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-            -keyout "$tls_key" -out "$tls_cert" -subj "/CN=weeklyreports" >/dev/null 2>&1
+            -keyout "$tls_key" -out "$tls_cert" -subj "/CN=zreport" >/dev/null 2>&1
     fi
 fi
 

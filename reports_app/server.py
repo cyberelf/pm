@@ -267,9 +267,9 @@ def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=No
     if tls_server:
         threading.Thread(target=tls_server.serve_forever, daemon=True).start()
     try:
-        print(f"Weekly reports workspace running at http://{host}:{port}")
+        print(f"zreport workspace running at http://{host}:{port}")
         if tls_server:
-            print(f"Weekly reports workspace running at https://{host}:{tls_server.server_port} (self-signed TLS)")
+            print(f"zreport workspace running at https://{host}:{tls_server.server_port} (self-signed TLS)")
         httpd.serve_forever()
     finally:
         stop.set()
@@ -353,7 +353,7 @@ def schedule_due(schedule, now=None):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "WeeklyReports/0.1"
+    server_version = "ZReport/1.0"
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):

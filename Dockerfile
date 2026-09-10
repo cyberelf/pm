@@ -1,4 +1,4 @@
-# Weekly Reports server image for the docker compose deployment mode.
+# zreport server image for the docker compose deployment mode.
 #
 # Ships chromium for server-side PDF export and Noto CJK fonts so Chinese
 # report content renders in exported PDFs. Git hosts are reached through

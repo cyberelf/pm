@@ -20,7 +20,7 @@ from .validation import ValidationError, validate_gitlab_server
 API_PREFIX = "api/v4"
 PAGE_SIZE = 100
 MAX_PAGES = 5
-USER_AGENT = "weekly-reports"
+USER_AGENT = "zreport"
 
 _insecure_context = None
 

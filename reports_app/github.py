@@ -16,7 +16,7 @@ from .config import TRACK_ALL_BRANCHES
 API_BASE = "https://api.github.com"
 PAGE_SIZE = 100
 MAX_PAGES = 5
-USER_AGENT = "weekly-reports"
+USER_AGENT = "zreport"
 
 
 def _request(path, token, timeout):

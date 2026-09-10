@@ -1,4 +1,4 @@
-# Docker Compose deployment mode for the Weekly Reports server.
+# Docker Compose deployment mode for the zreport server.
 #
 #   docker compose up -d --build
 #   curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/state"
@@ -10,7 +10,7 @@
 # service. Container-internal values (bind address, inner port) are fixed
 # here on purpose; reachability is controlled by the port mappings.
 
-name: weekly-reports
+name: zreport
 
 services:
   reports:
@@ -18,7 +18,7 @@ services:
       context: .
       args:
         APT_MIRROR: "${APT_MIRROR:-}"
-    image: weekly-reports:latest
+    image: zreport:latest
     restart: unless-stopped
     # Fixed unprivileged runtime uid; the named volume is initialized with
     # matching ownership from the image (see the mkdir/chown in the Dockerfile).
@@ -73,7 +73,7 @@ services:
       args:
         APT_MIRROR: "${APT_MIRROR:-}"
         WHISPER_CPP_VERSION: "${WHISPER_CPP_VERSION:-v1.9.3}"
-    image: weekly-reports-asr:latest
+    image: zreport-asr:latest
     restart: unless-stopped
     user: "1000:1000"
     ports:
