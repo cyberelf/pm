@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Command-line client for the Weekly Reports server.
+"""Command-line client (zr) for the zreport server.
 
 Standard library only. Sign in once with the OAuth-style device flow
-(`reports-cli login`), then work with projects, materials, and TODOs from
+(`zr login`), then work with projects, materials, and TODOs from
 the terminal:
 
-    python3 reports_cli.py login --server http://127.0.0.1:8765
-    python3 reports_cli.py projects
-    python3 reports_cli.py materials add 周报系统 --text "本周完成设备授权" --title 进展
-    python3 reports_cli.py materials add 周报系统 --file notes.md 设计稿.pdf
-    python3 reports_cli.py todos
-    python3 reports_cli.py todo add "整理部署文档" -d "补充 GPU compose 说明"
-    python3 reports_cli.py todo status 3 doing
-    python3 reports_cli.py todo done 3 --project 周报系统 --reason "文档已合并"
+    python3 zr.py login --server http://127.0.0.1:8765
+    python3 zr.py projects
+    python3 zr.py materials add 周报系统 --text "本周完成设备授权" --title 进展
+    python3 zr.py materials add 周报系统 --file notes.md 设计稿.pdf
+    python3 zr.py todos
+    python3 zr.py todo add "整理部署文档" -d "补充 GPU compose 说明"
+    python3 zr.py todo status 3 doing
+    python3 zr.py todo done 3 --project 周报系统 --reason "文档已合并"
 
-The token is stored in <config>/weekly-reports/cli.json (0600). Self-signed
+The token is stored in <config>/zreport/cli.json (0600). Self-signed
 TLS: log in with --insecure once and the choice is remembered.
 """
 
@@ -46,7 +46,7 @@ class CliError(Exception):
 
 def default_config_path():
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return Path(base) / "weekly-reports" / "cli.json"
+    return Path(base) / "zreport" / "cli.json"
 
 
 def load_config(path):
@@ -333,11 +333,11 @@ def cmd_todo_done(args, config, config_path):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="reports-cli", description="Weekly Reports 命令行客户端")
+    parser = argparse.ArgumentParser(prog="zr", description="zreport (Zero Report) 命令行客户端")
     parser.add_argument("--server", help=f"服务地址（默认 {DEFAULT_SERVER}，登录后取自配置）")
     parser.add_argument("--token", help="直接使用给定的 Bearer token（默认取自配置）")
     parser.add_argument("--insecure", action="store_true", help="跳过自签名 TLS 证书校验")
-    parser.add_argument("--config", help="凭据文件路径（默认 <config>/weekly-reports/cli.json）")
+    parser.add_argument("--config", help="凭据文件路径（默认 <config>/zreport/cli.json）")
     sub = parser.add_subparsers(dest="command", required=True)
 
     login = sub.add_parser("login", help="设备授权登录")

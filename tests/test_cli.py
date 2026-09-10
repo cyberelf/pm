@@ -1,4 +1,4 @@
-"""End-to-end tests for the reports_cli client against a live test server.
+"""End-to-end tests for the zr command-line client against a live test server.
 
 The device-authorization browser step is simulated server-side: the test
 finds the pending user code in the database and approves it through the API
@@ -17,7 +17,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-import reports_cli
+import zr
 from reports_app import auth
 from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db
 from reports_app.server import Handler
@@ -55,7 +55,7 @@ class CliTest(unittest.TestCase):
     def run_cli(self, *argv):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            code = reports_cli.main(list(argv), config_file=self.config_path)
+            code = zr.main(list(argv), config_file=self.config_path)
         return code, buffer.getvalue()
 
     def _approve_pending_code(self):
@@ -81,8 +81,8 @@ class CliTest(unittest.TestCase):
         login_result = {}
 
         def run_login():
-            with mock.patch("reports_cli.time.sleep", new=lambda seconds: None), redirect_stdout(io.StringIO()):
-                login_result["code"] = reports_cli.main(
+            with mock.patch("zr.time.sleep", new=lambda seconds: None), redirect_stdout(io.StringIO()):
+                login_result["code"] = zr.main(
                     ["login", "--server", self.url], config_file=self.config_path
                 )
 
