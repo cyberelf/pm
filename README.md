@@ -68,6 +68,13 @@ curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/auth/state"
 - Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`, `REPORTS_ADMIN_PASSWORD`, and for the asr service `ASR_PORT`, `ASR_MODEL`, `WHISPER_CPP_VERSION`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
 - The image ships chromium for PDF export with CJK fonts. Set `REPORTS_ADMIN_PASSWORD` in `.env` before the first start so the bootstrapped `darren` admin does not use the default password.
 - Voice TODOs: put the GGML model in `data/models/` (see Voice TODO below) before starting — the `asr` container mounts that directory read-only and serves `/inference` on container port 8766. Set the ASR endpoint in 全局设置 to `http://asr:8766/inference` (container-to-container over the compose network). The port is also published on the host as `${ASR_PORT:-8766}`; if the native whisper service already listens there, set `ASR_PORT` in `.env` to a different host port. To use a natively installed whisper service instead of the container, point the endpoint at `http://host.docker.internal:8766/inference` (reachable through the `host-gateway` mapping).
+- NVIDIA GPU hosts: layer on the GPU override so the `asr` container runs whisper.cpp on the GPU instead of the CPU (needs nvidia-container-toolkit):
+
+  ```bash
+  docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
+  ```
+
+  This builds `docker/asr/Dockerfile.cuda` (same runtime layout, CUDA kernels; the first build compiles for every architecture in the list and takes a while). Extra `.env` knobs: `CUDA_VERSION` (default `12.4.1`) and `CUDA_ARCHITECTURES` (default `75;80;90` — covers Turing through Hopper; set `120` for RTX 50 / Blackwell consumer cards). The large-v3-turbo model fits in roughly 6 GB of VRAM; use a smaller GGML model on smaller cards.
 - The self-signed TLS certificate is generated at startup. `REPORTS_TLS_SAN` (defaulting to `REPORTS_HOST` from `.env`) is added to the certificate SANs so the address phones use is covered.
 - On networks where `deb.debian.org` is unreachable, set `APT_MIRROR` (for example `mirrors.tuna.tsinghua.edu.cn`) in `.env` before building — it applies to both images.
 

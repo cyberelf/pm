@@ -1,0 +1,83 @@
+# whisper.cpp ASR server image with CUDA acceleration for NVIDIA GPUs.
+#
+# Not built directly — layered in through the compose override:
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
+# Same layout as Dockerfile (CPU): statically linked whisper-server, model
+# mounted read-only from ./data/models, /inference on 8766. Needs
+# nvidia-container-toolkit on the host. The first build compiles the CUDA
+# kernels for every architecture in CUDA_ARCHITECTURES and takes a while.
+#
+# Architecture notes: a cubin runs on same-major devices with an equal or
+# higher minor revision, so sm_80 covers RTX 30xx (sm_86) and RTX 40xx
+# (sm_89); sm_75 covers Turing/GTX 16xx; sm_90 covers Hopper. RTX 50 /
+# Blackwell consumer cards are sm_120 — set CUDA_ARCHITECTURES=120 in .env.
+ARG CUDA_VERSION="12.4.1"
+
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS build
+
+# Knobs shared with the CPU image plus the CUDA ones, all overridable from
+# .env via compose. APT_MIRROR only mirrors the Ubuntu base repos; the
+# NVIDIA CUDA apt repo is reached directly.
+ARG APT_MIRROR=""
+ARG WHISPER_CPP_VERSION="v1.9.3"
+ARG CUDA_ARCHITECTURES="75;80;90"
+
+RUN if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|archive.ubuntu.com|$APT_MIRROR|g; s|security.ubuntu.com|$APT_MIRROR|g" /etc/apt/sources.list; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch "$WHISPER_CPP_VERSION" \
+        https://github.com/ggml-org/whisper.cpp /src/whisper.cpp
+
+# GGML_NATIVE stays on (the default): this image is built on the GPU host
+# that also runs it, so the CPU-side dispatch can use the host instruction
+# set. Only the GPU kernels need the explicit architecture list.
+RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_CUDA=1 \
+        -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHITECTURES" \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DWHISPER_BUILD_TESTS=OFF \
+    && cmake --build /src/whisper.cpp/build --target whisper-server -j"$(nproc)"
+
+# Older whisper.cpp tags named the binary `server`; normalize so the runtime
+# stage has one known path regardless of the tag the image was built from.
+RUN mkdir -p /out \
+    && if [ -f /src/whisper.cpp/build/bin/whisper-server ]; then \
+           cp /src/whisper.cpp/build/bin/whisper-server /out/whisper-server; \
+       else \
+           cp /src/whisper.cpp/build/bin/server /out/whisper-server; \
+       fi
+
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04
+ARG CUDA_VERSION
+
+ARG APT_MIRROR=""
+# cudart ships with the runtime image; the ggml CUDA backend additionally
+# needs cublas/cublasLt (from the CUDA apt repo configured in the base
+# image) and the OpenMP runtime.
+RUN CUBLAS_PKG="libcublas-$(echo "$CUDA_VERSION" | cut -d. -f1-2 | tr . -)" \
+    && if [ -n "$APT_MIRROR" ]; then \
+        sed -i "s|archive.ubuntu.com|$APT_MIRROR|g; s|security.ubuntu.com|$APT_MIRROR|g" /etc/apt/sources.list; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "$CUBLAS_PKG" libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /out/whisper-server /usr/local/bin/whisper-server
+
+# Same fixed uid as the reports container; the nvidia container toolkit
+# mounts the driver libraries world-readable, so the server can use the GPU
+# unprivileged. The model mount is read-only and the server only writes to
+# stdout/stderr (docker logs).
+USER 1000:1000
+
+EXPOSE 8766
+
+ENTRYPOINT ["/usr/local/bin/whisper-server"]

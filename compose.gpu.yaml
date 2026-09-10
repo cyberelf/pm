@@ -1,0 +1,27 @@
+# NVIDIA GPU variant of the docker compose deployment mode. Layer it on
+# top of compose.yaml (requires nvidia-container-toolkit on the host):
+#
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d --build
+#
+# Only the asr service changes: it builds docker/asr/Dockerfile.cuda (the
+# CUDA build of whisper.cpp; knobs from .env: CUDA_VERSION,
+# CUDA_ARCHITECTURES, WHISPER_CPP_VERSION, APT_MIRROR) and gets all host
+# GPUs reserved. reports is untouched — it never touches the model. On
+# hosts without NVIDIA driver support keep the plain compose.yaml: a CUDA
+# container cannot start there.
+
+services:
+  asr:
+    build:
+      dockerfile: Dockerfile.cuda
+      args:
+        CUDA_VERSION: "${CUDA_VERSION:-12.4.1}"
+        CUDA_ARCHITECTURES: "${CUDA_ARCHITECTURES:-75;80;90}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
