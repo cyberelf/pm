@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zreport"
-description = "zreport (Zero Report) 命令行客户端：本地周报工作台的项目/资料/TODO 终端工具"
+description = "zreport (Zero Report) command-line client for a local weekly-report workspace (projects, materials, TODOs)"
 readme = "README-cli.md"
 license = "MIT"
 license-files = ["LICENSE"]
