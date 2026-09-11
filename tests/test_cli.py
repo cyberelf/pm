@@ -21,6 +21,7 @@ import zreport
 from reports_app import auth
 from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db
 from reports_app.server import Handler
+from reports_app.timeutil import current_week_key, iso_now
 
 
 class CliTest(unittest.TestCase):
@@ -108,7 +109,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(self.user["username"], output)
 
-        code, output = self.run_cli("projects")
+        code, output = self.run_cli("project", "list")
         self.assertEqual(code, 0)
         self.assertIn("演示项目", output)
 
@@ -119,10 +120,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(todo["description"], "补充 GPU compose 说明")
         self.assertEqual(todo["status"], "todo")
 
-        code, output = self.run_cli("todos")
+        code, output = self.run_cli("todo", "list")
         self.assertEqual(code, 0)
         self.assertIn("整理部署文档", output)
-        code, output = self.run_cli("todos", "--all")
+        code, output = self.run_cli("todo", "list", "--all")
         self.assertEqual(code, 0)
 
         code, output = self.run_cli("todo", "status", str(todo["id"]), "doing")
@@ -131,7 +132,7 @@ class CliTest(unittest.TestCase):
 
         note_path = Path(self.tmp.name) / "本周记录.md"
         note_path.write_text("# 本周记录\n\nCLI 上传测试内容。", encoding="utf-8")
-        code, output = self.run_cli("materials", "add", "演示项目", "--text", "本周进展顺利", "--title", "进展")
+        code, output = self.run_cli("project", "演示项目", "materials", "add", "--text", "本周进展顺利", "--title", "进展")
         self.assertEqual(code, 0)
         manual = self.conn.execute(
             "SELECT * FROM materials WHERE source_type = 'manual' AND project_id = ? ORDER BY id DESC LIMIT 1",
@@ -140,7 +141,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manual["filename"], "进展")
         self.assertIn("本周进展顺利", manual["extracted_text"])
 
-        code, output = self.run_cli("materials", "add", "演示项目", "--file", str(note_path))
+        code, output = self.run_cli("project", "演示项目", "materials", "add", "--file", str(note_path))
         self.assertEqual(code, 0)
         uploaded = self.conn.execute(
             "SELECT * FROM materials WHERE source_type = 'upload' AND project_id = ? ORDER BY id DESC LIMIT 1",
@@ -160,7 +161,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("TODO 完成：整理部署文档", archived["filename"])
 
     def test_cli_requires_login_and_reports_server_errors(self):
-        code, output = self.run_cli("projects")
+        code, output = self.run_cli("project", "list")
         self.assertEqual(code, 1)
         code, _ = self.run_cli("--server", self.url, "todo", "add", "未登录也应失败")
         self.assertEqual(code, 1)
@@ -173,11 +174,11 @@ class CliTest(unittest.TestCase):
         self.config_path.write_text(json.dumps(config), encoding="utf-8")
         code, _ = self.run_cli("todo", "status", "999", "doing")
         self.assertEqual(code, 1)
-        code, _ = self.run_cli("materials", "add", "不存在", "--text", "内容")
+        code, _ = self.run_cli("project", "不存在", "materials", "add", "--text", "内容")
         self.assertEqual(code, 1)
-        code, _ = self.run_cli("materials", "add", "演示项目", "--file", "missing.md")
+        code, _ = self.run_cli("project", "演示项目", "materials", "add", "--file", "missing.md")
         self.assertEqual(code, 1)
-        code, _ = self.run_cli("materials", "add", "演示项目", "--text", "  ")
+        code, _ = self.run_cli("project", "演示项目", "materials", "add", "--text", "  ")
         self.assertEqual(code, 1)
 
 
@@ -189,6 +190,45 @@ class CliTest(unittest.TestCase):
             "[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] unknown error"
         ))
         self.assertEqual(zreport.connection_error_hint("[Errno 61] Connection refused"), "")
+
+    def test_project_weekly_list_and_show(self):
+        config = {"server": self.url, "token": auth.create_session(self.conn, self.user["id"]), "user": self.user["username"]}
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        self.conn.commit()
+
+        def seed(week_key):
+            self.conn.execute(
+                "INSERT INTO weekly_reports (project_id, week_key, content_md, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    self.project_id,
+                    week_key,
+                    f"# Report {week_key}\n\n## Done\n\n- shipped the {week_key} feature\n",
+                    iso_now(),
+                    iso_now(),
+                ),
+            )
+
+        seed("2026-W01")
+        seed(current_week_key("Asia/Shanghai"))
+        self.conn.commit()
+
+        code, output = self.run_cli("project", "演示项目", "weekly", "list")
+        self.assertEqual(code, 0)
+        self.assertIn("2026-W01", output)
+        self.assertIn(current_week_key("Asia/Shanghai"), output)
+
+        code, output = self.run_cli("project", "演示项目", "weekly", "show", "2026-W01")
+        self.assertEqual(code, 0)
+        self.assertIn("# Report 2026-W01", output)
+        self.assertIn("- shipped the 2026-W01 feature", output)
+
+        code, output = self.run_cli("project", "演示项目", "weekly", "show")
+        self.assertEqual(code, 0)
+        self.assertIn(f"# Report {current_week_key('Asia/Shanghai')}", output)
+
+        code, output = self.run_cli("project", "演示项目", "weekly", "show", "1999-W01")
+        self.assertEqual(code, 1)
+        self.assertIn("weekly report not found", output)
 
     def test_skill_md_matches_packaged_source(self):
         source = Path(__file__).resolve().parents[1] / "skills" / "zreport" / "SKILL.md"

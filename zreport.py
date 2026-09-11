@@ -25,10 +25,13 @@ import os
 import ssl
 import sys
 import time
+import types
 import unicodedata
 import urllib.error
 import urllib.request
 import webbrowser
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -212,6 +215,48 @@ def print_table(headers, rows):
         print(format_row(row))
 
 
+class _HTMLToText(HTMLParser):
+    """Render server-provided report HTML as readable terminal text."""
+    HEADINGS = {"h1": "# ", "h2": "## ", "h3": "### ", "h4": "#### ", "h5": "#### ", "h6": "#### "}
+    NEWLINE = {"p", "div", "br", "tr", "table", "ul", "ol", "section", "hr", "blockquote"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.HEADINGS:
+            self.parts.append("\n\n" + self.HEADINGS[tag])
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag in self.NEWLINE:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.HEADINGS or tag in self.NEWLINE or tag == "li":
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        self.parts.append(unescape(data))
+
+
+def html_to_text(html):
+    parser = _HTMLToText()
+    parser.feed(html or "")
+    text = "".join(parser.parts)
+    lines = [line.rstrip() for line in text.splitlines()]
+    out, blank = [], 0
+    for line in lines:
+        if not line.strip():
+            blank += 1
+            if blank > 1:
+                continue
+        else:
+            blank = 0
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 # ---------------------------------------------------------------- login
 
 
@@ -298,7 +343,56 @@ def resolve_project(config, ref):
     raise CliError(f"project not found: {ref} (see the projects command)")
 
 
-def cmd_projects(args, config, config_path):
+PROJECT_USAGE = """\
+usage:
+  zreport project list
+  zreport project <project> materials add [--text TEXT | -] [--title TITLE] [--file PATH ...]
+  zreport project <project> weekly list
+  zreport project <project> weekly show [week_key]
+"""
+
+
+def _project_leaf_parser(group):
+    """argparse can't put a positional before subparsers, so the
+    `zreport project <project> <group> ...` grammar is dispatched manually
+    in cmd_project and only the leaf arguments go through argparse."""
+    parser = argparse.ArgumentParser(prog=f"zreport project <project> {group}")
+    sub = parser.add_subparsers(dest="action", required=True)
+    if group == "materials":
+        add = sub.add_parser("add", help="add material (text or file attachment)")
+        add.add_argument("--text", help="text content; pass - to read from stdin")
+        add.add_argument("--title", help="text material title (default: CLI note)")
+        add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .pdf, multiple allowed)")
+    else:
+        sub.add_parser("list", help="list generated weekly reports")
+        show = sub.add_parser("show", help="show a weekly report (default: current week)")
+        show.add_argument("week_key", nargs="?", help="week key like 2026-W37 (default: current week)")
+    return parser
+
+
+def cmd_project(args, config, config_path):
+    rest = args.rest
+    if not rest or rest[0] in ("-h", "--help"):
+        print(PROJECT_USAGE, end="")
+        return 0 if rest else 2
+    if rest[0] == "list":
+        return cmd_project_list(types.SimpleNamespace(), config, config_path)
+    name, rest = rest[0], rest[1:]
+    if not rest or rest[0] not in ("materials", "weekly"):
+        print(PROJECT_USAGE, end="")
+        return 2
+    group, leaf = rest[0], rest[1:]
+    if not leaf:
+        print(PROJECT_USAGE, end="")
+        return 2
+    leaf_ns = _project_leaf_parser(group).parse_args(leaf)
+    leaf_ns.project = name
+    if group == "materials":
+        return cmd_materials_add(leaf_ns, config, config_path)
+    return cmd_weekly_list(leaf_ns, config, config_path) if leaf_ns.action == "list" else cmd_weekly_show(leaf_ns, config, config_path)
+
+
+def cmd_project_list(args, config, config_path):
     require_login(config)
     rows = [
         (
@@ -361,10 +455,44 @@ def cmd_materials_add(args, config, config_path):
     return 0
 
 
+def cmd_weekly_list(args, config, config_path):
+    require_login(config)
+    project = resolve_project(config, args.project)
+    workspace = api_request(config, "GET", f"/api/projects/{project['id']}/workspace")
+    rows = [
+        (
+            item["week_key"],
+            "yes" if item.get("is_current_week") else "",
+            (item.get("updated_at") or "")[:16].replace("T", " "),
+        )
+        for item in workspace.get("report_history") or []
+    ]
+    print(f"Weekly reports of '{project['name']}':")
+    print_table(["WEEK", "CURRENT", "UPDATED"], rows)
+    return 0
+
+
+def cmd_weekly_show(args, config, config_path):
+    require_login(config)
+    project = resolve_project(config, args.project)
+    if args.week_key:
+        report = api_request(config, "GET", f"/api/projects/{project['id']}/reports/{args.week_key}")
+    else:
+        workspace = api_request(config, "GET", f"/api/projects/{project['id']}/workspace")
+        report = workspace.get("report")
+        if not report:
+            raise CliError(
+                f"no weekly report for the current week of '{project['name']}' "
+                f"(weekly list shows the archived ones)"
+            )
+    print(html_to_text(report["content_html"]))
+    return 0
+
+
 # ---------------------------------------------------------------- todos
 
 
-def cmd_todos(args, config, config_path):
+def cmd_todo_list(args, config, config_path):
     require_login(config)
     todos = api_request(config, "GET", "/api/todos").get("todos") or []
     if not args.all:
@@ -446,24 +574,19 @@ def build_parser():
     whoami = sub.add_parser("whoami", help="show the signed-in user")
     whoami.set_defaults(func=cmd_whoami)
 
-    projects = sub.add_parser("projects", help="list projects")
-    projects.set_defaults(func=cmd_projects)
-
-    materials = sub.add_parser("materials", help="project materials")
-    materials_sub = materials.add_subparsers(dest="materials_command", required=True)
-    materials_add = materials_sub.add_parser("add", help="add material (text or file attachment)")
-    materials_add.add_argument("project", help="project ID or name")
-    materials_add.add_argument("--text", help="text content; pass - to read from stdin")
-    materials_add.add_argument("--title", help="text material title (default: CLI note)")
-    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .pdf, multiple allowed)")
-    materials_add.set_defaults(func=cmd_materials_add)
-
-    todos = sub.add_parser("todos", help="list TODOs")
-    todos.add_argument("--all", action="store_true", help="include closed TODOs")
-    todos.set_defaults(func=cmd_todos)
+    project = sub.add_parser(
+        "project",
+        help="project operations: list, <project> materials add, <project> weekly list|show",
+    )
+    project.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    project.set_defaults(func=cmd_project)
 
     todo = sub.add_parser("todo", help="TODO operations")
     todo_sub = todo.add_subparsers(dest="todo_command", required=True)
+    todo_list = todo_sub.add_parser("list", help="list TODOs")
+    todo_list.add_argument("--all", action="store_true", help="include closed TODOs")
+    todo_list.set_defaults(func=cmd_todo_list)
+
     todo_add = todo_sub.add_parser("add", help="create a TODO")
     todo_add.add_argument("title", help="title")
     todo_add.add_argument("-d", "--description", help="details")
