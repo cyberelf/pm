@@ -99,8 +99,18 @@ def api_request(config, method, path, payload=None, timeout=30):
             pass
         raise CliError(f"HTTP {exc.code}: {detail.strip()}") from exc
     except urllib.error.URLError as exc:
-        raise CliError(f"cannot reach {config['server']}: {exc.reason}") from exc
+        hint = connection_error_hint(str(exc.reason))
+        raise CliError(f"无法连接 {config['server']}: {exc.reason}{hint}") from exc
     return json.loads(body) if body else {}
+
+
+def connection_error_hint(reason):
+    """Turn bare SSL noise into an actionable hint."""
+    if "CERTIFICATE_VERIFY_FAILED" in reason:
+        return "（自签名证书会触发此错误：确认地址是否正确，或加 --insecure 跳过校验）"
+    if "CERTIFICATE_REQUIRED" in reason:
+        return "（对端要求客户端证书：该地址大概率不是 zreport 服务，检查地址和端口）"
+    return ""
 
 
 # ---------------------------------------------------------------- output

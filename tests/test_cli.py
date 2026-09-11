@@ -181,5 +181,15 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+    def test_connection_error_hints(self):
+        self.assertIn("--insecure", zreport.connection_error_hint(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate"
+        ))
+        self.assertIn("客户端证书", zreport.connection_error_hint(
+            "[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] unknown error"
+        ))
+        self.assertEqual(zreport.connection_error_hint("[Errno 61] Connection refused"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
