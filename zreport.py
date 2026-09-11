@@ -37,7 +37,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DEFAULT_SERVER = "http://127.0.0.1:8765"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
 MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".pdf": "application/pdf"}
 TODO_STATUSES = ("todo", "doing")
