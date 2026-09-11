@@ -190,6 +190,24 @@ class CliTest(unittest.TestCase):
         ))
         self.assertEqual(zreport.connection_error_hint("[Errno 61] Connection refused"), "")
 
+    def test_skill_md_matches_packaged_source(self):
+        source = Path(__file__).resolve().parents[1] / "skills" / "zreport" / "SKILL.md"
+        self.assertEqual(zreport.SKILL_MD, source.read_text(encoding="utf-8"))
+
+    def test_skill_install_targets_agents_dir(self):
+        workdir = Path(self.tmp.name) / "workdir"
+        workdir.mkdir()
+        cwd = os.getcwd()
+        os.chdir(workdir)
+        try:
+            code, output = self.run_cli("skill", "install")
+            self.assertEqual(code, 0)
+        finally:
+            os.chdir(cwd)
+        installed = workdir / ".agents" / "skills" / "zreport" / "SKILL.md"
+        self.assertTrue(installed.is_file())
+        self.assertEqual(installed.read_text(encoding="utf-8"), zreport.SKILL_MD)
+
     def test_save_config_is_0600_from_creation(self):
         config_path = Path(self.tmp.name) / "nested" / "cli.json"
         old_umask = os.umask(0o000)

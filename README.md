@@ -148,6 +148,7 @@ zreport todo done 3 --project 周报系统 --reason "文档已合并"
 
 - The login exchanges a device code for a long-lived session token (365 days) stored in `<config>/zreport/cli.json` with `0600` permissions; `logout` revokes it server-side. Disabling or deleting a user revokes their CLI sessions too.
 - Requests carry `Authorization: Bearer`, so every authenticated `/api` route works unchanged for CLI clients. The client always bypasses system proxy variables. The global flags `--server`, `--token`, `--insecure`, and `--config` allow scripting without touching the stored credentials.
+- An agent skill (a `SKILL.md` teaching coding agents how to drive the CLI for weekly-report work) ships inside the package: `zreport skill install` writes it to `./.agents/skills/zreport/SKILL.md`, and `zreport skill install --global` to `~/.agents/skills/zreport/SKILL.md`. Point your agent at the `.agents/skills` directory (for Claude Code, symlink it into `~/.claude/skills`).
 
 ## Android Client
 

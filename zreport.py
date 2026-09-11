@@ -37,6 +37,63 @@ __version__ = "1.0.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
 MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".pdf": "application/pdf"}
 TODO_STATUSES = ("todo", "doing")
+# The editable copy lives at skills/zreport/SKILL.md in the repo; this
+# embedded copy ships inside the wheel (the package is a single module), and
+# a test asserts the two stay identical.
+SKILL_MD = """\
+---
+name: zreport
+description: Summarize and organize weekly-report material with the zreport CLI. Use when the user asks to collect or organize this week's work, draft a weekly report, review project progress or TODO status, submit work notes to a project, or manage TODOs.
+---
+
+# Summarize weekly-report material with zreport
+
+zreport is the command-line client of a local weekly-report workspace
+(projects, materials, TODOs, generated weekly reports). Drive the `zreport`
+command only — do not call the server's HTTP API directly.
+
+## Before you start
+
+- Server URL: read `server` from `~/.config/zreport/cli.json` when it exists;
+  otherwise ask the user. Every command also accepts `--server <URL>`.
+- Sign-in check: run `zreport whoami`. If it reports "Not signed in", run
+  `zreport login --server <URL>`: it prints a device code and a `/device`
+  URL. The browser approval step belongs to the user — agents cannot
+  approve their own device.
+
+## Collect the current state (read-only)
+
+- `zreport projects`
+- `zreport todos` and `zreport todos --all` (`--all` includes closed TODOs;
+  the PROJECT column shows which project a closed TODO was archived into)
+
+Limitation: the CLI has no subcommands yet for reading material bodies or
+archived weekly reports. If the task truly needs them, tell the user to
+open an issue at https://github.com/cyberelf/pm/issues instead of working
+around the CLI.
+
+## Organize the summary
+
+- Evidence order: what the user dictates or points at, then active TODOs and
+  TODOs closed this week, then archived TODOs (`todos --all`).
+- Time window: ISO week, timezone Asia/Shanghai.
+- Suggested structure: done this week / in progress / blockers and risks /
+  next week's plan. State only what the evidence supports; say explicitly
+  when nothing new exists instead of padding.
+- Show the draft to the user and get confirmation before writing anything.
+
+## Write back (confirm each item with the user first)
+
+- Text material: `echo "..." | zreport materials add <project ID or name> --text - --title "Title"`
+- Attachments: `zreport materials add <project> --file a.md b.pdf`
+  (supported: .md .markdown .txt .pdf)
+- TODOs: `zreport todo add "Title" -d "Details"`, then
+  `zreport todo status <ID> doing`, then
+  `zreport todo done <ID> -p <project> -r "closing note"` (done archives the
+  TODO as a material of that project).
+- Server-side constraint: only materials created in the current ISO week can
+  be edited or deleted; older ones are locked. Surface server errors as-is.
+"""
 
 
 class CliError(Exception):
@@ -354,6 +411,19 @@ def cmd_todo_done(args, config, config_path):
     return 0
 
 
+# ---------------------------------------------------------------- agent skill
+
+
+def cmd_skill_install(args, config, config_path):
+    base = Path.home() / ".agents" if args.global_install else Path.cwd() / ".agents"
+    target = base / "skills" / "zreport" / "SKILL.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(SKILL_MD, encoding="utf-8")
+    print(f"Skill installed: {target}")
+    print("Point your coding agent at the .agents/skills directory (e.g. symlink it into ~/.claude/skills for Claude Code).")
+    return 0
+
+
 # ---------------------------------------------------------------- parser
 
 
@@ -409,6 +479,18 @@ def build_parser():
     todo_done.add_argument("-p", "--project", required=True, help="project to archive into (ID or name)")
     todo_done.add_argument("-r", "--reason", default="done", help="closing reason (default: done)")
     todo_done.set_defaults(func=cmd_todo_done)
+
+    skill = sub.add_parser("skill", help="manage the agent skill for coding agents")
+    skill_sub = skill.add_subparsers(dest="skill_command", required=True)
+    skill_install = skill_sub.add_parser(
+        "install",
+        help="install the skill into .agents/skills/zreport/ (current directory, or home with --global)",
+    )
+    skill_install.add_argument(
+        "--global", dest="global_install", action="store_true",
+        help="install into ~/.agents instead of ./.agents",
+    )
+    skill_install.set_defaults(func=cmd_skill_install)
 
     return parser
 
