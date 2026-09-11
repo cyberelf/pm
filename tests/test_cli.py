@@ -11,9 +11,9 @@ import os
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -54,7 +54,7 @@ class CliTest(unittest.TestCase):
 
     def run_cli(self, *argv):
         buffer = io.StringIO()
-        with redirect_stdout(buffer):
+        with redirect_stdout(buffer), redirect_stderr(buffer):
             code = zreport.main(list(argv), config_file=self.config_path)
         return code, buffer.getvalue()
 
@@ -189,6 +189,51 @@ class CliTest(unittest.TestCase):
             "[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] unknown error"
         ))
         self.assertEqual(zreport.connection_error_hint("[Errno 61] Connection refused"), "")
+
+    def test_save_config_is_0600_from_creation(self):
+        config_path = Path(self.tmp.name) / "nested" / "cli.json"
+        old_umask = os.umask(0o000)
+        try:
+            # a permissive umask must not leak into the file mode: the old
+            # write_text-then-chmod ordering briefly exposed 0666 files
+            zreport.save_config(config_path, {"token": "t"})
+            self.assertEqual(os.stat(config_path).st_mode & 0o777, 0o600)
+        finally:
+            os.umask(old_umask)
+        # a pre-existing looser file (written by older versions) gets tightened
+        config_path.chmod(0o644)
+        zreport.save_config(config_path, {"token": "t2"})
+        self.assertEqual(os.stat(config_path).st_mode & 0o777, 0o600)
+
+    def test_server_scheme_restricted_and_non_json_response_reported(self):
+        code, output = self.run_cli("--server", "file:///etc/passwd", "whoami")
+        self.assertEqual(code, 1)
+        self.assertIn("仅支持 http", output)
+
+        class HtmlHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"<html><body>not a zreport server</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, fmt, *args):
+                return
+
+        html_server = ThreadingHTTPServer(("127.0.0.1", 0), HtmlHandler)
+        html_thread = threading.Thread(target=html_server.serve_forever, daemon=True)
+        html_thread.start()
+        try:
+            code, output = self.run_cli("--server", f"http://127.0.0.1:{html_server.server_port}", "whoami")
+            self.assertEqual(code, 1)
+            self.assertIn("非 JSON", output)
+            self.assertIn("not a zreport server", output)
+        finally:
+            html_server.shutdown()
+            html_server.server_close()
+            html_thread.join(timeout=2)
 
 
 if __name__ == "__main__":

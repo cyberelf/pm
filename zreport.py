@@ -30,6 +30,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_SERVER = "http://127.0.0.1:8765"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
@@ -62,7 +63,13 @@ def load_config(path):
 def save_config(path, config):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # create with 0600 from the first byte: a plain write_text would briefly
+    # expose the token at the umask's default mode before chmod runs; the
+    # trailing chmod still tightens files written by older versions
+    payload = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(payload)
     path.chmod(0o600)
 
 
@@ -79,6 +86,10 @@ def build_opener(insecure):
 
 
 def api_request(config, method, path, payload=None, timeout=30):
+    server = config["server"].rstrip("/")
+    # keep urllib's file/ftp handlers out of reach via a crafted --server
+    if urlparse(server).scheme not in ("http", "https"):
+        raise CliError(f"不支持的地址：{config['server']}（仅支持 http:// 或 https://）")
     opener = build_opener(not config.get("tls_verify", True))
     data = None
     headers = {}
@@ -87,7 +98,7 @@ def api_request(config, method, path, payload=None, timeout=30):
         headers["Content-Type"] = "application/json"
     if config.get("token"):
         headers["Authorization"] = f"Bearer {config['token']}"
-    request = urllib.request.Request(config["server"].rstrip("/") + path, data=data, headers=headers, method=method)
+    request = urllib.request.Request(server + path, data=data, headers=headers, method=method)
     try:
         with opener.open(request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
@@ -101,7 +112,11 @@ def api_request(config, method, path, payload=None, timeout=30):
     except urllib.error.URLError as exc:
         hint = connection_error_hint(str(exc.reason))
         raise CliError(f"无法连接 {config['server']}: {exc.reason}{hint}") from exc
-    return json.loads(body) if body else {}
+    try:
+        return json.loads(body) if body else {}
+    except ValueError:
+        preview = body.strip()[:120]
+        raise CliError(f"服务返回了非 JSON 内容，该地址可能不是 zreport 服务：{preview}") from None
 
 
 def connection_error_hint(reason):
