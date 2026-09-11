@@ -136,14 +136,16 @@ openspec validate "add-weekly-project-management-system"
 ```bash
 zreport login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port
 zreport whoami
-zreport projects
-zreport materials add 周报系统 --text "本周完成设备授权" --title 进展
-zreport materials add 周报系统 --text - < notes.txt      # pipe content through stdin
-zreport materials add 周报系统 --file notes.md 设计稿.pdf
-zreport todos
+zreport project list
+zreport project 周报系统 weekly list
+zreport project 周报系统 weekly show              # current week; add a week key like 2026-W37 for older ones
+zreport project 周报系统 materials add --text "本周完成设备授权" --title 进展
+zreport project 周报系统 materials add --text - < notes.txt      # pipe content through stdin
+zreport project 周报系统 materials add --file notes.md 设计稿.pdf
+zreport todo list
 zreport todo add "整理部署文档" -d "补充 GPU compose 说明"
 zreport todo status 3 doing
-zreport todo done 3 --project 周报系统 --reason "文档已合并"
+zreport todo done 3 -p 周报系统 --reason "文档已合并"
 ```
 
 - The login exchanges a device code for a long-lived session token (365 days) stored in `<config>/zreport/cli.json` with `0600` permissions; `logout` revokes it server-side. Disabling or deleting a user revokes their CLI sessions too.

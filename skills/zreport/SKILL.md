@@ -20,19 +20,23 @@ command only — do not call the server's HTTP API directly.
 
 ## Collect the current state (read-only)
 
-- `zreport projects`
-- `zreport todos` and `zreport todos --all` (`--all` includes closed TODOs;
-  the PROJECT column shows which project a closed TODO was archived into)
+- `zreport project list`
+- `zreport todo list` and `zreport todo list --all` (`--all` includes closed
+  TODOs; the PROJECT column shows which project a closed TODO was archived into)
+- `zreport project <project> weekly list` — generated weekly reports
+- `zreport project <project> weekly show [week_key]` — report body rendered
+  as text (default week: the current one)
 
-Limitation: the CLI has no subcommands yet for reading material bodies or
-archived weekly reports. If the task truly needs them, tell the user to
-open an issue at https://github.com/cyberelf/pm/issues instead of working
-around the CLI.
+Limitation: the CLI cannot read material bodies yet (uploads are summarized
+server-side, and no subcommand lists materials). If the task truly needs
+them, tell the user to open an issue at https://github.com/cyberelf/pm/issues
+instead of working around the CLI.
 
 ## Organize the summary
 
 - Evidence order: what the user dictates or points at, then active TODOs and
-  TODOs closed this week, then archived TODOs (`todos --all`).
+  TODOs closed this week, then the latest weekly report (`weekly show`) for
+  continuity with last week.
 - Time window: ISO week, timezone Asia/Shanghai.
 - Suggested structure: done this week / in progress / blockers and risks /
   next week's plan. State only what the evidence supports; say explicitly
@@ -41,8 +45,8 @@ around the CLI.
 
 ## Write back (confirm each item with the user first)
 
-- Text material: `echo "..." | zreport materials add <project ID or name> --text - --title "Title"`
-- Attachments: `zreport materials add <project> --file a.md b.pdf`
+- Text material: `echo "..." | zreport project <project> materials add --text - --title "Title"`
+- Attachments: `zreport project <project> materials add --file a.md b.pdf`
   (supported: .md .markdown .txt .pdf)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then
