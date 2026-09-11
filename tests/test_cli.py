@@ -185,7 +185,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("--insecure", zreport.connection_error_hint(
             "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate"
         ))
-        self.assertIn("客户端证书", zreport.connection_error_hint(
+        self.assertIn("client certificate", zreport.connection_error_hint(
             "[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] unknown error"
         ))
         self.assertEqual(zreport.connection_error_hint("[Errno 61] Connection refused"), "")
@@ -208,7 +208,7 @@ class CliTest(unittest.TestCase):
     def test_server_scheme_restricted_and_non_json_response_reported(self):
         code, output = self.run_cli("--server", "file:///etc/passwd", "whoami")
         self.assertEqual(code, 1)
-        self.assertIn("仅支持 http", output)
+        self.assertIn("only http", output)
 
         class HtmlHandler(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -228,7 +228,7 @@ class CliTest(unittest.TestCase):
         try:
             code, output = self.run_cli("--server", f"http://127.0.0.1:{html_server.server_port}", "whoami")
             self.assertEqual(code, 1)
-            self.assertIn("非 JSON", output)
+            self.assertIn("non-JSON", output)
             self.assertIn("not a zreport server", output)
         finally:
             html_server.shutdown()

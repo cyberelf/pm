@@ -7,12 +7,12 @@ the terminal:
 
     python3 zreport.py login --server http://127.0.0.1:8765
     python3 zreport.py projects
-    python3 zreport.py materials add 周报系统 --text "本周完成设备授权" --title 进展
-    python3 zreport.py materials add 周报系统 --file notes.md 设计稿.pdf
+    python3 zreport.py materials add my-project --text "shipped device auth" --title progress
+    python3 zreport.py materials add my-project --file notes.md spec.pdf
     python3 zreport.py todos
-    python3 zreport.py todo add "整理部署文档" -d "补充 GPU compose 说明"
+    python3 zreport.py todo add "write deploy docs" -d "include the GPU compose guide"
     python3 zreport.py todo status 3 doing
-    python3 zreport.py todo done 3 --project 周报系统 --reason "文档已合并"
+    python3 zreport.py todo done 3 --project my-project --reason "merged"
 
 The token is stored in <config>/zreport/cli.json (0600). Self-signed
 TLS: log in with --insecure once and the choice is remembered.
@@ -90,7 +90,7 @@ def api_request(config, method, path, payload=None, timeout=30):
     server = config["server"].rstrip("/")
     # keep urllib's file/ftp handlers out of reach via a crafted --server
     if urlparse(server).scheme not in ("http", "https"):
-        raise CliError(f"不支持的地址：{config['server']}（仅支持 http:// 或 https://）")
+        raise CliError(f"unsupported server URL: {config['server']} (only http:// or https://)")
     opener = build_opener(not config.get("tls_verify", True))
     data = None
     headers = {}
@@ -112,20 +112,20 @@ def api_request(config, method, path, payload=None, timeout=30):
         raise CliError(f"HTTP {exc.code}: {detail.strip()}") from exc
     except urllib.error.URLError as exc:
         hint = connection_error_hint(str(exc.reason))
-        raise CliError(f"无法连接 {config['server']}: {exc.reason}{hint}") from exc
+        raise CliError(f"cannot reach {config['server']}: {exc.reason}{hint}") from exc
     try:
         return json.loads(body) if body else {}
     except ValueError:
         preview = body.strip()[:120]
-        raise CliError(f"服务返回了非 JSON 内容，该地址可能不是 zreport 服务：{preview}") from None
+        raise CliError(f"server returned non-JSON content; this is probably not a zreport server: {preview}") from None
 
 
 def connection_error_hint(reason):
     """Turn bare SSL noise into an actionable hint."""
     if "CERTIFICATE_VERIFY_FAILED" in reason:
-        return "（自签名证书会触发此错误：确认地址是否正确，或加 --insecure 跳过校验）"
+        return " (self-signed certificates trigger this: double-check the URL, or pass --insecure to skip verification)"
     if "CERTIFICATE_REQUIRED" in reason:
-        return "（对端要求客户端证书：该地址大概率不是 zreport 服务，检查地址和端口）"
+        return " (the peer demands a client certificate: this is probably not a zreport server, check URL and port)"
     return ""
 
 
@@ -164,13 +164,13 @@ def cmd_login(args, config, config_path):
     start = api_request(login_config, "POST", "/api/device/auth/start", payload={}, timeout=30)
     user_code = start["user_code"]
     url = server + start.get("verification_path", "/device")
-    print(f"1. 打开授权页面: {url}")
+    print(f"1. Open the authorization page: {url}")
     try:
         webbrowser.open(url)
     except Exception:
         pass
-    print(f"2. 登录后输入授权码: {user_code}")
-    print("等待授权", end="", flush=True)
+    print(f"2. Sign in and enter the code: {user_code}")
+    print("waiting for approval", end="", flush=True)
 
     deadline = time.monotonic() + min(int(start.get("expires_in", 900)), LOGIN_TIMEOUT_SECONDS)
     interval = max(1, int(start.get("interval", 5)))
@@ -187,13 +187,13 @@ def cmd_login(args, config, config_path):
             config["token"] = result["access_token"]
             config["user"] = (result.get("user") or {}).get("username")
             save_config(config_path, config)
-            print(f"已登录为 {config['user']}（凭据保存在 {config_path}）")
+            print(f"Signed in as {config['user']} (credentials saved to {config_path})")
             return 0
         if status == "denied":
-            raise CliError("授权被拒绝")
-        raise CliError("授权码已过期，请重新登录")
+            raise CliError("authorization denied")
+        raise CliError("device code expired, log in again")
     print()
-    raise CliError("等待授权超时，请重新登录")
+    raise CliError("timed out waiting for approval, log in again")
 
 
 def cmd_logout(args, config, config_path):
@@ -205,7 +205,7 @@ def cmd_logout(args, config, config_path):
     config.pop("token", None)
     config.pop("user", None)
     save_config(config_path, config)
-    print("已退出登录")
+    print("Signed out")
     return 0
 
 
@@ -213,10 +213,10 @@ def cmd_whoami(args, config, config_path):
     state = api_request(config, "GET", "/api/auth/state")
     user = state.get("current_user")
     if not user:
-        print("未登录（运行 login 子命令）")
+        print("Not signed in (run the login command)")
         return 1
-    role = "管理员" if user.get("is_admin") else "用户"
-    print(f"{user['username']}（{role}） @ {config['server']}（服务版本 v{state.get('version', '?')}）")
+    role = "admin" if user.get("is_admin") else "user"
+    print(f"{user['username']} ({role}) @ {config['server']} (server v{state.get('version', '?')})")
     return 0
 
 
@@ -225,7 +225,7 @@ def cmd_whoami(args, config, config_path):
 
 def require_login(config):
     if not config.get("token"):
-        raise CliError("尚未登录：先运行 login 子命令")
+        raise CliError("not signed in: run the login command first")
 
 
 def fetch_projects(config):
@@ -238,7 +238,7 @@ def resolve_project(config, ref):
     for project in projects:
         if str(project["id"]) == str(ref) or project["name"] == ref:
             return project
-    raise CliError(f"找不到项目：{ref}（用 projects 子命令查看列表）")
+    raise CliError(f"project not found: {ref} (see the projects command)")
 
 
 def cmd_projects(args, config, config_path):
@@ -253,7 +253,7 @@ def cmd_projects(args, config, config_path):
         )
         for project in fetch_projects(config)
     ]
-    print_table(["ID", "项目", "状态", "时区", "更新时间"], rows)
+    print_table(["ID", "PROJECT", "STATUS", "TIMEZONE", "UPDATED"], rows)
     return 0
 
 
@@ -266,11 +266,11 @@ def cmd_materials_add(args, config, config_path):
             path = Path(raw_path).expanduser()
             ext = path.suffix.lower()
             if ext not in MATERIAL_EXTENSIONS:
-                raise CliError(f"不支持的文件类型：{path.name}（支持 {' '.join(sorted(MATERIAL_EXTENSIONS))}）")
+                raise CliError(f"unsupported file type: {path.name} (supported: {' '.join(sorted(MATERIAL_EXTENSIONS))})")
             try:
                 raw = path.read_bytes()
             except OSError as exc:
-                raise CliError(f"无法读取 {path}: {exc}") from exc
+                raise CliError(f"cannot read {path}: {exc}") from exc
             files.append(
                 {
                     "filename": path.name,
@@ -285,22 +285,22 @@ def cmd_materials_add(args, config, config_path):
             payload={"files": files},
             timeout=300,
         )
-        print(f"已上传 {len(files)} 个附件到「{project['name']}」（材料 ID：{'、'.join(str(i) for i in result.get('ids', []))}）")
+        print(f"Uploaded {len(files)} attachment(s) to '{project['name']}' (material IDs: {', '.join(str(i) for i in result.get('ids', []))})")
         return 0
     text = args.text
     if text == "-":
         text = sys.stdin.read()
     text = (text or "").strip()
     if not text:
-        raise CliError("请提供内容：--text \"...\"（或 --text - 从管道读取），或用 --file 上传附件")
-    title = (args.title or "").strip() or "CLI 笔记"
+        raise CliError('provide content: --text "..." (or --text - to read stdin), or attach files with --file')
+    title = (args.title or "").strip() or "CLI note"
     result = api_request(
         config,
         "POST",
         f"/api/projects/{project['id']}/materials",
         payload={"source_type": "manual", "title": title, "content": text},
     )
-    print(f"已提交文字资料到「{project['name']}」（材料 ID：{result.get('id')}）")
+    print(f"Submitted text material to '{project['name']}' (material ID: {result.get('id')})")
     return 0
 
 
@@ -312,31 +312,30 @@ def cmd_todos(args, config, config_path):
     todos = api_request(config, "GET", "/api/todos").get("todos") or []
     if not args.all:
         todos = [todo for todo in todos if todo["status"] != "closed"]
-    status_label = {"todo": "待办", "doing": "进行中", "closed": "已关闭"}
     rows = [
         (
             todo["id"],
-            status_label.get(todo["status"], todo["status"]),
+            todo["status"],
             todo.get("project_name") or "-",
             todo["title"],
         )
         for todo in todos
     ]
-    print_table(["ID", "状态", "项目", "标题"], rows)
+    print_table(["ID", "STATUS", "PROJECT", "TITLE"], rows)
     return 0
 
 
 def cmd_todo_add(args, config, config_path):
     require_login(config)
     result = api_request(config, "POST", "/api/todos", payload={"title": args.title, "description": args.description or ""})
-    print(f"已创建 TODO #{result.get('id')}：{args.title}")
+    print(f"Created TODO #{result.get('id')}: {args.title}")
     return 0
 
 
 def cmd_todo_status(args, config, config_path):
     require_login(config)
     api_request(config, "PUT", f"/api/todos/{args.id}", payload={"status": args.status})
-    print(f"TODO #{args.id} 状态改为 {args.status}")
+    print(f"TODO #{args.id} status set to {args.status}")
     return 0
 
 
@@ -350,8 +349,8 @@ def cmd_todo_done(args, config, config_path):
         payload={"reason": args.reason, "project_id": project["id"]},
     )
     material_id = result.get("material_id")
-    archived = f"，归档为「{project['name']}」的材料 #{material_id}" if material_id else ""
-    print(f"TODO #{args.id} 已完成{archived}")
+    archived = f", archived as material #{material_id} in '{project['name']}'" if material_id else ""
+    print(f"TODO #{args.id} done{archived}")
     return 0
 
 
@@ -359,56 +358,56 @@ def cmd_todo_done(args, config, config_path):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="zreport", description="zreport (Zero Report) 命令行客户端")
-    parser.add_argument("--server", help=f"服务地址（默认 {DEFAULT_SERVER}，登录后取自配置）")
-    parser.add_argument("--token", help="直接使用给定的 Bearer token（默认取自配置）")
-    parser.add_argument("--insecure", action="store_true", help="跳过自签名 TLS 证书校验")
-    parser.add_argument("--config", help="凭据文件路径（默认 <config>/zreport/cli.json）")
+    parser = argparse.ArgumentParser(prog="zreport", description="zreport (Zero Report) command-line client")
+    parser.add_argument("--server", help=f"server URL (default {DEFAULT_SERVER}; from saved config after login)")
+    parser.add_argument("--token", help="use this Bearer token (default: from saved config)")
+    parser.add_argument("--insecure", action="store_true", help="skip TLS certificate verification (self-signed certs)")
+    parser.add_argument("--config", help="credentials file path (default <config>/zreport/cli.json)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    login = sub.add_parser("login", help="设备授权登录")
-    login.add_argument("--server", help="服务地址，例如 http://127.0.0.1:8765")
-    login.add_argument("--insecure", action="store_true", help="跳过自签名 TLS 证书校验")
+    login = sub.add_parser("login", help="sign in with the device authorization flow")
+    login.add_argument("--server", help="server URL, e.g. http://127.0.0.1:8765")
+    login.add_argument("--insecure", action="store_true", help="skip TLS certificate verification (self-signed certs)")
     login.set_defaults(func=cmd_login)
 
-    logout = sub.add_parser("logout", help="退出登录并清除本地凭据")
+    logout = sub.add_parser("logout", help="sign out and clear local credentials")
     logout.set_defaults(func=cmd_logout)
 
-    whoami = sub.add_parser("whoami", help="显示当前登录用户")
+    whoami = sub.add_parser("whoami", help="show the signed-in user")
     whoami.set_defaults(func=cmd_whoami)
 
-    projects = sub.add_parser("projects", help="列出项目")
+    projects = sub.add_parser("projects", help="list projects")
     projects.set_defaults(func=cmd_projects)
 
-    materials = sub.add_parser("materials", help="项目资料")
+    materials = sub.add_parser("materials", help="project materials")
     materials_sub = materials.add_subparsers(dest="materials_command", required=True)
-    materials_add = materials_sub.add_parser("add", help="提交资料（文字或附件）")
-    materials_add.add_argument("project", help="项目 ID 或名称")
-    materials_add.add_argument("--text", help="文字内容；传 - 时从标准输入读取")
-    materials_add.add_argument("--title", help="文字资料标题（默认 CLI 笔记）")
-    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="附件（.md .markdown .txt .pdf，可多个）")
+    materials_add = materials_sub.add_parser("add", help="add material (text or file attachment)")
+    materials_add.add_argument("project", help="project ID or name")
+    materials_add.add_argument("--text", help="text content; pass - to read from stdin")
+    materials_add.add_argument("--title", help="text material title (default: CLI note)")
+    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .pdf, multiple allowed)")
     materials_add.set_defaults(func=cmd_materials_add)
 
-    todos = sub.add_parser("todos", help="列出 TODO")
-    todos.add_argument("--all", action="store_true", help="包含已关闭的 TODO")
+    todos = sub.add_parser("todos", help="list TODOs")
+    todos.add_argument("--all", action="store_true", help="include closed TODOs")
     todos.set_defaults(func=cmd_todos)
 
-    todo = sub.add_parser("todo", help="TODO 操作")
+    todo = sub.add_parser("todo", help="TODO operations")
     todo_sub = todo.add_subparsers(dest="todo_command", required=True)
-    todo_add = todo_sub.add_parser("add", help="新建 TODO")
-    todo_add.add_argument("title", help="标题")
-    todo_add.add_argument("-d", "--description", help="补充说明")
+    todo_add = todo_sub.add_parser("add", help="create a TODO")
+    todo_add.add_argument("title", help="title")
+    todo_add.add_argument("-d", "--description", help="details")
     todo_add.set_defaults(func=cmd_todo_add)
 
-    todo_status = todo_sub.add_parser("status", help="修改 TODO 状态")
+    todo_status = todo_sub.add_parser("status", help="change a TODO's status")
     todo_status.add_argument("id", type=int, help="TODO ID")
-    todo_status.add_argument("status", choices=TODO_STATUSES, help="目标状态")
+    todo_status.add_argument("status", choices=TODO_STATUSES, help="target status")
     todo_status.set_defaults(func=cmd_todo_status)
 
-    todo_done = todo_sub.add_parser("done", help="完成 TODO 并归档到项目")
+    todo_done = todo_sub.add_parser("done", help="close a TODO and archive it to a project")
     todo_done.add_argument("id", type=int, help="TODO ID")
-    todo_done.add_argument("-p", "--project", required=True, help="归档到的项目（ID 或名称）")
-    todo_done.add_argument("-r", "--reason", default="已完成", help="完成说明（默认：已完成）")
+    todo_done.add_argument("-p", "--project", required=True, help="project to archive into (ID or name)")
+    todo_done.add_argument("-r", "--reason", default="done", help="closing reason (default: done)")
     todo_done.set_defaults(func=cmd_todo_done)
 
     return parser
@@ -433,10 +432,10 @@ def main(argv=None, config_file=None):
     try:
         return args.func(args, config, config_path)
     except CliError as exc:
-        print(f"错误：{exc}", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("\n已取消", file=sys.stderr)
+        print("\ncancelled", file=sys.stderr)
         return 130
 
 
