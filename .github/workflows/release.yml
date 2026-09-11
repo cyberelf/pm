@@ -1,0 +1,47 @@
+# Publish the zreport CLI to PyPI via Trusted Publishing (OIDC — no API
+# token stored anywhere).
+#
+# One-time setup on PyPI (web UI, project zreport → Settings → Publishing):
+#   Owner: cyberelf   Repository: pm   Workflow: release.yml   Environment: (blank)
+#
+# Release flow: bump __version__ in zreport.py, commit, then
+#   git tag v1.0.2 && git push origin v1.0.2
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC token PyPI verifies against the publisher config
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # PyPI filenames are immutable: a tag that doesn't match the package
+      # version would publish a package lying about its own version
+      - name: Verify tag matches package version
+        run: |
+          python - <<'PY'
+          import os, zreport
+          tag = os.environ["GITHUB_REF_NAME"]
+          expected = "v" + zreport.__version__
+          assert tag == expected, f"tag {tag!r} does not match package version {expected!r}"
+          PY
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
