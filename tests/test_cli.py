@@ -132,7 +132,7 @@ class CliTest(unittest.TestCase):
 
         note_path = Path(self.tmp.name) / "本周记录.md"
         note_path.write_text("# 本周记录\n\nCLI 上传测试内容。", encoding="utf-8")
-        code, output = self.run_cli("project", "演示项目", "materials", "add", "--text", "本周进展顺利", "--title", "进展")
+        code, output = self.run_cli("project", "materials", "add", "-p", "演示项目", "--text", "本周进展顺利", "--title", "进展")
         self.assertEqual(code, 0)
         manual = self.conn.execute(
             "SELECT * FROM materials WHERE source_type = 'manual' AND project_id = ? ORDER BY id DESC LIMIT 1",
@@ -141,7 +141,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(manual["filename"], "进展")
         self.assertIn("本周进展顺利", manual["extracted_text"])
 
-        code, output = self.run_cli("project", "演示项目", "materials", "add", "--file", str(note_path))
+        code, output = self.run_cli("project", "materials", "add", "-p", "演示项目", "--file", str(note_path))
         self.assertEqual(code, 0)
         uploaded = self.conn.execute(
             "SELECT * FROM materials WHERE source_type = 'upload' AND project_id = ? ORDER BY id DESC LIMIT 1",
@@ -174,11 +174,11 @@ class CliTest(unittest.TestCase):
         self.config_path.write_text(json.dumps(config), encoding="utf-8")
         code, _ = self.run_cli("todo", "status", "999", "doing")
         self.assertEqual(code, 1)
-        code, _ = self.run_cli("project", "不存在", "materials", "add", "--text", "内容")
+        code, _ = self.run_cli("project", "materials", "add", "-p", "不存在", "--text", "内容")
         self.assertEqual(code, 1)
-        code, _ = self.run_cli("project", "演示项目", "materials", "add", "--file", "missing.md")
+        code, _ = self.run_cli("project", "materials", "add", "-p", "演示项目", "--file", "missing.md")
         self.assertEqual(code, 1)
-        code, _ = self.run_cli("project", "演示项目", "materials", "add", "--text", "  ")
+        code, _ = self.run_cli("project", "materials", "add", "-p", "演示项目", "--text", "  ")
         self.assertEqual(code, 1)
 
 
@@ -212,21 +212,21 @@ class CliTest(unittest.TestCase):
         seed(current_week_key("Asia/Shanghai"))
         self.conn.commit()
 
-        code, output = self.run_cli("project", "演示项目", "weekly", "list")
+        code, output = self.run_cli("project", "weekly", "list", "-p", "演示项目")
         self.assertEqual(code, 0)
         self.assertIn("2026-W01", output)
         self.assertIn(current_week_key("Asia/Shanghai"), output)
 
-        code, output = self.run_cli("project", "演示项目", "weekly", "show", "2026-W01")
+        code, output = self.run_cli("project", "weekly", "show", "-p", "演示项目", "2026-W01")
         self.assertEqual(code, 0)
         self.assertIn("# Report 2026-W01", output)
         self.assertIn("- shipped the 2026-W01 feature", output)
 
-        code, output = self.run_cli("project", "演示项目", "weekly", "show")
+        code, output = self.run_cli("project", "weekly", "show", "-p", "演示项目")
         self.assertEqual(code, 0)
         self.assertIn(f"# Report {current_week_key('Asia/Shanghai')}", output)
 
-        code, output = self.run_cli("project", "演示项目", "weekly", "show", "1999-W01")
+        code, output = self.run_cli("project", "weekly", "show", "-p", "演示项目", "1999-W01")
         self.assertEqual(code, 1)
         self.assertIn("weekly report not found", output)
 

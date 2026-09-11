@@ -23,8 +23,8 @@ command only — do not call the server's HTTP API directly.
 - `zreport project list`
 - `zreport todo list` and `zreport todo list --all` (`--all` includes closed
   TODOs; the PROJECT column shows which project a closed TODO was archived into)
-- `zreport project <project> weekly list` — generated weekly reports
-- `zreport project <project> weekly show [week_key]` — report body rendered
+- `zreport project weekly list -p <project>` — generated weekly reports
+- `zreport project weekly show -p <project> [week_key]` — report body rendered
   as text (default week: the current one)
 
 Limitation: the CLI cannot read material bodies yet (uploads are summarized
@@ -45,8 +45,8 @@ instead of working around the CLI.
 
 ## Write back (confirm each item with the user first)
 
-- Text material: `echo "..." | zreport project <project> materials add --text - --title "Title"`
-- Attachments: `zreport project <project> materials add --file a.md b.pdf`
+- Text material: `echo "..." | zreport project materials add -p <project> --text - --title "Title"`
+- Attachments: `zreport project materials add -p <project> --file a.md b.pdf`
   (supported: .md .markdown .txt .pdf)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then

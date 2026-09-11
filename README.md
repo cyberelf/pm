@@ -137,11 +137,11 @@ openspec validate "add-weekly-project-management-system"
 zreport login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port
 zreport whoami
 zreport project list
-zreport project 周报系统 weekly list
-zreport project 周报系统 weekly show              # current week; add a week key like 2026-W37 for older ones
-zreport project 周报系统 materials add --text "本周完成设备授权" --title 进展
-zreport project 周报系统 materials add --text - < notes.txt      # pipe content through stdin
-zreport project 周报系统 materials add --file notes.md 设计稿.pdf
+zreport project weekly list -p 周报系统
+zreport project weekly show -p 周报系统          # current week; add a week key like 2026-W37 for older ones
+zreport project materials add -p 周报系统 --text "本周完成设备授权" --title 进展
+zreport project materials add -p 周报系统 --text - < notes.txt   # pipe content through stdin
+zreport project materials add -p 周报系统 --file notes.md 设计稿.pdf
 zreport todo list
 zreport todo add "整理部署文档" -d "补充 GPU compose 说明"
 zreport todo status 3 doing

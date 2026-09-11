@@ -7,10 +7,10 @@ reports from the terminal:
 
     python3 zreport.py login --server http://127.0.0.1:8765
     python3 zreport.py project list
-    python3 zreport.py project my-project weekly list
-    python3 zreport.py project my-project weekly show
-    python3 zreport.py project my-project materials add --text "shipped device auth" --title progress
-    python3 zreport.py project my-project materials add --file notes.md spec.pdf
+    python3 zreport.py project weekly list --project my-project
+    python3 zreport.py project weekly show --project my-project
+    python3 zreport.py project materials add --project my-project --text "shipped device auth" --title progress
+    python3 zreport.py project materials add --project my-project --file notes.md spec.pdf
     python3 zreport.py todo list
     python3 zreport.py todo add "write deploy docs" -d "include the GPU compose guide"
     python3 zreport.py todo status 3 doing
@@ -27,7 +27,6 @@ import os
 import ssl
 import sys
 import time
-import types
 import unicodedata
 import urllib.error
 import urllib.request
@@ -71,8 +70,8 @@ command only — do not call the server's HTTP API directly.
 - `zreport project list`
 - `zreport todo list` and `zreport todo list --all` (`--all` includes closed
   TODOs; the PROJECT column shows which project a closed TODO was archived into)
-- `zreport project <project> weekly list` — generated weekly reports
-- `zreport project <project> weekly show [week_key]` — report body rendered
+- `zreport project weekly list -p <project>` — generated weekly reports
+- `zreport project weekly show -p <project> [week_key]` — report body rendered
   as text (default week: the current one)
 
 Limitation: the CLI cannot read material bodies yet (uploads are summarized
@@ -93,8 +92,8 @@ instead of working around the CLI.
 
 ## Write back (confirm each item with the user first)
 
-- Text material: `echo "..." | zreport project <project> materials add --text - --title "Title"`
-- Attachments: `zreport project <project> materials add --file a.md b.pdf`
+- Text material: `echo "..." | zreport project materials add -p <project> --text - --title "Title"`
+- Attachments: `zreport project materials add -p <project> --file a.md b.pdf`
   (supported: .md .markdown .txt .pdf)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then
@@ -349,55 +348,6 @@ def resolve_project(config, ref):
     raise CliError(f"project not found: {ref} (see the projects command)")
 
 
-PROJECT_USAGE = """\
-usage:
-  zreport project list
-  zreport project <project> materials add [--text TEXT | -] [--title TITLE] [--file PATH ...]
-  zreport project <project> weekly list
-  zreport project <project> weekly show [week_key]
-"""
-
-
-def _project_leaf_parser(group):
-    """argparse can't put a positional before subparsers, so the
-    `zreport project <project> <group> ...` grammar is dispatched manually
-    in cmd_project and only the leaf arguments go through argparse."""
-    parser = argparse.ArgumentParser(prog=f"zreport project <project> {group}")
-    sub = parser.add_subparsers(dest="action", required=True)
-    if group == "materials":
-        add = sub.add_parser("add", help="add material (text or file attachment)")
-        add.add_argument("--text", help="text content; pass - to read from stdin")
-        add.add_argument("--title", help="text material title (default: CLI note)")
-        add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .pdf, multiple allowed)")
-    else:
-        sub.add_parser("list", help="list generated weekly reports")
-        show = sub.add_parser("show", help="show a weekly report (default: current week)")
-        show.add_argument("week_key", nargs="?", help="week key like 2026-W37 (default: current week)")
-    return parser
-
-
-def cmd_project(args, config, config_path):
-    rest = args.rest
-    if not rest or rest[0] in ("-h", "--help"):
-        print(PROJECT_USAGE, end="")
-        return 0 if rest else 2
-    if rest[0] == "list":
-        return cmd_project_list(types.SimpleNamespace(), config, config_path)
-    name, rest = rest[0], rest[1:]
-    if not rest or rest[0] not in ("materials", "weekly"):
-        print(PROJECT_USAGE, end="")
-        return 2
-    group, leaf = rest[0], rest[1:]
-    if not leaf:
-        print(PROJECT_USAGE, end="")
-        return 2
-    leaf_ns = _project_leaf_parser(group).parse_args(leaf)
-    leaf_ns.project = name
-    if group == "materials":
-        return cmd_materials_add(leaf_ns, config, config_path)
-    return cmd_weekly_list(leaf_ns, config, config_path) if leaf_ns.action == "list" else cmd_weekly_show(leaf_ns, config, config_path)
-
-
 def cmd_project_list(args, config, config_path):
     require_login(config)
     rows = [
@@ -580,12 +530,30 @@ def build_parser():
     whoami = sub.add_parser("whoami", help="show the signed-in user")
     whoami.set_defaults(func=cmd_whoami)
 
-    project = sub.add_parser(
-        "project",
-        help="project operations: list, <project> materials add, <project> weekly list|show",
-    )
-    project.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
-    project.set_defaults(func=cmd_project)
+    project = sub.add_parser("project", help="project operations")
+    project_sub = project.add_subparsers(dest="project_command", required=True)
+
+    project_list = project_sub.add_parser("list", help="list projects")
+    project_list.set_defaults(func=cmd_project_list)
+
+    project_materials = project_sub.add_parser("materials", help="project materials")
+    project_materials_sub = project_materials.add_subparsers(dest="project_materials_command", required=True)
+    materials_add = project_materials_sub.add_parser("add", help="add material (text or file attachment)")
+    materials_add.add_argument("-p", "--project", required=True, help="project ID or name")
+    materials_add.add_argument("--text", help="text content; pass - to read from stdin")
+    materials_add.add_argument("--title", help="text material title (default: CLI note)")
+    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .pdf, multiple allowed)")
+    materials_add.set_defaults(func=cmd_materials_add)
+
+    project_weekly = project_sub.add_parser("weekly", help="weekly reports")
+    project_weekly_sub = project_weekly.add_subparsers(dest="project_weekly_command", required=True)
+    weekly_list = project_weekly_sub.add_parser("list", help="list generated weekly reports")
+    weekly_list.add_argument("-p", "--project", required=True, help="project ID or name")
+    weekly_list.set_defaults(func=cmd_weekly_list)
+    weekly_show = project_weekly_sub.add_parser("show", help="show a weekly report (default: current week)")
+    weekly_show.add_argument("week_key", nargs="?", help="week key like 2026-W37 (default: current week)")
+    weekly_show.add_argument("-p", "--project", required=True, help="project ID or name")
+    weekly_show.set_defaults(func=cmd_weekly_show)
 
     todo = sub.add_parser("todo", help="TODO operations")
     todo_sub = todo.add_subparsers(dest="todo_command", required=True)
