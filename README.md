@@ -131,7 +131,7 @@ openspec validate "add-weekly-project-management-system"
 
 ## CLI Client
 
-`zreport` is the standard-library command-line client (`zreport.py` in the repo root). To use it as a command, symlink it onto your PATH (`ln -sf "$PWD/zreport.py" ~/.local/bin/zreport`; on Windows create a `zreport.cmd` shim running `@python path\to\zreport.py %*`). Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
+`zreport` is the standard-library command-line client (`zreport.py` in the repo root). On machines without the checkout, install it from PyPI (`pip install zreport`); otherwise symlink it onto your PATH (`ln -sf "$PWD/zreport.py" ~/.local/bin/zreport`; on Windows create a `zreport.cmd` shim running `@python path\to\zreport.py %*`). Sign in once with the device flow — it prints a URL and a code; open the URL, sign in, and approve (the page is the same one a phone or another machine would use) — then work from the terminal:
 
 ```bash
 zreport login --server http://127.0.0.1:8765    # add --insecure once for the self-signed HTTPS port

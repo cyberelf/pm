@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zreport"
+description = "zreport (Zero Report) 命令行客户端：本地周报工作台的项目/资料/TODO 终端工具"
+readme = "README.md"
+requires-python = ">=3.9"
+dynamic = ["version"]
+keywords = ["weekly-report", "cli", "todo", "whisper"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Office/Business :: Scheduling",
+]
+
+[project.urls]
+Homepage = "https://github.com/cyberelf/pm"
+
+[project.scripts]
+zreport = "zreport:main"
+
+# the PyPI package ships the standard-library CLI only; the server
+# (reports_app) stays a local app with its heavier deps installed from
+# requirements.txt
+[tool.setuptools]
+py-modules = ["zreport"]
+
+[tool.setuptools.dynamic]
+version = { attr = "zreport.__version__" }
