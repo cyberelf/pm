@@ -20,7 +20,9 @@ from .validation import ValidationError
 DEVICE_CODE_TTL_SECONDS = 15 * 60
 POLL_INTERVAL_SECONDS = 5
 MAX_POLL_ATTEMPTS = 500
-DEVICE_SESSION_TTL_DAYS = 365
+# Long-lived by design (CLI must keep working across reboots) but bounded:
+# a leaked bearer token stops working on its own after a quarter year.
+DEVICE_SESSION_TTL_DAYS = 90
 # 8 unambiguous characters (no 0/O/1/I) split as XXXX-XXXX.
 USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 

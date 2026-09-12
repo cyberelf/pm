@@ -41,7 +41,9 @@ def load_env_file(path=None):
 WORKSPACE_USER = "local-user"
 BOOTSTRAP_ADMIN_USERNAME = "darren"
 ADMIN_PASSWORD_ENV_VAR = "REPORTS_ADMIN_PASSWORD"
-DEFAULT_ADMIN_PASSWORD = "changeme"
+# When REPORTS_ADMIN_PASSWORD is unset at first startup the bootstrap admin
+# gets a random one-time password (db.ensure_bootstrap_admin); there is no
+# built-in default password on purpose.
 SUPPORTED_PROVIDERS = {"internal"}
 INTERNAL_AGENT = "internal"
 REPORT_PROVIDER = INTERNAL_AGENT

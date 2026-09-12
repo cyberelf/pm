@@ -142,15 +142,15 @@ def user_public(row):
     }
 
 
-def session_cookie_header(token):
+def session_cookie_header(token, secure=False):
     return (
         f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; "
-        f"Max-Age={SESSION_TTL_DAYS * 24 * 3600}"
+        f"Max-Age={SESSION_TTL_DAYS * 24 * 3600}" + ("; Secure" if secure else "")
     )
 
 
-def clear_cookie_header():
-    return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+def clear_cookie_header(secure=False):
+    return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" + ("; Secure" if secure else "")
 
 
 def token_from_cookie_header(header):

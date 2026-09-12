@@ -124,6 +124,52 @@ PUBLIC_API_ROUTES = {
     ("POST", "/api/device/auth/poll"),
 }
 
+# Hard ceiling for API request bodies. It must stay comfortably above the
+# base64-encoded form of the largest voice recording accepted by asr.py
+# (25 MB raw ≈ 34 MB encoded inside a JSON wrapper).
+MAX_BODY_BYTES = 64 * 1024 * 1024
+
+
+class PayloadTooLarge(Exception):
+    """Request body exceeds MAX_BODY_BYTES; raised before the body is read."""
+
+
+class LoginRateLimiter:
+    """Sliding-window limiter for password login failures, tracked per client
+    IP and per username. Deliberately in-process: the deployment is a single
+    process, and the counters must also bound the PBKDF2 cost each attempt
+    imposes on the server, not just online guessing."""
+
+    def __init__(self, max_per_ip=10, max_per_username=5, window_seconds=60):
+        self.max_per_ip = max_per_ip
+        self.max_per_username = max_per_username
+        self.window_seconds = window_seconds
+        self._lock = threading.Lock()
+        self._failures = {}  # ("ip"|"user", value) -> monotonic timestamps
+
+    def _prune(self, key, now):
+        window = [t for t in self._failures.get(key, []) if now - t < self.window_seconds]
+        if window:
+            self._failures[key] = window
+        else:
+            self._failures.pop(key, None)
+        return window
+
+    def blocked(self, ip, username):
+        """True once either counter reached its limit inside the window."""
+        now = time.monotonic()
+        with self._lock:
+            ip_failures = self._prune(("ip", ip), now)
+            user_failures = self._prune(("user", username), now)
+        return len(ip_failures) >= self.max_per_ip or len(user_failures) >= self.max_per_username
+
+    def record_failure(self, ip, username):
+        now = time.monotonic()
+        with self._lock:
+            self._failures.setdefault(("ip", ip), []).append(now)
+            self._failures.setdefault(("user", username), []).append(now)
+
+
 ADMIN_ONLY_SETTING_KEYS = {
     "asr_endpoint",
     "asr_model",
@@ -255,6 +301,9 @@ def require_admin(user):
 
 
 def run(host="127.0.0.1", port=8000, db_path=DB_PATH, tls_port=None, tls_cert=None, tls_key=None):
+    # Database, uploads, and logs stay private to the service account; new
+    # files are created 0600/0700 regardless of the invoking umask.
+    os.umask(0o077)
     init_db(db_path)
     fail_stale_voice_jobs(db_path)
     fail_stale_generation_jobs(db_path)
@@ -355,6 +404,10 @@ def schedule_due(schedule, now=None):
 class Handler(BaseHTTPRequestHandler):
     server_version = "ZReport/1.0"
     protocol_version = "HTTP/1.1"
+    # Socket inactivity timeout: a connection that stalls mid-request (or
+    # between keep-alive requests) is closed instead of pinning its thread,
+    # so slow clients cannot accumulate threads forever.
+    timeout = 30
 
     def do_GET(self):
         try:
@@ -365,8 +418,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.serve_static(parsed.path)
         except PermissionError as exc:
             self.error(HTTPStatus.FORBIDDEN, str(exc))
+        except PayloadTooLarge as exc:
+            self.error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
         except Exception as exc:
-            self.error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            self.log_failure(exc)
+            self.error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
+
+    def log_failure(self, exc):
+        print(
+            f"request failed: {self.command} {self.path}: {exc}\n{traceback.format_exc()}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def do_POST(self):
         self.handle_write("POST")
@@ -402,6 +465,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Connection", "keep-alive")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
         for name, value in extra_headers or []:
             self.send_header(name, value)
         self.end_headers()
@@ -427,11 +492,26 @@ class Handler(BaseHTTPRequestHandler):
             self.error(HTTPStatus.FORBIDDEN, str(exc))
         except ValidationError as exc:
             self.error(HTTPStatus.BAD_REQUEST, str(exc))
+        except PayloadTooLarge as exc:
+            self.error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
         except Exception as exc:
-            self.error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            self.log_failure(exc)
+            self.error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
 
     def read_body_bytes(self):
-        length = int(self.headers.get("Content-Length") or 0)
+        if (self.headers.get("Transfer-Encoding") or "").strip():
+            # A chunked body would never be drained and would be parsed as
+            # the next request on this keep-alive connection.
+            self.close_connection = True
+            raise ValidationError("chunked transfer encoding is not supported; send Content-Length")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > MAX_BODY_BYTES:
+            # The body is refused unread, so the connection cannot be reused.
+            self.close_connection = True
+            raise PayloadTooLarge(f"request body exceeds {MAX_BODY_BYTES} bytes")
         self._raw_body = self.rfile.read(length) if length > 0 else b""
 
     def body_json(self):
@@ -461,12 +541,33 @@ class Handler(BaseHTTPRequestHandler):
             is_admin = bool(user and user["is_admin"])
             if path == "/api/auth/login" and method == "POST":
                 payload = self.body_json()
-                row = auth.authenticate(conn, payload.get("username"), payload.get("password"))
+                ip = self.client_address[0]
+                username = (payload.get("username") or "").strip().lower()
+                limiter = getattr(self.server, "login_limiter", None)
+                if limiter is None:
+                    limiter = self.server.login_limiter = LoginRateLimiter()
+                if limiter.blocked(ip, username):
+                    print(f"login rate-limited: ip={ip} username={username!r}", flush=True)
+                    self.error(
+                        HTTPStatus.TOO_MANY_REQUESTS,
+                        "too many failed logins; try again in a minute",
+                        extra_headers=[("Retry-After", "60")],
+                    )
+                    return
+                try:
+                    row = auth.authenticate(conn, payload.get("username"), payload.get("password"))
+                except ValidationError:
+                    limiter.record_failure(ip, username)
+                    print(f"login failed: ip={ip} username={username!r}", flush=True)
+                    raise
                 token = auth.create_session(conn, row["id"])
+                # Mark the cookie Secure on the TLS listener so the browser
+                # never re-sends that session over the plain-HTTP port.
+                secure = isinstance(self.request, ssl.SSLSocket)
                 conn.commit()
                 self.json(
                     {"current_user": auth.user_public(row)},
-                    extra_headers=[("Set-Cookie", auth.session_cookie_header(token))],
+                    extra_headers=[("Set-Cookie", auth.session_cookie_header(token, secure=secure))],
                 )
                 return
             if path == "/api/auth/logout" and method == "POST":
@@ -477,7 +578,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 auth.delete_session(conn, token)
                 conn.commit()
-                self.json({"ok": True}, extra_headers=[("Set-Cookie", auth.clear_cookie_header())])
+                secure = isinstance(self.request, ssl.SSLSocket)
+                self.json({"ok": True}, extra_headers=[("Set-Cookie", auth.clear_cookie_header(secure=secure))])
                 return
             if path == "/api/auth/password" and method == "PUT":
                 payload = self.body_json()
@@ -702,7 +804,7 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 self.json({"todos": todo_rows(conn, user_id)})
                 return
-            if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects":
+            if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects" and parts[2].isdigit():
                 project_id = int(parts[2])
                 owned = conn.execute(
                     "SELECT id FROM projects WHERE id = ? AND user_id = ?",
@@ -838,7 +940,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     self.json(workspace(conn, project_id))
                     return
-            if len(parts) == 4 and parts[:2] == ["api", "risks"] and method == "POST":
+            if len(parts) == 4 and parts[:2] == ["api", "risks"] and parts[2].isdigit() and method == "POST":
                 status = parts[3]
                 if status not in {"dismissed", "resolved"}:
                     raise ValidationError("invalid risk status")
@@ -859,7 +961,16 @@ class Handler(BaseHTTPRequestHandler):
             file_path = STATIC_DIR / "device.html"
         else:
             file_path = STATIC_DIR / path.lstrip("/")
-        if not file_path.exists() or not file_path.is_file():
+        try:
+            # The URL path is attacker-controlled and may carry ".." segments;
+            # resolve and confine the target to the static directory so
+            # requests like /../.env or /../data/reports.sqlite3 never escape.
+            file_path = file_path.resolve()
+            file_path.relative_to(STATIC_DIR.resolve())
+        except (OSError, ValueError):
+            self.error(HTTPStatus.NOT_FOUND, "not found")
+            return
+        if not file_path.is_file():
             self.error(HTTPStatus.NOT_FOUND, "not found")
             return
         content_type = "text/html"
@@ -915,8 +1026,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.bytes_response(path.read_bytes(), "application/pdf")
 
-    def error(self, status, message):
-        self.json({"error": message}, status)
+    def error(self, status, message, extra_headers=None):
+        self.json({"error": message}, status, extra_headers=extra_headers)
 
     def log_message(self, fmt, *args):
         return

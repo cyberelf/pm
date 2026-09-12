@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 import sqlite3
 from pathlib import Path
 
@@ -9,7 +10,6 @@ from .config import (
     BOOTSTRAP_ADMIN_USERNAME,
     DATA_DIR,
     DB_PATH,
-    DEFAULT_ADMIN_PASSWORD,
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TIMEZONE,
     REPORT_PROVIDER,
@@ -353,13 +353,27 @@ def ensure_bootstrap_admin(conn):
         row = conn.execute("SELECT * FROM users WHERE is_admin = 1 AND enabled = 1 ORDER BY id LIMIT 1").fetchone()
         if row:
             return row
-    password = os.environ.get(ADMIN_PASSWORD_ENV_VAR) or DEFAULT_ADMIN_PASSWORD
+    password = os.environ.get(ADMIN_PASSWORD_ENV_VAR) or ""
+    generated = not password
+    if generated:
+        # Never ship a guessable default: when the operator did not choose a
+        # password, mint a random one and print it once (on managed installs
+        # it also lands in the service log).
+        password = secrets.token_urlsafe(12)
     user_id = auth.create_user(conn, BOOTSTRAP_ADMIN_USERNAME, password, is_admin=True)
-    print(
-        f"bootstrap admin created: username={BOOTSTRAP_ADMIN_USERNAME} "
-        f"(password from {ADMIN_PASSWORD_ENV_VAR} or built-in default; change it after first login)",
-        flush=True,
-    )
+    if generated:
+        print(
+            f"bootstrap admin created: username={BOOTSTRAP_ADMIN_USERNAME} "
+            f"password={password} (random one-time password; set "
+            f"{ADMIN_PASSWORD_ENV_VAR} or change it after first login)",
+            flush=True,
+        )
+    else:
+        print(
+            f"bootstrap admin created: username={BOOTSTRAP_ADMIN_USERNAME} "
+            f"(password from {ADMIN_PASSWORD_ENV_VAR}; change it after first login)",
+            flush=True,
+        )
     return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 

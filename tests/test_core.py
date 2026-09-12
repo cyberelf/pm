@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -60,7 +61,7 @@ from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import assemble_context, build_internal_evidence_prompt, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider
 from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
-from reports_app.server import Handler, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
+from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 import time
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
@@ -2429,6 +2430,127 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(data["risks"], [])
         self.assertEqual({item["kind"] for item in data["source_diagnostics"]}, {"github", "material", "generation"})
 
+    def test_session_cookie_flags(self):
+        header = auth.session_cookie_header("token1")
+        self.assertIn("HttpOnly", header)
+        self.assertIn("SameSite=Lax", header)
+        self.assertNotIn("Secure", header)
+        self.assertIn("Secure", auth.session_cookie_header("token1", secure=True))
+        self.assertNotIn("Secure", auth.clear_cookie_header())
+        self.assertIn("Secure", auth.clear_cookie_header(secure=True))
+
+    def test_login_rate_limiter_window(self):
+        limiter = LoginRateLimiter(max_per_ip=3, max_per_username=2, window_seconds=60)
+        for _ in range(2):
+            limiter.record_failure("10.0.0.1", "darren")
+        # per-username budget exhausted; other usernames and IPs are unaffected
+        self.assertTrue(limiter.blocked("10.0.0.1", "darren"))
+        self.assertFalse(limiter.blocked("10.0.0.1", "member"))
+        self.assertFalse(limiter.blocked("10.0.0.2", "other"))
+        # the per-IP budget trips once three failures accumulate on one IP
+        limiter.record_failure("10.0.0.1", "member")
+        self.assertTrue(limiter.blocked("10.0.0.1", "third"))
+        self.assertFalse(limiter.blocked("10.0.0.2", "member"))
+
+    def test_static_serving_confined_to_static_dir(self):
+        server, thread = self._live_server()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("GET", "/app.js")
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
+            client.close()
+            for path in ("/../.env", "/../../etc/passwd", "/../data/reports.sqlite3"):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request("GET", path)
+                response = client.getresponse()
+                body = response.read()
+                client.close()
+                self.assertEqual(response.status, 404, path)
+                self.assertNotIn(b"REPORTS_ADMIN_PASSWORD", body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_request_body_size_limit_rejected(self):
+        server, thread = self._live_server()
+        try:
+            sock = socket.create_connection(("127.0.0.1", server.server_port), timeout=10)
+            try:
+                request = (
+                    "POST /api/auth/login HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{server.server_port}\r\n"
+                    f"Content-Length: {MAX_BODY_BYTES + 1}\r\n"
+                    "Content-Type: application/json\r\n"
+                    "\r\n"
+                )
+                sock.sendall(request.encode("ascii"))
+                response = sock.recv(4096).decode("utf-8", "replace")
+            finally:
+                sock.close()
+            self.assertTrue(response.startswith("HTTP/1.1 413"), response)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_login_rate_limited_after_repeated_failures(self):
+        server, thread = self._live_server()
+        try:
+            statuses = []
+            for _ in range(6):
+                client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                client.request(
+                    "POST",
+                    "/api/auth/login",
+                    body=json.dumps({"username": "darren", "password": "wrong-password"}),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = client.getresponse()
+                statuses.append(response.status)
+                response.read()
+                client.close()
+            self.assertEqual(statuses[:5], [400] * 5)
+            self.assertEqual(statuses[5], 429)
+            # a different username from the same IP still gets a clean 400
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request(
+                "POST",
+                "/api/auth/login",
+                body=json.dumps({"username": "ghost", "password": "wrong-password"}),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            self.assertEqual(response.status, 400)
+            response.read()
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_non_numeric_entity_ids_return_404(self):
+        server, thread = self._live_server()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "GET", "/api/projects/abc/workspace")
+            response = client.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
+            client.close()
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "POST", "/api/risks/xyz/dismissed", body="{}")
+            response = client.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
 
 class InternalAgentTest(unittest.TestCase):
     def setUp(self):
@@ -2950,6 +3072,10 @@ class UserAuthTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        # production bootstraps a random admin password when this env var is
+        # unset; the login tests need the known value, and it must be pinned
+        # before init_db because schema migration already creates the admin
+        os.environ["REPORTS_ADMIN_PASSWORD"] = "changeme"
         init_db(self.db_path)
         self.conn = connect(self.db_path)
         self.admin = ensure_bootstrap_admin(self.conn)
@@ -2968,6 +3094,7 @@ class UserAuthTest(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        os.environ.pop("REPORTS_ADMIN_PASSWORD", None)
         self.tmp.cleanup()
 
     def start_server(self):
@@ -3245,6 +3372,8 @@ class GitSettingsApiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        # see UserAuthTest.setUp: pin the bootstrap admin password for logins
+        os.environ["REPORTS_ADMIN_PASSWORD"] = "changeme"
         init_db(self.db_path)
         self.conn = connect(self.db_path)
         self.admin = ensure_bootstrap_admin(self.conn)
@@ -3255,6 +3384,7 @@ class GitSettingsApiTest(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        os.environ.pop("REPORTS_ADMIN_PASSWORD", None)
         self.tmp.cleanup()
 
     def start_server(self):
