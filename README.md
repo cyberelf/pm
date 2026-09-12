@@ -16,7 +16,7 @@ Open `http://127.0.0.1:8000` and sign in.
 ## Accounts
 
 - All API access requires login; the login screen appears on first visit.
-- On first startup the service bootstraps an administrator account named `darren`. The initial password comes from `REPORTS_ADMIN_PASSWORD` (`.env` or environment) and defaults to `changeme` — set it before the first start, then change it in 全局设置 → 修改密码.
+- On first startup the service bootstraps an administrator account named `darren`. The initial password comes from `REPORTS_ADMIN_PASSWORD` (`.env` or environment); when it is unset, a random one-time password is generated and printed to the server log — set it before the first start, then change it in 全局设置 → 修改密码.
 - Administrators manage accounts in 全局设置 → 用户管理 (create users, reset passwords, toggle admin/enabled, delete). A user whose projects/TODOs still exist cannot be deleted; the last enabled admin cannot be removed or demoted.
 - Users see only their own data: projects, TODOs, voice jobs, and queue tasks are filtered per account. Appearance preferences and Git tokens are stored per user too.
 - 全局设置 panels for 内部 Agent LLM, 语音 TODO (ASR service), and 任务队列, plus the GitHub/GitLab enable switches and 用户管理, are visible to administrators only.
@@ -34,10 +34,14 @@ Or keep machine-local settings in a `.env` file at the repo root (git-ignored):
 
 ```bash
 PORT=8765
+# The server binds the loopback address by default; set REPORTS_HOST to a
+# VPN/LAN address (e.g. 10.200.200.3) when other devices need access.
 REPORTS_HOST=10.200.200.3
 ```
 
 Both `python3 run.py` and `scripts/install_service.sh` read `.env` for `PORT`, `REPORTS_HOST`, and `REPORTS_FAKE_PROVIDER` defaults. Real environment variables always take precedence over the file.
+
+Built-in safeguards: the server answers only on the configured bind address (default `127.0.0.1`), API request bodies are capped at 64 MB, repeated failed logins are throttled (5 per username / 10 per source IP per minute), and static files are served strictly from `static/`.
 
 The service also listens on HTTPS port `8443` (set `REPORTS_TLS_PORT` to change or set it empty to disable) with a self-signed certificate generated at `data/tls/`. Phones need this HTTPS listener to use microphone access for voice TODOs: open `https://<host>:8443` and accept the certificate warning once.
 
@@ -65,8 +69,8 @@ curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/auth/state"
 
 - Two services: `reports` (the backend) and `asr` (a local voice model — the whisper.cpp server built from source at `docker/asr/Dockerfile`, pinned by `WHISPER_CPP_VERSION`, default `v1.9.3`). The first build compiles whisper.cpp and takes a few minutes.
 - Data (SQLite, uploads, TLS certificates) lives in a docker-managed named volume (`zreport_reports-data`), never in the checkout and never in the native service's `data/` directory — the volume starts empty and the two modes never share state. It survives `docker compose down`; remove it with `docker compose down -v`, and back it up with `docker compose cp reports:/app/data ./data-backup`. Deployments from before the zreport rename still hold their data in `weekly-reports_reports-data`; copy it across once with `docker run --rm -v weekly-reports_reports-data:/from -v zreport_reports-data:/to alpine sh -c 'cp -a /from/. /to/'`.
-- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`, `REPORTS_ADMIN_PASSWORD`, and for the asr service `ASR_PORT`, `ASR_MODEL`, `WHISPER_CPP_VERSION`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
-- The image ships chromium for PDF export with CJK fonts. Set `REPORTS_ADMIN_PASSWORD` in `.env` before the first start so the bootstrapped `darren` admin does not use the default password.
+- Host-side settings come from the repo-root `.env` (`PORT`, `REPORTS_BIND`, `REPORTS_TLS_PORT`, `REPORTS_FAKE_PROVIDER`, `REPORTS_QUEUE_CAPACITY`, `REPORTS_QUEUE_PARALLELISM`, `REPORTS_ADMIN_PASSWORD`, and for the asr service `ASR_PORT`, `ASR_MODEL`, `WHISPER_CPP_VERSION`). Inside the container the server binds `0.0.0.0` on fixed ports 8765/8443, published on the host loopback by default (`REPORTS_BIND` overrides, e.g. a VPN address or `0.0.0.0`) as `${PORT:-8765}` / `${REPORTS_TLS_PORT:-8443}`.
+- The image ships chromium for PDF export with CJK fonts. Set `REPORTS_ADMIN_PASSWORD` in `.env` before the first start; when unset, the bootstrapped `darren` admin gets a random one-time password printed to the container log (`docker compose logs reports | grep 'bootstrap admin'`).
 - Voice TODOs: put the GGML model in `data/models/` (see Voice TODO below) before starting — the `asr` container mounts that directory read-only and serves `/inference` on container port 8766. Set the ASR endpoint in 全局设置 to `http://asr:8766/inference` (container-to-container over the compose network). The port is also published on the host as `${ASR_PORT:-8766}`; if the native whisper service already listens there, set `ASR_PORT` in `.env` to a different host port. To use a natively installed whisper service instead of the container, point the endpoint at `http://host.docker.internal:8766/inference` (reachable through the `host-gateway` mapping).
 - NVIDIA GPU hosts: layer on the GPU override so the `asr` container runs whisper.cpp on the GPU instead of the CPU (needs nvidia-container-toolkit):
 
