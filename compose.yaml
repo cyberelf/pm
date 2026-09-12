@@ -4,11 +4,13 @@
 #   curl --noproxy '*' "http://127.0.0.1:${PORT:-8765}/api/state"
 #
 # Host-side configuration comes from the repo-root .env (git-ignored):
-# PORT, REPORTS_TLS_PORT, REPORTS_FAKE_PROVIDER, REPORTS_QUEUE_CAPACITY,
-# REPORTS_QUEUE_PARALLELISM, REPORTS_ADMIN_PASSWORD, plus the LLM fallback
-# keys commented below. ASR_* and WHISPER_CPP_VERSION configure the asr
-# service. Container-internal values (bind address, inner port) are fixed
-# here on purpose; reachability is controlled by the port mappings.
+# PORT, REPORTS_BIND, REPORTS_TLS_PORT, REPORTS_FAKE_PROVIDER,
+# REPORTS_QUEUE_CAPACITY, REPORTS_QUEUE_PARALLELISM, REPORTS_ADMIN_PASSWORD,
+# plus the LLM fallback keys commented below. ASR_* and WHISPER_CPP_VERSION
+# configure the asr service. Container-internal values (bind address, inner
+# port) are fixed here on purpose; reachability is controlled by the port
+# mappings, which publish on the host loopback by default — set REPORTS_BIND
+# (e.g. a VPN address, or 0.0.0.0) to serve other devices.
 
 name: zreport
 
@@ -24,8 +26,10 @@ services:
     # matching ownership from the image (see the mkdir/chown in the Dockerfile).
     user: "1000:1000"
     ports:
-      - "${PORT:-8765}:8765"
-      - "${REPORTS_TLS_PORT:-8443}:8443"
+      # Host-side bind defaults to loopback so the service is not exposed on
+      # every interface by accident; REPORTS_BIND overrides it.
+      - "${REPORTS_BIND:-127.0.0.1}:${PORT:-8765}:8765"
+      - "${REPORTS_BIND:-127.0.0.1}:${REPORTS_TLS_PORT:-8443}:8443"
     volumes:
       # All persistent state (SQLite, uploads, TLS certs, CLI config) lives in
       # a docker-managed named volume; nothing is written to the checkout, and
@@ -47,7 +51,8 @@ services:
       REPORTS_FAKE_PROVIDER: "${REPORTS_FAKE_PROVIDER:-0}"
       REPORTS_QUEUE_CAPACITY: "${REPORTS_QUEUE_CAPACITY:-}"
       REPORTS_QUEUE_PARALLELISM: "${REPORTS_QUEUE_PARALLELISM:-}"
-      # Password for the bootstrapped admin account (default: changeme).
+      # Password for the bootstrapped admin account; when unset, a random
+      # one-time password is generated and printed to the server log.
       REPORTS_ADMIN_PASSWORD: "${REPORTS_ADMIN_PASSWORD:-}"
       TZ: Asia/Shanghai
       NO_PROXY: "127.0.0.1,localhost,host.docker.internal,asr"
