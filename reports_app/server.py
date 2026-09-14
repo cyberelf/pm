@@ -1250,8 +1250,7 @@ def update_settings(conn, project_id, payload):
         """
         UPDATE projects
         SET name = ?, description = ?, start_date = ?, end_date = ?, status = ?, timezone = ?,
-            report_provider = ?, system_prompt = ?, report_template = ?, manual_background = ?,
-            manual_objectives = ?, manual_constraints = ?, updated_at = ?
+            report_provider = ?, report_template = ?, updated_at = ?
         WHERE id = ?
         """,
         (
@@ -1262,11 +1261,7 @@ def update_settings(conn, project_id, payload):
             payload.get("status") or "active",
             payload.get("timezone") or "Asia/Shanghai",
             payload.get("report_provider") or REPORT_PROVIDER,
-            payload.get("system_prompt") or "",
             payload.get("report_template") or "",
-            payload.get("manual_background") or "",
-            payload.get("manual_objectives") or "",
-            payload.get("manual_constraints") or "",
             now,
             project_id,
         ),

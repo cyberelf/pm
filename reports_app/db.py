@@ -10,7 +10,6 @@ from .config import (
     BOOTSTRAP_ADMIN_USERNAME,
     DATA_DIR,
     DB_PATH,
-    DEFAULT_SYSTEM_PROMPT,
     DEFAULT_TIMEZONE,
     REPORT_PROVIDER,
 )
@@ -426,9 +425,8 @@ def create_project(conn, data, user=None):
         """
         INSERT INTO projects
         (name, description, owner, user_id, start_date, end_date, status, timezone, report_provider,
-         system_prompt, report_template, manual_background, manual_objectives, manual_constraints,
-         created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         report_template, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data["name"].strip(),
@@ -440,11 +438,7 @@ def create_project(conn, data, user=None):
             data.get("status") or "active",
             data.get("timezone") or DEFAULT_TIMEZONE,
             data.get("report_provider") or REPORT_PROVIDER,
-            data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT,
             data.get("report_template") or "",
-            data.get("manual_background") or "",
-            data.get("manual_objectives") or "",
-            data.get("manual_constraints") or "",
             now,
             now,
         ),

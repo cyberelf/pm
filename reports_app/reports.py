@@ -16,7 +16,9 @@ def get_effective_template(project):
 
 
 def get_effective_prompt(project):
-    return project["system_prompt"] or DEFAULT_SYSTEM_PROMPT
+    # the system prompt is fixed platform-wide; per-project values stay frozen
+    # in legacy rows but are never used
+    return DEFAULT_SYSTEM_PROMPT
 
 
 def assemble_context(conn, project_id, week_key=None):
@@ -56,9 +58,6 @@ def assemble_context(conn, project_id, week_key=None):
         "project_profile": {
             "name": project["name"],
             "description": project["description"],
-            "background": project["manual_background"],
-            "objectives": project["manual_objectives"],
-            "constraints": project["manual_constraints"],
             "status": project["status"],
             "owner": project["owner"],
             "start_date": project["start_date"],
@@ -124,7 +123,7 @@ def input_summary(context):
     commits = sum(len(repo.get("commits", [])) for repo in context.get("git_commits_this_week", []))
     profile = context.get("project_profile") or {}
     plan = context.get("plan") or {}
-    has_profile = any(profile.get(key) for key in ("description", "background", "objectives", "constraints"))
+    has_profile = bool(profile.get("description"))
     has_plan = bool(plan.get("objectives") or plan.get("milestones") or plan.get("deliverables"))
     return (
         f"week={context['week_key']}; "
@@ -307,8 +306,8 @@ def build_internal_evidence_prompt(context):
         "This report is generated in-process without tool execution. "
         "The application has retrieved the following bounded evidence from the local workspace. "
         "Use only this evidence. Do not invent facts.\n\n"
-        "Use project profile and plan to understand description, background, objectives, constraints, milestones, and deliverables. "
-        "Evaluate this week's progress against plan and weekly planned outcomes. "
+        "Use project profile and plan to understand description, milestones, and deliverables. "
+        "Evaluate this week's progress against the plan and the weekly supplement. "
         "Use repository notes to interpret what each repo means in this project. "
         "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
         "For every connected repository, include a short per-repo section. "
@@ -416,9 +415,6 @@ def collect_template_sources(conn, project_id):
         "project_profile": {
             "name": project["name"],
             "description": project["description"],
-            "background": project["manual_background"],
-            "objectives": project["manual_objectives"],
-            "constraints": project["manual_constraints"],
             "status": project["status"],
         },
         "plan": {

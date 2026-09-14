@@ -38,7 +38,7 @@ The system SHALL run the first release as a local personal web application whose
 - **THEN** the system does not require support for a remote backend separated from local `gh`, Codex CLI, Claude Code CLI, or workspace files
 
 ### Requirement: Project settings
-The system SHALL allow a user to edit project settings including project metadata, weekly update schedule, report provider, report system prompt, and GitHub repository associations.
+The system SHALL allow a user to edit project settings including project metadata, weekly update schedule, report provider, and GitHub repository associations.
 
 #### Scenario: Save project settings
 - **WHEN** a user changes project settings and saves them
@@ -53,11 +53,7 @@ The system SHALL allow a user to edit project settings including project metadat
 - **THEN** the system calculates the project week in the project's timezone from Monday through Sunday
 
 ### Requirement: Project source materials
-The system SHALL allow a user to add project context through manual fields, uploaded Markdown/plain text/HTML/PDF project materials, and manually entered material notes.
-
-#### Scenario: Add manual project context
-- **WHEN** a user saves manual project background, objectives, or constraints
-- **THEN** the system stores that content as project source context
+The system SHALL allow a user to add project context through uploaded Markdown/plain text/HTML/PDF project materials and manually entered material notes.
 
 #### Scenario: Upload project material
 - **WHEN** a user uploads a Markdown, plain text, HTML, or PDF project material file
@@ -159,19 +155,15 @@ The system SHALL allow a project to be associated with one or more GitHub reposi
 - **THEN** the system marks the association as disconnected and reports that local GitHub CLI authentication is required
 
 ### Requirement: Per-project report configuration
-The system SHALL support per-project configuration of the weekly report provider, system prompt, and Markdown report template.
-
-#### Scenario: Configure Codex report generation
-- **WHEN** a user selects Codex CLI as the project's report provider and saves a system prompt
-- **THEN** the system uses that provider and prompt for future weekly report generation jobs
-
-#### Scenario: Configure Claude Code report generation
-- **WHEN** a user selects Claude Code CLI as the project's report provider and saves a system prompt
-- **THEN** the system uses that provider and prompt for future weekly report generation jobs
+The system SHALL support per-project configuration of the weekly report provider and Markdown report template, with a fixed platform system prompt.
 
 #### Scenario: Configure internal agent report generation
-- **WHEN** a user selects the internal agent as the project's report provider and saves a system prompt
-- **THEN** the system uses the internal agent with the configured LLM provider and that prompt for future weekly report generation jobs
+- **WHEN** a user selects the internal agent as the project's report provider
+- **THEN** the system uses the internal agent with the configured LLM provider for future weekly report generation jobs
+
+#### Scenario: Use fixed report system prompt
+- **WHEN** a report generation job starts
+- **THEN** the system uses the fixed system prompt that requires the report to follow the required Markdown structure exactly and to be written in the template's own language
 
 #### Scenario: Configure project report template
 - **WHEN** a user saves a project-specific Markdown report template

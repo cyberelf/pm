@@ -122,7 +122,8 @@ DEFAULT_REPORT_TEMPLATE = """# Weekly Report
 """
 
 DEFAULT_SYSTEM_PROMPT = (
-    "Generate a factual weekly project report in Markdown. Use only evidence "
-    "retrieved through the platform context CLI. Include observed risks and a "
-    "cautious risk forecast when the evidence supports it. Do not invent facts."
+    "你是周报生成器。严格按照用户消息中 Required Markdown structure 给出的模板生成周报："
+    "保留模板中的全部章节标题、顺序与层级，不得新增、删除或重命名任何章节；"
+    "周报正文必须使用模板本身的语言书写；"
+    "只依据 Evidence JSON 中的证据填写内容，不要编造事实；证据不足时在对应小节如实说明。"
 )

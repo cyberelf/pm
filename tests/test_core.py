@@ -24,6 +24,7 @@ from reports_app.config import (
     APP_VERSION,
     DEFAULT_ASR_LANGUAGE,
     DEFAULT_LLM_BASE_URLS,
+    DEFAULT_SYSTEM_PROMPT,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
     LLM_MODEL_SETTING,
@@ -60,7 +61,7 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, suggest_report_template, strip_template_fences
+from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, suggest_report_template, strip_template_fences
 from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
@@ -164,8 +165,10 @@ class CoreTest(unittest.TestCase):
                 "schedules": [{"weekday": 5, "local_time": "18:00", "timezone": "Asia/Shanghai"}],
             },
         )
-        row = self.conn.execute("SELECT report_provider FROM projects WHERE id = ?", (self.project_id,)).fetchone()
+        row = self.conn.execute("SELECT report_provider, system_prompt FROM projects WHERE id = ?", (self.project_id,)).fetchone()
         self.assertEqual(row["report_provider"], "internal")
+        # per-project system prompts are frozen: settings saves ignore the field
+        self.assertNotEqual(row["system_prompt"], "prompt")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM update_schedules").fetchone()["n"], 1)
 
     def test_todo_open_workflow_requires_valid_title_and_status(self):
@@ -1133,9 +1136,6 @@ class CoreTest(unittest.TestCase):
                 "timezone": "Asia/Shanghai",
                 "status": "active",
                 "report_provider": "internal",
-                "manual_background": "background",
-                "manual_objectives": "profile objective",
-                "manual_constraints": "constraint",
             },
         )
         save_plan(
@@ -1149,13 +1149,19 @@ class CoreTest(unittest.TestCase):
         )
         context, _hash = assemble_context(self.conn, self.project_id)
         self.assertEqual(context["project_profile"]["description"], "desc")
-        self.assertEqual(context["project_profile"]["background"], "background")
-        self.assertEqual(context["project_profile"]["objectives"], "profile objective")
-        self.assertEqual(context["project_profile"]["constraints"], "constraint")
+        self.assertNotIn("background", context["project_profile"])
+        self.assertNotIn("objectives", context["project_profile"])
+        self.assertNotIn("constraints", context["project_profile"])
         self.assertEqual(context["plan"]["objectives"], "plan objective")
         self.assertEqual(context["plan"]["milestones"][0]["title"], "M1")
         self.assertIn("profile=yes", input_summary(context))
         self.assertIn("plan=yes", input_summary(context))
+
+    def test_fixed_report_system_prompt(self):
+        self.conn.execute("UPDATE projects SET system_prompt = 'legacy prompt' WHERE id = ?", (self.project_id,))
+        context, _hash = assemble_context(self.conn, self.project_id)
+        self.assertEqual(context["system_prompt"], DEFAULT_SYSTEM_PROMPT)
+        self.assertEqual(get_effective_prompt({"system_prompt": "legacy prompt"}), DEFAULT_SYSTEM_PROMPT)
 
     def test_material_upload_and_pdf_extraction(self):
         txt = base64.b64encode(b"hello").decode()
@@ -2455,9 +2461,6 @@ class CoreTest(unittest.TestCase):
                 "timezone": "Asia/Shanghai",
                 "status": "active",
                 "report_provider": "internal",
-                "manual_background": "new background",
-                "manual_objectives": "new objective",
-                "manual_constraints": "new constraint",
             },
         )
         self.assertTrue(changed_since_last_success(self.conn, self.project_id, current_week_key("Asia/Shanghai")))

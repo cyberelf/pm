@@ -1359,10 +1359,6 @@ function renderSettings(ws) {
       ${input("end_date", "结束日期", p.end_date || "", "date")}
       ${timezoneSelect("timezone", "时区", p.timezone)}
       ${textarea("description", "描述", p.description, "wide")}
-      ${textarea("manual_background", "背景", p.manual_background, "wide")}
-      ${textarea("manual_objectives", "目标", p.manual_objectives, "wide")}
-      ${textarea("manual_constraints", "约束", p.manual_constraints, "wide")}
-      ${textarea("system_prompt", "系统提示词", p.system_prompt, "wide")}
       ${templateField(p)}
       <div class="wide panel">
         <div class="panel-head"><h3>更新时间点</h3><span>同一项目周内覆盖当前周报</span></div>
