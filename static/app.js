@@ -1604,10 +1604,10 @@ function renderSources(ws) {
       <div class="panel source-panel">
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
         <label id="material-dropzone" class="upload-dropzone" for="material-file" role="button" tabindex="0">
-          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.pdf" multiple>
+          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf" multiple>
           <span class="upload-icon" aria-hidden="true">↑</span>
           <strong>拖入文件，或点击选择</strong>
-          <span id="material-selection">支持 Markdown、纯文本和 PDF，可多选</span>
+          <span id="material-selection">支持 Markdown、纯文本、HTML 和 PDF，可多选</span>
         </label>
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
@@ -1679,7 +1679,7 @@ function updateMaterialSelection() {
   if (!label) return;
   label.textContent = files.length
     ? `已选择 ${files.length} 个文件：${files.map((file) => file.name).join("、")}`
-    : "支持 Markdown、纯文本和 PDF，可多选";
+    : "支持 Markdown、纯文本、HTML 和 PDF，可多选";
 }
 
 function renderUploadedMaterialRow(m) {
@@ -1716,6 +1716,13 @@ async function previewMaterial(id) {
       const frame = $("material-preview-pdf");
       frame.src = `/api/projects/${state.projectId}/materials/${id}/content`;
       frame.classList.remove("hidden");
+    } else if (material.preview_kind === "html") {
+      // srcdoc keeps the server's X-Frame-Options: DENY out of the way, and the
+      // empty sandbox blocks scripts, forms, and navigation inside the frame
+      const frame = $("material-preview-pdf");
+      frame.srcdoc = material.content_html || "";
+      frame.setAttribute("sandbox", "");
+      frame.classList.remove("hidden");
     } else if (material.preview_kind === "markdown") {
       const markdown = $("material-preview-markdown");
       markdown.innerHTML = material.content_html || "<p>暂无可预览的内容</p>";
@@ -1740,6 +1747,8 @@ function resetMaterialPreview() {
   text.textContent = "";
   markdown.innerHTML = "";
   pdf.removeAttribute("src");
+  pdf.removeAttribute("srcdoc");
+  pdf.removeAttribute("sandbox");
   [text, markdown, pdf].forEach((element) => element.classList.add("hidden"));
 }
 

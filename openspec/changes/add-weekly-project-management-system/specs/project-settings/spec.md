@@ -53,14 +53,14 @@ The system SHALL allow a user to edit project settings including project metadat
 - **THEN** the system calculates the project week in the project's timezone from Monday through Sunday
 
 ### Requirement: Project source materials
-The system SHALL allow a user to add project context through manual fields, uploaded Markdown/plain text/PDF project materials, and manually entered material notes.
+The system SHALL allow a user to add project context through manual fields, uploaded Markdown/plain text/HTML/PDF project materials, and manually entered material notes.
 
 #### Scenario: Add manual project context
 - **WHEN** a user saves manual project background, objectives, or constraints
 - **THEN** the system stores that content as project source context
 
 #### Scenario: Upload project material
-- **WHEN** a user uploads a Markdown, plain text, or PDF project material file
+- **WHEN** a user uploads a Markdown, plain text, HTML, or PDF project material file
 - **THEN** the system stores the file, records its metadata, and makes it available for report context extraction
 
 #### Scenario: Upload multiple project materials
@@ -70,6 +70,10 @@ The system SHALL allow a user to add project context through manual fields, uplo
 #### Scenario: Extract PDF project material
 - **WHEN** a user uploads a PDF containing extractable text
 - **THEN** the system extracts that text locally and marks the material extraction as successful
+
+#### Scenario: Extract HTML project material
+- **WHEN** a user uploads an HTML document with UTF-8 encoding or a declared charset
+- **THEN** the system decodes the document, strips tags and script/style content locally, and marks the material extraction as successful
 
 #### Scenario: Generate uploaded material summaries
 - **WHEN** one or more files are uploaded
@@ -84,12 +88,12 @@ The system SHALL allow a user to add project context through manual fields, uplo
 - **THEN** the system stores the edited summary and marks it as manually maintained
 
 #### Scenario: Preview uploaded material content
-- **WHEN** a user chooses Preview for an uploaded Markdown, plain text, or PDF material
+- **WHEN** a user chooses Preview for an uploaded Markdown, plain text, HTML, or PDF material
 - **THEN** the system loads the material detail on demand and displays its extracted text in a read-only modal
 
 #### Scenario: Render material preview by type
-- **WHEN** a user previews a Markdown, plain-text, or PDF material
-- **THEN** the system renders sanitized Markdown, preformatted plain text, or the original PDF inline in the shared read-only preview modal according to the material type
+- **WHEN** a user previews a Markdown, plain-text, HTML, or PDF material
+- **THEN** the system renders sanitized Markdown, preformatted plain text, a sandboxed script-free document view, or the original PDF inline in the shared read-only preview modal according to the material type
 
 #### Scenario: Add current-week manual material
 - **WHEN** a user saves manually entered material content for a project
@@ -116,7 +120,7 @@ The system SHALL allow a user to add project context through manual fields, uplo
 - **THEN** the system rejects the deletion and keeps the historical material unchanged
 
 #### Scenario: Reject unsupported project material
-- **WHEN** a user uploads a file that is not Markdown, plain text, or PDF
+- **WHEN** a user uploads a file that is not Markdown, plain text, HTML, or PDF
 - **THEN** the system rejects the upload and reports that the file type is unsupported
 
 #### Scenario: Record material extraction failure

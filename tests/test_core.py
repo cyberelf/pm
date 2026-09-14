@@ -48,7 +48,9 @@ from reports_app.github import list_branches, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
     build_summary_prompt,
+    decode_document_bytes,
     delete_material,
+    extract_html_text,
     material_is_unlocked,
     parse_summary_output,
     store_manual_material,
@@ -61,7 +63,7 @@ from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import assemble_context, build_internal_evidence_prompt, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider
 from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
-from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
+from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 import time
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
@@ -123,6 +125,8 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_material_filename("notes.docx")
         self.assertEqual(validate_material_filename("notes.md"), ".md")
+        self.assertEqual(validate_material_filename("page.html"), ".html")
+        self.assertEqual(validate_material_filename("page.htm"), ".htm")
         self.assertEqual(validate_branches(["main", "release/1.0", "main", ""]), ["main", "release/1.0"])
         self.assertEqual(validate_branches(["main", "*", "develop"]), ["*"])
         with self.assertRaises(ValidationError):
@@ -1201,6 +1205,121 @@ class CoreTest(unittest.TestCase):
             "broken.pdf",
             {item["details"].split(":", 1)[0] for item in data["source_diagnostics"] if item["kind"] == "material"},
         )
+
+    def test_html_material_extraction_charset_and_failure(self):
+        doc = (
+            "<!DOCTYPE html><html><head><title>周报资料</title>"
+            '<meta charset="utf-8"><style>body { color: red; }</style>'
+            "<script>console.log('secret script');</script></head>"
+            "<body><h1>项目周报</h1><p>第一段：登录模块上线。</p>"
+            "<ul><li>完成 A</li><li>完成 B</li></ul>"
+            "<table><tr><th>模块</th><th>状态</th></tr><tr><td>登录</td><td>完成</td></tr></table>"
+            "</body></html>"
+        )
+        material_id = store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "简报.html", "content_base64": base64.b64encode(doc.encode("utf-8")).decode()},
+        )
+        row = self.conn.execute(
+            "SELECT extraction_status, extracted_text FROM materials WHERE id = ?", (material_id,)
+        ).fetchone()
+        self.assertEqual(row["extraction_status"], "extracted")
+        text = row["extracted_text"]
+        self.assertIn("# 项目周报", text)
+        self.assertIn("第一段：登录模块上线。", text)
+        self.assertIn("- 完成 A", text)
+        self.assertIn("模块 | 状态", text)
+        self.assertIn("登录 | 完成", text)
+        self.assertNotIn("<h1>", text)
+        self.assertNotIn("secret script", text)
+        self.assertNotIn("color: red", text)
+
+        htm_id = store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "manual.htm", "content_base64": base64.b64encode(b"<p>plain body</p>").decode()},
+        )
+        row = self.conn.execute(
+            "SELECT extraction_status, extracted_text FROM materials WHERE id = ?", (htm_id,)
+        ).fetchone()
+        self.assertEqual(row["extraction_status"], "extracted")
+        self.assertEqual(row["extracted_text"], "plain body")
+
+        gb_doc = (
+            '<html><head><meta charset="gb2312"></head><body><h1>项目进展</h1>'
+            "<p>本周完成了登录模块。</p></body></html>"
+        )
+        gb_id = store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "gb.html", "content_base64": base64.b64encode(gb_doc.encode("gb2312")).decode()},
+        )
+        row = self.conn.execute(
+            "SELECT extraction_status, extracted_text FROM materials WHERE id = ?", (gb_id,)
+        ).fetchone()
+        self.assertEqual(row["extraction_status"], "extracted")
+        self.assertIn("项目进展", row["extracted_text"])
+        self.assertIn("本周完成了登录模块。", row["extracted_text"])
+
+        empty_id = store_material(
+            self.conn,
+            self.project_id,
+            {
+                "filename": "empty.html",
+                "content_base64": base64.b64encode("<html><head></head><body></body></html>".encode()).decode(),
+            },
+        )
+        row = self.conn.execute(
+            "SELECT extraction_status, extraction_error FROM materials WHERE id = ?", (empty_id,)
+        ).fetchone()
+        self.assertEqual(row["extraction_status"], "failed")
+        self.assertIn("HTML text extraction failed", row["extraction_error"])
+
+        data = workspace(self.conn, self.project_id)
+        self.assertNotIn("empty.html", {item["filename"] for item in data["materials"]})
+        self.assertIn(
+            "empty.html",
+            {item["details"].split(":", 1)[0] for item in data["source_diagnostics"] if item["kind"] == "material"},
+        )
+
+    def test_html_material_preview_kind_and_fallback(self):
+        doc = "<html><body><h1>原始页面</h1><p>正文</p></body></html>"
+        material_id = store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "page.html", "content_base64": base64.b64encode(doc.encode("utf-8")).decode()},
+        )
+        row = self.conn.execute("SELECT storage_path FROM materials WHERE id = ?", (material_id,)).fetchone()
+        detail = material_detail(self.conn, self.project_id, material_id)
+        self.assertEqual(detail["preview_kind"], "html")
+        self.assertIn("<h1>原始页面</h1>", detail["content_html"])
+        self.assertNotIn("storage_path", detail)
+
+        os.unlink(row["storage_path"])
+        detail = material_detail(self.conn, self.project_id, material_id)
+        self.assertEqual(detail["preview_kind"], "text")
+        self.assertIn("原始页面", detail["content"])
+
+        txt_id = store_material(
+            self.conn, self.project_id, {"filename": "a.txt", "content_base64": base64.b64encode(b"hi").decode()}
+        )
+        self.assertEqual(material_detail(self.conn, self.project_id, txt_id)["preview_kind"], "text")
+        md_id = store_material(
+            self.conn, self.project_id, {"filename": "a.md", "content_base64": base64.b64encode(b"# hi").decode()}
+        )
+        self.assertEqual(material_detail(self.conn, self.project_id, md_id)["preview_kind"], "markdown")
+
+    def test_decode_document_bytes_charset_fallback(self):
+        self.assertEqual(decode_document_bytes("中文".encode("utf-8")), "中文")
+        declared = '<html><head><meta charset="gb18030"></head><body>会议纪要</body></html>'.encode("gb18030")
+        self.assertIn("会议纪要", decode_document_bytes(declared))
+        # gb2312/gbk bytes without a meta declaration still decode via the
+        # gb18030 superset fallback
+        self.assertIn("会议纪要", decode_document_bytes("会议纪要".encode("gb2312")))
+        with self.assertRaises(UnicodeDecodeError):
+            decode_document_bytes(b"\xff\xfe")
+        self.assertEqual(extract_html_text(b"<p>caf&eacute;</p>"), "café")
 
     def test_batch_ai_summaries_and_manual_summary_edit(self):
         ids = [

@@ -6,9 +6,10 @@ import os
 import re
 from pathlib import Path
 
+from html.parser import HTMLParser
 from pypdf import PdfReader
 
-from .config import SUPPORTED_TEXT_EXTENSIONS, UPLOAD_DIR
+from .config import SUPPORTED_HTML_EXTENSIONS, SUPPORTED_TEXT_EXTENSIONS, UPLOAD_DIR
 from .timeutil import current_week_key, iso_now, parse_iso, week_key_for
 from .validation import ValidationError, validate_material_filename
 
@@ -39,6 +40,15 @@ def store_material(conn, project_id, payload):
         except UnicodeDecodeError as exc:
             status = "failed"
             error = f"text decode failed: {exc}"
+    elif ext in SUPPORTED_HTML_EXTENSIONS:
+        try:
+            extracted = extract_html_text(raw)
+            if not extracted.strip():
+                raise ValueError("HTML contains no extractable text")
+            status = "extracted"
+        except Exception as exc:
+            status = "failed"
+            error = f"HTML text extraction failed: {exc}"
     elif ext == ".pdf":
         try:
             extracted = extract_pdf_text(raw)
@@ -84,6 +94,80 @@ def original_filename(name):
 def extract_pdf_text(raw):
     reader = PdfReader(io.BytesIO(raw))
     return "\n\n".join((page.extract_text() or "").strip() for page in reader.pages).strip()
+
+def decode_document_bytes(raw):
+    """Decode an uploaded document to str: strict UTF-8 first, then the charset
+    declared in the HTML meta tag, then gb18030 (superset of the gb2312/gbk
+    encodings common in Chinese HTML exports). Raises UnicodeDecodeError."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    head = raw[:2048].decode("ascii", errors="ignore")
+    match = re.search(r'charset\s*=\s*["\']?([A-Za-z0-9_.:-]+)', head, re.IGNORECASE)
+    candidates = [match.group(1)] if match else []
+    candidates.append("gb18030")
+    for encoding in candidates:
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    raise UnicodeDecodeError("utf-8", raw, 0, 1, "unsupported encoding and no usable charset declaration")
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Extract readable text from an uploaded HTML document (stdlib only)."""
+    HEADINGS = {"h1": "# ", "h2": "## ", "h3": "### ", "h4": "#### ", "h5": "#### ", "h6": "#### "}
+    NEWLINE = {"p", "div", "br", "tr", "table", "ul", "ol", "section", "hr", "blockquote"}
+    SKIP = {"script", "style"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self.skip_depth += 1
+        elif self.skip_depth:
+            return
+        elif tag in self.HEADINGS:
+            self.parts.append("\n\n" + self.HEADINGS[tag])
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag in {"td", "th"}:
+            self.parts.append(" | ")
+        elif tag in self.NEWLINE:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP:
+            self.skip_depth = max(0, self.skip_depth - 1)
+        elif self.skip_depth:
+            return
+        elif tag in self.HEADINGS or tag in self.NEWLINE or tag == "li":
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip_depth:
+            self.parts.append(data)
+
+
+def extract_html_text(raw):
+    parser = _HTMLTextExtractor()
+    parser.feed(decode_document_bytes(raw))
+    text = "".join(parser.parts)
+    lines = [line.rstrip() for line in text.splitlines()]
+    out, blank = [], 0
+    for line in lines:
+        if not line.strip():
+            blank += 1
+            if blank > 1:
+                continue
+        else:
+            blank = 0
+        out.append(line)
+    return "\n".join(out).strip()
 
 
 def summarize_uploaded_materials(conn, project_id, material_ids, timeout=120):

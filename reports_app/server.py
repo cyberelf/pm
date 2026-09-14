@@ -35,6 +35,7 @@ from .config import (
     QUEUE_PARALLELISM_SETTING,
     REPORT_PROVIDER,
     STATIC_DIR,
+    SUPPORTED_HTML_EXTENSIONS,
     UI_MODE_SETTING,
     UI_THEME_SETTING,
     UPLOAD_DIR,
@@ -63,6 +64,7 @@ from .git_sources import check_repo, git_auth_for_user, list_branches, load_gith
 from .github import token_kind as github_token_kind
 from .markdown import render_markdown
 from .materials import (
+    decode_document_bytes,
     delete_material,
     material_is_editable,
     material_is_unlocked,
@@ -1199,7 +1201,8 @@ def material_detail(conn, project_id, material_id):
     row = conn.execute(
         """
         SELECT id, filename, source_type, content_type, size_bytes, extraction_status,
-               extraction_error, extracted_text, summary, summary_status, created_at, updated_at
+               extraction_error, extracted_text, summary, summary_status, storage_path,
+               created_at, updated_at
         FROM materials
         WHERE id = ? AND project_id = ?
         """,
@@ -1208,6 +1211,7 @@ def material_detail(conn, project_id, material_id):
     if not row:
         return None
     item = dict(row)
+    storage_path = item.pop("storage_path") or ""
     item["content"] = item.pop("extracted_text") or ""
     suffix = Path(item["filename"]).suffix.lower()
     if suffix == ".pdf" and item["source_type"] == "upload":
@@ -1215,6 +1219,16 @@ def material_detail(conn, project_id, material_id):
     elif item["source_type"] == "manual" or suffix in {".md", ".markdown"}:
         item["preview_kind"] = "markdown"
         item["content_html"] = render_markdown(item["content"])
+    elif suffix in SUPPORTED_HTML_EXTENSIONS and item["source_type"] == "upload":
+        # preview the original document, not the tag-stripped text; a missing or
+        # undecodable file falls back to the plain-text view of extracted_text
+        item["content_html"] = ""
+        if storage_path:
+            try:
+                item["content_html"] = decode_document_bytes(Path(storage_path).read_bytes())
+            except (OSError, ValueError):
+                item["content_html"] = ""
+        item["preview_kind"] = "html" if item["content_html"] else "text"
     else:
         item["preview_kind"] = "text"
     return item

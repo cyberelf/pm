@@ -95,8 +95,10 @@ GITLAB_TOKEN_SETTING = "gitlab_token"
 GITLAB_URL_SETTING = "gitlab_url"
 GITLAB_SKIP_VERIFY_SETTING = "gitlab_skip_verify"
 MAX_GITLAB_PAGES = 5
-SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".pdf"}
+SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf"}
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
+# uploaded HTML documents get tag-stripping extraction, not the raw text decode
+SUPPORTED_HTML_EXTENSIONS = {".html", ".htm"}
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 TRACK_ALL_BRANCHES = "*"
 
