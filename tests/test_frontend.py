@@ -173,6 +173,117 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('id="material-preview-markdown"', html)
         self.assertIn('$("close-material-preview").onclick', source)
 
+    def test_template_wand_controls_exist(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("wand: {", source)
+        self.assertIn('${faIcon("wand")}', source)
+        self.assertIn("function templateField(p)", source)
+        self.assertIn('<textarea name="report_template">', source)
+        self.assertIn('type="button" class="template-wand"', source)
+        self.assertIn("async function suggestReportTemplate()", source)
+        self.assertIn("/suggest-template", source)
+        self.assertIn('window.confirm("当前模板内容将被生成结果覆盖，继续？")', source)
+        self.assertIn("模板已生成，保存设置后生效", source)
+        self.assertIn(".template-wand {", styles)
+
+    def test_suggest_report_template_fills_textarea_and_confirms(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+const testElements = new Map();
+function testElement() {
+  return {
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    showModal() { this.open = true; },
+    close() { this.open = false; },
+  };
+}
+const templateFieldEl = { value: "" };
+globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+globalThis.document = {
+  getElementById(id) {
+    if (!testElements.has(id)) testElements.set(id, testElement());
+    return testElements.get(id);
+  },
+  querySelector(selector) {
+    return selector.includes("report_template") ? templateFieldEl : null;
+  },
+  querySelectorAll() { return []; },
+};
+globalThis.setTimeout = () => 0;
+globalThis.window = {};
+const responses = [];
+const fetchCalls = [];
+globalThis.fetch = async (path, options) => {
+  fetchCalls.push({ path, options });
+  const body = responses.shift();
+  if (body === undefined) throw new Error(`unexpected fetch: ${path}`);
+  return {
+    ok: true,
+    text: async () => JSON.stringify(body),
+    async json() { return body; },
+  };
+};
+"""
+        assertions = r"""
+(async () => {
+  render = () => {};
+  toast = () => {};
+  state.projectId = 1;
+
+  templateFieldEl.value = "";
+  window.confirm = () => { throw new Error("confirm must not run for an empty field"); };
+  responses.push({ template: "# Fresh Template" });
+  await suggestReportTemplate();
+  if (fetchCalls.length !== 1 || fetchCalls[0].path !== "/api/projects/1/suggest-template" || fetchCalls[0].options.method !== "POST") {
+    throw new Error("empty field did not POST to suggest-template");
+  }
+  if (!fetchCalls[0].options.body.includes('"requirements":""')) {
+    throw new Error(`unexpected requirements payload: ${fetchCalls[0].options.body}`);
+  }
+  if (templateFieldEl.value !== "# Fresh Template") {
+    throw new Error("the generated template was not filled into the textarea");
+  }
+
+  templateFieldEl.value = "# Existing";
+  window.confirm = () => false;
+  await suggestReportTemplate();
+  if (fetchCalls.length !== 1) {
+    throw new Error("declining the confirm must not call the API");
+  }
+
+  window.confirm = () => true;
+  responses.push({ template: "# Replaced" });
+  await suggestReportTemplate();
+  if (fetchCalls.length !== 2) {
+    throw new Error("accepting the confirm did not call the API");
+  }
+  if (!fetchCalls[1].options.body.includes('"requirements":"# Existing"')) {
+    throw new Error(`the current template was not sent as requirements: ${fetchCalls[1].options.body}`);
+  }
+  if (templateFieldEl.value !== "# Replaced") {
+    throw new Error("the replaced template was not filled in");
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+        result = subprocess.run(
+            ["node"],
+            input=f"{harness}\n{source}\n{assertions}",
+            cwd=ROOT_DIR,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_unlocked_materials_have_delete_controls(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")

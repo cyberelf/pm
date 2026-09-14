@@ -76,7 +76,7 @@ from .materials import (
     update_material_summary,
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
-from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report
+from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report, suggest_report_template
 from .risks import evaluate_risks, progress_status
 from .task_queue import (
     QueueFullError,
@@ -852,6 +852,11 @@ class Handler(BaseHTTPRequestHandler):
                     update_settings(conn, project_id, self.body_json())
                     conn.commit()
                     self.json(workspace(conn, project_id))
+                    return
+                if len(parts) == 4 and parts[3] == "suggest-template" and method == "POST":
+                    payload = self.body_json()
+                    template = suggest_report_template(conn, project_id, str(payload.get("requirements") or ""))
+                    self.json({"template": template})
                     return
                 if len(parts) == 4 and parts[3] == "materials" and method == "POST":
                     payload = self.body_json()

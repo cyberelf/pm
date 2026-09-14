@@ -10,6 +10,10 @@ const FA_ICONS = {
     viewBox: "0 0 384 512",
     path: "M64 0C28.7 0 0 28.7 0 64V448c0 35.3 28.7 64 64 64H320c35.3 0 64-28.7 64-64V160H256c-17.7 0-32-14.3-32-32V0H64zM256 0V128H384L256 0zM96 224c0-8.8 7.2-16 16-16H272c8.8 0 16 7.2 16 16s-7.2 16-16 16H112c-8.8 0-16-7.2-16-16zm0 64c0-8.8 7.2-16 16-16H272c8.8 0 16 7.2 16 16s-7.2 16-16 16H112c-8.8 0-16-7.2-16-16zm0 64c0-8.8 7.2-16 16-16H208c8.8 0 16 7.2 16 16s-7.2 16-16 16H112c-8.8 0-16-7.2-16-16z",
   },
+  wand: {
+    viewBox: "0 0 576 512",
+    path: "M234.7 42.7L197 56.8c-3 1.1-5 4-5 7.2s2 6.1 5 7.2l37.7 14.1L248.8 123c1.1 3 4 5 7.2 5s6.1-2 7.2-5l14.1-37.7L315 71.2c3-1.1 5-4 5-7.2s-2-6.1-5-7.2L277.3 42.7 263.2 5c-1.1-3-4-5-7.2-5s-6.1 2-7.2 5L234.7 42.7zM46.1 395.4c-18.7 18.7-18.7 49.1 0 67.9l34.6 34.6c18.7 18.7 49.1 18.7 67.9 0L529.9 116.5c18.7-18.7 18.7-49.1 0-67.9L495.3 14.1c-18.7-18.7-49.1-18.7-67.9 0L46.1 395.4zM484.6 82.6l-105 105-23.3-23.3 105-105 23.3 23.3zM7.5 117.2C3 118.9 0 123.2 0 128s3 9.1 7.5 10.8L64 160l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L128 160l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L128 96 106.8 39.5C105.1 35 100.8 32 96 32s-9.1 3-10.8 7.5L64 96 7.5 117.2zm352 256c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L416 416l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L480 416l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L480 352l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L416 352l-56.5 21.2z",
+  },
 };
 const state = {
   projects: [],
@@ -1359,7 +1363,7 @@ function renderSettings(ws) {
       ${textarea("manual_objectives", "目标", p.manual_objectives, "wide")}
       ${textarea("manual_constraints", "约束", p.manual_constraints, "wide")}
       ${textarea("system_prompt", "系统提示词", p.system_prompt, "wide")}
-      ${textarea("report_template", "项目周报模板", p.report_template, "wide")}
+      ${templateField(p)}
       <div class="wide panel">
         <div class="panel-head"><h3>更新时间点</h3><span>同一项目周内覆盖当前周报</span></div>
         <div id="schedule-list">${renderSchedules(ws.schedules, p.timezone)}</div>
@@ -1380,6 +1384,33 @@ function renderSettings(ws) {
   `;
   $("settings-form").onsubmit = saveSettings;
   onRepoModeChange();
+}
+
+function templateField(p) {
+  return `
+    <div class="wide template-field">
+      <div class="template-field-head">
+        <span>项目周报模板</span>
+        <button type="button" class="template-wand" title="AI 生成周报模板" aria-label="AI 生成周报模板" onclick="suggestReportTemplate()">${faIcon("wand")}</button>
+      </div>
+      <textarea name="report_template">${escapeHtml(p.report_template || "")}</textarea>
+      <small>魔棒按当前填写内容、项目数据来源与最近一期周报生成模板，点击“保存设置”后生效</small>
+    </div>
+  `;
+}
+
+async function suggestReportTemplate() {
+  const field = document.querySelector("#settings-form textarea[name='report_template']");
+  if (!field) return;
+  if (field.value.trim() && !window.confirm("当前模板内容将被生成结果覆盖，继续？")) return;
+  await withBusy("正在生成周报模板", "正在根据项目要求、数据来源与最近周报设计模板…", async () => {
+    const data = await api(`/api/projects/${state.projectId}/suggest-template`, {
+      method: "POST",
+      body: JSON.stringify({ requirements: field.value }),
+    });
+    field.value = data.template || "";
+  });
+  toast("模板已生成，保存设置后生效");
 }
 
 function projectRunToggle(p) {

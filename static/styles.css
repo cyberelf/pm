@@ -396,6 +396,22 @@ strong { color: var(--ink); }
 .project-settings:hover, .project-settings:focus-visible, .project-settings.active,
 .project-generate:hover, .project-generate:focus-visible { background: var(--surface-strong); color: var(--ink); }
 .project-settings .fa-icon, .project-generate .fa-icon { width: 16px; height: 16px; fill: currentColor; }
+.template-field { display: grid; gap: 4px; }
+.template-field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.template-field small { color: var(--muted-soft); }
+.template-wand {
+  width: 28px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 5px;
+  background: transparent;
+  color: var(--muted-soft);
+}
+.template-wand:hover, .template-wand:focus-visible { background: var(--surface-strong); color: var(--ink); }
+.template-wand .fa-icon { width: 14px; height: 14px; fill: currentColor; }
 .project-item-status { flex: 0 0 auto; margin: 0 2px 0 0; }
 .project-row.paused .project-item strong { color: var(--muted-soft); font-weight: 500; }
 .project-item-flag {

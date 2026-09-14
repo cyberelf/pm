@@ -60,7 +60,7 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import assemble_context, build_internal_evidence_prompt, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider
+from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, suggest_report_template, strip_template_fences
 from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
@@ -1320,6 +1320,108 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(UnicodeDecodeError):
             decode_document_bytes(b"\xff\xfe")
         self.assertEqual(extract_html_text(b"<p>caf&eacute;</p>"), "café")
+
+    def test_template_suggestion_prompt_bundles_requirements_sources_and_last_report(self):
+        store_material(
+            self.conn,
+            self.project_id,
+            {"filename": "weekly-notes.md", "content_base64": base64.b64encode(b"# notes").decode()},
+        )
+        add_repo(self.conn, self.project_id, {"repo": "acme/server", "git_mode": "github", "notes": "核心服务"})
+        self.conn.execute(
+            """
+            INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
+            VALUES (?, '2026-W25', '# Old Report', 1, '2026-06-21T00:00:00+00:00', '2026-06-21T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
+            VALUES (?, '2026-W30', '# Latest Report\n\n风险预测要点', 2, '2026-07-26T00:00:00+00:00', '2026-07-26T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+
+        sources = collect_template_sources(self.conn, self.project_id)
+        self.assertEqual(sources["material_count"], 1)
+        self.assertEqual(sources["materials"][0]["filename"], "weekly-notes.md")
+        self.assertEqual(sources["repositories"][0]["repo"], "acme/server")
+        self.assertEqual(sources["report_history_weeks"], ["2026-W30", "2026-W25"])
+        self.assertFalse(sources["weekly_update_present"])
+        self.assertNotIn("commits", sources)
+
+        self.assertEqual(latest_report_markdown(self.conn, self.project_id), "# Latest Report\n\n风险预测要点")
+
+        prompt = build_template_suggestion_prompt("突出风险预测和里程碑", sources, latest_report_markdown(self.conn, self.project_id))
+        self.assertIn("突出风险预测和里程碑", prompt)
+        self.assertIn("weekly-notes.md", prompt)
+        self.assertIn("acme/server", prompt)
+        self.assertIn("# Latest Report", prompt)
+        self.assertIn("只输出模板本身的 Markdown", prompt)
+
+    def test_suggest_report_template_fake_provider_and_fences(self):
+        template = suggest_report_template(self.conn, self.project_id, "突出风险预测")
+        self.assertEqual(template, FAKE_SUGGESTED_TEMPLATE.strip())
+        self.assertTrue(template.startswith("#"))
+        self.assertIn("##", template)
+        saved = self.conn.execute("SELECT report_template FROM projects WHERE id = ?", (self.project_id,)).fetchone()
+        self.assertEqual(saved["report_template"], "")
+
+        # fake provider is on in setUp; turn it off to exercise the real path
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": ""}):
+            with mock.patch("reports_app.internal_agent.internal_chat", return_value="```markdown\n# Styled Template\n```") as chat:
+                template = suggest_report_template(self.conn, self.project_id, "", timeout=5)
+            self.assertEqual(template, "# Styled Template")
+            self.assertEqual(chat.call_args.kwargs["max_tokens"], 4096)
+            self.assertEqual(chat.call_args.kwargs["temperature"], 0)
+
+            with mock.patch("reports_app.internal_agent.internal_chat", side_effect=RuntimeError("provider down")):
+                with self.assertRaises(ValidationError) as ctx:
+                    suggest_report_template(self.conn, self.project_id, "")
+            self.assertIn("模板生成失败", str(ctx.exception))
+
+            with mock.patch("reports_app.internal_agent.internal_chat", return_value="   "):
+                with self.assertRaises(ValidationError):
+                    suggest_report_template(self.conn, self.project_id, "")
+
+    def test_suggest_template_endpoint_returns_template_without_saving(self):
+        self.conn.execute(
+            "UPDATE projects SET report_template = '# Existing Template' WHERE id = ?", (self.project_id,)
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "POST",
+                f"/api/projects/{self.project_id}/suggest-template",
+                body=json.dumps({"requirements": "突出风险预测"}, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            result = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertTrue(result["template"].startswith("#"))
+
+            saved = self.conn.execute(
+                "SELECT report_template FROM projects WHERE id = ?", (self.project_id,)
+            ).fetchone()
+            self.assertEqual(saved["report_template"], "# Existing Template")
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "POST", "/api/projects/999999/suggest-template", body="{}", headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            client.close()
+            self.assertEqual(response.status, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_batch_ai_summaries_and_manual_summary_edit(self):
         ids = [

@@ -1,12 +1,14 @@
 import hashlib
 import json
 import os
+import re
 
 from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT
 from .db import connect
 from .git_sources import git_auth_for_user, weekly_commits
 from .risks import evaluate_risks
 from .timeutil import current_week_key, iso_now, parse_iso, week_bounds, week_key_for
+from .validation import ValidationError
 
 
 def get_effective_template(project):
@@ -351,6 +353,143 @@ def compact_previous_report(report):
         "available": True,
         "updated_at": report.get("updated_at"),
     }
+
+
+FAKE_SUGGESTED_TEMPLATE = """# Weekly Report (Suggested)
+
+## This Week's Summary
+
+## Completed Work
+
+## In Progress
+
+## Blockers and Risks
+
+## Risk Forecast
+
+## Next Week Plan
+
+## GitHub Activity Summary
+
+## Source/Input References
+"""
+
+
+def collect_template_sources(conn, project_id):
+    """Bounded, network-free snapshot of the data sources a report template
+    can draw on: profile, plan, materials and repositories registrations,
+    weekly-input presence, and past report weeks."""
+    project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        raise LookupError("project not found")
+    plan = conn.execute(
+        "SELECT objectives, milestones_json, deliverables_json FROM project_plans WHERE project_id = ?",
+        (project_id,),
+    ).fetchone()
+    materials = conn.execute(
+        """
+        SELECT filename, summary FROM materials
+        WHERE project_id = ? AND extraction_status != 'failed'
+        ORDER BY id DESC LIMIT 20
+        """,
+        (project_id,),
+    ).fetchall()
+    material_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM materials WHERE project_id = ? AND extraction_status != 'failed'",
+        (project_id,),
+    ).fetchone()["n"]
+    repos = conn.execute(
+        "SELECT repo, git_mode, notes FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id",
+        (project_id,),
+    ).fetchall()
+    week_key = current_week_key(project["timezone"])
+    update = conn.execute(
+        "SELECT id FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)
+    ).fetchone()
+    outcome_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM weekly_outcomes WHERE project_id = ? AND week_key = ?", (project_id, week_key)
+    ).fetchone()["n"]
+    history = conn.execute(
+        "SELECT week_key FROM weekly_reports WHERE project_id = ? ORDER BY week_key DESC LIMIT 5", (project_id,)
+    ).fetchall()
+    return {
+        "project_profile": {
+            "name": project["name"],
+            "description": project["description"],
+            "background": project["manual_background"],
+            "objectives": project["manual_objectives"],
+            "constraints": project["manual_constraints"],
+            "status": project["status"],
+        },
+        "plan": {
+            "objectives": plan["objectives"] if plan else "",
+            "milestones": json.loads(plan["milestones_json"]) if plan else [],
+            "deliverables": json.loads(plan["deliverables_json"]) if plan else [],
+        },
+        "material_count": material_count,
+        "materials": [{"filename": row["filename"], "summary": row["summary"]} for row in materials],
+        "repositories": [{"repo": row["repo"], "git_mode": row["git_mode"], "notes": row["notes"]} for row in repos],
+        "weekly_update_present": bool(update),
+        "weekly_outcome_count": outcome_count,
+        "report_history_weeks": [row["week_key"] for row in history],
+    }
+
+
+def latest_report_markdown(conn, project_id):
+    """Most recent generated report regardless of week; week_key values sort
+    chronologically as YYYY-Www strings."""
+    row = conn.execute(
+        "SELECT content_md FROM weekly_reports WHERE project_id = ? ORDER BY week_key DESC LIMIT 1",
+        (project_id,),
+    ).fetchone()
+    return (row["content_md"] or "").strip() if row else ""
+
+
+def build_template_suggestion_prompt(requirements, sources, last_report_md):
+    return (
+        "你是周报模板设计助手。请根据用户要求、项目可用的数据来源和最近一期周报，"
+        "设计一份新的项目周报 Markdown 模板。\n"
+        "要求：\n"
+        "- 只输出模板本身的 Markdown，不要任何解释，不要代码块围栏。\n"
+        "- 用标题和空小节表达结构，每个小节内可以用 <!-- ... --> 注释写明该节应包含的内容。\n"
+        "- 结合可用数据来源设计章节：数据来源里有的内容才设计对应章节，没有的不要凭空增加。\n"
+        "- 参考最近一期周报的整体结构与语言风格，但不要照抄其中的正文内容。\n"
+        "- 用户要求与其他输入冲突时，以用户要求为准。\n\n"
+        "用户要求（来自模板输入框当前内容）：\n"
+        f"{requirements or '（未填写，请按数据来源自行设计）'}\n\n"
+        "可用数据来源（JSON）：\n\n"
+        f"```json\n{json.dumps(sources, ensure_ascii=False, indent=2)}\n```\n\n"
+        "最近一期周报（结构与风格参考）：\n\n"
+        f"{last_report_md or '（该项目还没有已生成的周报）'}"
+    )
+
+
+def strip_template_fences(raw):
+    value = (raw or "").strip()
+    if value.startswith("```"):
+        value = re.sub(r"^```(?:markdown|md)?\s*|\s*```$", "", value, flags=re.IGNORECASE)
+    return value.strip()
+
+
+def suggest_report_template(conn, project_id, requirements, timeout=120):
+    """Design a fresh report template with the internal agent. Read-only: the
+    generated template is returned for review, not saved. REPORTS_FAKE_PROVIDER
+    keeps tests and dry runs offline."""
+    sources = collect_template_sources(conn, project_id)
+    last_report = latest_report_markdown(conn, project_id)[:6000]
+    prompt = build_template_suggestion_prompt((requirements or "").strip()[:8000], sources, last_report)
+    if fake_provider_enabled():
+        return FAKE_SUGGESTED_TEMPLATE.strip()
+    from .internal_agent import internal_chat, resolve_llm_settings
+
+    try:
+        raw = internal_chat(prompt, resolve_llm_settings(conn), timeout=timeout, max_tokens=4096, temperature=0)
+    except RuntimeError as exc:
+        raise ValidationError(f"模板生成失败：{exc}") from exc
+    template = strip_template_fences(raw)
+    if not template:
+        raise ValidationError("模板生成结果为空，请稍后重试")
+    return template
 
 
 def fake_report(context):

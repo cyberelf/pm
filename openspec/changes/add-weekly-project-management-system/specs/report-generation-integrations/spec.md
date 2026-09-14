@@ -73,6 +73,21 @@ The system SHALL provide a default Markdown weekly report template when a projec
 - **WHEN** a report generation job starts for a project with a project-specific report template
 - **THEN** the system uses the project-specific template instead of the default template
 
+### Requirement: AI-assisted template design
+The system SHALL let the workspace user request an AI-drafted project report template based on the requirements typed in the template editor, the project's available data sources, and the most recent generated report as a structural reference, without saving the draft until project settings are saved.
+
+#### Scenario: Design a template from current inputs
+- **WHEN** the user triggers template design from the project settings template editor
+- **THEN** the system assembles the editor content, a network-free snapshot of the project's data sources, and the latest generated report, asks the internal agent to draft a Markdown template, and returns it for review
+
+#### Scenario: Keep the stored template unchanged until saved
+- **WHEN** a template design request completes
+- **THEN** the system returns the drafted template to the editor without modifying the stored project report template
+
+#### Scenario: Report template design failure
+- **WHEN** the internal agent fails or returns an empty template during template design
+- **THEN** the system reports the failure to the user and leaves the stored template unchanged
+
 ### Requirement: Platform-mediated provider handoff
 The system SHALL invoke CLI report providers through a temporary working directory and expose project information through a read-only platform context CLI.
 
