@@ -102,23 +102,23 @@ SUPPORTED_HTML_EXTENSIONS = {".html", ".htm"}
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 TRACK_ALL_BRANCHES = "*"
 
-DEFAULT_REPORT_TEMPLATE = """# Weekly Report
+DEFAULT_REPORT_TEMPLATE = """# 周报
 
-## This Week's Summary
+## 本周总结
 
-## Completed Work
+## 已完成工作
 
-## In Progress
+## 进行中
 
-## Blockers and Risks
+## 阻塞与风险
 
-## Risk Forecast
+## 风险预测
 
-## Next Week Plan
+## 下周计划
 
-## GitHub Activity Summary
+## Git 活动摘要
 
-## Source/Input References
+## 资料来源与依据
 """
 
 DEFAULT_SYSTEM_PROMPT = (

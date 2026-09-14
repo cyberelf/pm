@@ -2929,7 +2929,7 @@ class InternalAgentTest(unittest.TestCase):
         prompt = build_internal_evidence_prompt(context)
         self.assertIn("Evidence JSON", prompt)
         self.assertIn("internal context", prompt)
-        self.assertIn("# Weekly Report", prompt)
+        self.assertIn("# 周报", prompt)
         self.assertIn("Do not invent facts", prompt)
         self.assertNotIn("Claude Code CLI", prompt)
         self.assertNotIn("`gh` or `glab`", prompt)
@@ -2988,7 +2988,7 @@ class InternalAgentTest(unittest.TestCase):
             with mock.patch("reports_app.internal_agent.generate_internal_report") as gen:
                 output = invoke_provider("internal", context)
         gen.assert_not_called()
-        self.assertIn("Weekly Report", output)
+        self.assertIn("周报", output)
 
     def test_voice_internal_agent_structures_and_falls_back(self):
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}):

@@ -67,7 +67,7 @@ The system SHALL provide a default Markdown weekly report template when a projec
 
 #### Scenario: Apply default report template
 - **WHEN** a report generation job starts for a project without a project-specific report template
-- **THEN** the system uses a default Markdown template containing sections for this week's summary, completed work, in-progress work, blockers and risks, risk forecast, next week plan, GitHub activity summary, and source/input references
+- **THEN** the system uses a default Chinese-language Markdown template containing sections for 本周总结, 已完成工作, 进行中, 阻塞与风险, 风险预测, 下周计划, Git 活动摘要, and 资料来源与依据
 
 #### Scenario: Apply project-specific report template
 - **WHEN** a report generation job starts for a project with a project-specific report template

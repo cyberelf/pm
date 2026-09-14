@@ -344,23 +344,23 @@ def compact_previous_report(report):
     }
 
 
-FAKE_SUGGESTED_TEMPLATE = """# Weekly Report (Suggested)
+FAKE_SUGGESTED_TEMPLATE = """# 周报（建议模板）
 
-## This Week's Summary
+## 本周总结
 
-## Completed Work
+## 已完成工作
 
-## In Progress
+## 进行中
 
-## Blockers and Risks
+## 阻塞与风险
 
-## Risk Forecast
+## 风险预测
 
-## Next Week Plan
+## 下周计划
 
-## GitHub Activity Summary
+## Git 活动摘要
 
-## Source/Input References
+## 资料来源与依据
 """
 
 
@@ -476,29 +476,29 @@ def suggest_report_template(conn, project_id, requirements, timeout=120):
 
 def fake_report(context):
     project = context["project"]
-    return f"""# Weekly Report - {project['name']}
+    return f"""# 周报 - {project['name']}
 
-## This Week's Summary
-Generated for {context['week_key']} from local workspace context.
+## 本周总结
+基于 {context['week_key']} 的本地工作区上下文生成。
 
-## Completed Work
-{(context.get('weekly_update') or {}).get('completed', '') or 'No completed work recorded.'}
+## 已完成工作
+{(context.get('weekly_update') or {}).get('completed', '') or '暂无已完成工作记录。'}
 
-## In Progress
-{(context.get('weekly_update') or {}).get('in_progress', '') or 'No in-progress work recorded.'}
+## 进行中
+{(context.get('weekly_update') or {}).get('in_progress', '') or '暂无进行中工作记录。'}
 
-## Blockers and Risks
-{(context.get('weekly_update') or {}).get('blockers', '') or 'No blockers recorded.'}
+## 阻塞与风险
+{(context.get('weekly_update') or {}).get('blockers', '') or '暂无阻塞记录。'}
 
-## Risk Forecast
-Review overdue milestones, source availability, missing project inputs, and stale project evidence.
+## 风险预测
+检查逾期里程碑、资料可用性、缺失的项目输入和过期的项目证据。
 
-## Next Week Plan
-{(context.get('weekly_update') or {}).get('next_steps', '') or 'No next steps recorded.'}
+## 下周计划
+{(context.get('weekly_update') or {}).get('next_steps', '') or '暂无下周计划记录。'}
 
-## GitHub Activity Summary
-{sum(len(repo.get('commits', [])) for repo in context.get('git_commits_this_week', []))} commit(s) this week across {len(context['github_activity'])} repository source(s).
+## Git 活动摘要
+本周 {len(context.get('git_commits_this_week', []))} 个仓库来源共 {sum(len(repo.get('commits', [])) for repo in context.get('git_commits_this_week', []))} 次提交。
 
-## Source/Input References
-{len(context.get('new_materials_this_week', []))} new material file(s) this week.
+## 资料来源与依据
+本周新增资料 {len(context.get('new_materials_this_week', []))} 份。
 """
