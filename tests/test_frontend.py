@@ -195,11 +195,12 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('type="button" class="template-wand"', source)
         self.assertIn("async function suggestReportTemplate()", source)
         self.assertIn("/suggest-template", source)
-        self.assertIn('window.confirm("当前模板内容将被生成结果覆盖，继续？")', source)
+        self.assertIn("模板生成失败", source)
+        self.assertIn("模板生成结果为空", source)
         self.assertIn("模板已生成，保存设置后生效", source)
         self.assertIn(".template-wand {", styles)
 
-    def test_suggest_report_template_fills_textarea_and_confirms(self):
+    def test_suggest_report_template_fills_textarea_and_reports_errors(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
         harness = r"""
@@ -245,41 +246,47 @@ globalThis.fetch = async (path, options) => {
         assertions = r"""
 (async () => {
   render = () => {};
-  toast = () => {};
+  const toasts = [];
+  toast = (message) => { toasts.push(message); };
   state.projectId = 1;
 
-  templateFieldEl.value = "";
-  window.confirm = () => { throw new Error("confirm must not run for an empty field"); };
-  responses.push({ template: "# Fresh Template" });
+  // posts the current content directly (no confirm gate) and fills the textarea
+  templateFieldEl.value = "# Requirements";
+  responses.push({ template: "# Generated" });
   await suggestReportTemplate();
   if (fetchCalls.length !== 1 || fetchCalls[0].path !== "/api/projects/1/suggest-template" || fetchCalls[0].options.method !== "POST") {
-    throw new Error("empty field did not POST to suggest-template");
+    throw new Error("did not POST to suggest-template");
   }
-  if (!fetchCalls[0].options.body.includes('"requirements":""')) {
+  if (!fetchCalls[0].options.body.includes('"requirements":"# Requirements"')) {
     throw new Error(`unexpected requirements payload: ${fetchCalls[0].options.body}`);
   }
-  if (templateFieldEl.value !== "# Fresh Template") {
+  if (templateFieldEl.value !== "# Generated") {
     throw new Error("the generated template was not filled into the textarea");
   }
-
-  templateFieldEl.value = "# Existing";
-  window.confirm = () => false;
-  await suggestReportTemplate();
-  if (fetchCalls.length !== 1) {
-    throw new Error("declining the confirm must not call the API");
+  if (!toasts.some((message) => message.includes("模板已生成"))) {
+    throw new Error(`success toast missing: ${toasts.join("|")}`);
   }
 
-  window.confirm = () => true;
-  responses.push({ template: "# Replaced" });
+  // an empty template payload must not wipe the textarea
+  responses.push({ template: "   " });
   await suggestReportTemplate();
-  if (fetchCalls.length !== 2) {
-    throw new Error("accepting the confirm did not call the API");
+  if (templateFieldEl.value !== "# Generated") {
+    throw new Error("an empty template result wiped the textarea");
   }
-  if (!fetchCalls[1].options.body.includes('"requirements":"# Existing"')) {
-    throw new Error(`the current template was not sent as requirements: ${fetchCalls[1].options.body}`);
+  if (!toasts.some((message) => message.includes("模板生成结果为空"))) {
+    throw new Error(`empty-result toast missing: ${toasts.join("|")}`);
   }
-  if (templateFieldEl.value !== "# Replaced") {
-    throw new Error("the replaced template was not filled in");
+
+  // API failures surface a visible toast and keep the current content
+  globalThis.fetch = async () => { throw new Error("internal agent LLM call failed: boom"); };
+  await suggestReportTemplate();
+  if (templateFieldEl.value !== "# Generated") {
+    throw new Error("a failed generation wiped the textarea");
+  }
+  // the api() wrapper maps network failures to a generic message; what matters
+  // is that the failure is surfaced at all (server 400s pass through verbatim)
+  if (!toasts.some((message) => message.includes("模板生成失败"))) {
+    throw new Error(`failure toast missing: ${toasts.join("|")}`);
   }
 })().catch((error) => {
   console.error(error);

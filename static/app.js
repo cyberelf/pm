@@ -1429,15 +1429,24 @@ function templateField(p) {
 async function suggestReportTemplate() {
   const field = document.querySelector("#settings-form textarea[name='report_template']");
   if (!field) return;
-  if (field.value.trim() && !window.confirm("当前模板内容将被生成结果覆盖，继续？")) return;
-  await withBusy("正在生成周报模板", "正在根据项目要求、数据来源与最近周报设计模板…", async () => {
-    const data = await api(`/api/projects/${state.projectId}/suggest-template`, {
-      method: "POST",
-      body: JSON.stringify({ requirements: field.value }),
+  try {
+    const data = await withBusy("正在生成周报模板", "正在根据项目要求、数据来源与最近周报设计模板，可能需要一到两分钟…", async () => {
+      return await api(`/api/projects/${state.projectId}/suggest-template`, {
+        method: "POST",
+        body: JSON.stringify({ requirements: field.value }),
+      });
     });
-    field.value = data.template || "";
-  });
-  toast("模板已生成，保存设置后生效");
+    if (!(data && (data.template || "").trim())) {
+      toast("模板生成结果为空，请重试，或检查全局设置里的 LLM 配置");
+      return;
+    }
+    field.value = data.template;
+    toast("模板已生成，保存设置后生效");
+  } catch (error) {
+    // surface the real reason (timeout, LLM failure, network drop) instead of
+    // failing silently after the long wait
+    toast(`模板生成失败：${error.message}`);
+  }
 }
 
 function projectRunToggle(p) {

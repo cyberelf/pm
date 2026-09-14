@@ -453,7 +453,7 @@ def strip_template_fences(raw):
     return value.strip()
 
 
-def suggest_report_template(conn, project_id, requirements, timeout=120):
+def suggest_report_template(conn, project_id, requirements, timeout=300):
     """Design a fresh report template with the internal agent. Read-only: the
     generated template is returned for review, not saved. REPORTS_FAKE_PROVIDER
     keeps tests and dry runs offline."""
