@@ -26,10 +26,6 @@ def assemble_context(conn, project_id, week_key=None):
     week_key = week_key or current_week_key(project["timezone"])
     week_start, week_end = week_bounds(project["timezone"])
     plan = conn.execute("SELECT * FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
-    outcomes = conn.execute(
-        "SELECT title, details, status, owner_label FROM weekly_outcomes WHERE project_id = ? AND week_key = ? ORDER BY id",
-        (project_id, week_key),
-    ).fetchall()
     update = conn.execute(
         "SELECT * FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)
     ).fetchone()
@@ -76,7 +72,6 @@ def assemble_context(conn, project_id, week_key=None):
             "milestones": json.loads(plan["milestones_json"] if plan else "[]"),
             "deliverables": json.loads(plan["deliverables_json"] if plan else "[]"),
         },
-        "weekly_planned_outcomes": [dict(row) for row in outcomes],
         "weekly_update": dict(update) if update else None,
         "materials": [
             {
@@ -131,8 +126,7 @@ def input_summary(context):
         f"plan={'yes' if has_plan else 'no'}; "
         f"new_materials={len(context.get('new_materials_this_week', []))}; "
         f"commits={commits}; "
-        f"repos={len(context['github_activity'])}; "
-        f"outcomes={len(context['weekly_planned_outcomes'])}"
+        f"repos={len(context['github_activity'])}"
     )
 
 
@@ -183,11 +177,6 @@ def changed_since_last_success(conn, project_id, week_key):
         checks.append(row["ts"])
     row = conn.execute(
         "SELECT MAX(updated_at) AS ts FROM weekly_updates WHERE project_id = ? AND week_key = ?",
-        (project_id, week_key),
-    ).fetchone()
-    checks.append(row["ts"])
-    row = conn.execute(
-        "SELECT MAX(updated_at) AS ts FROM weekly_outcomes WHERE project_id = ? AND week_key = ?",
         (project_id, week_key),
     ).fetchone()
     checks.append(row["ts"])
@@ -327,7 +316,6 @@ def compact_evidence(context):
         "week_key": context.get("week_key"),
         "project_week": context.get("project_week"),
         "plan": context.get("plan"),
-        "weekly_planned_outcomes": context.get("weekly_planned_outcomes"),
         "weekly_update": context.get("weekly_update"),
         "new_materials_this_week": [
             {**item, "excerpt": (item.get("excerpt") or "")[:2500]}
@@ -405,9 +393,6 @@ def collect_template_sources(conn, project_id):
     update = conn.execute(
         "SELECT id FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)
     ).fetchone()
-    outcome_count = conn.execute(
-        "SELECT COUNT(*) AS n FROM weekly_outcomes WHERE project_id = ? AND week_key = ?", (project_id, week_key)
-    ).fetchone()["n"]
     history = conn.execute(
         "SELECT week_key FROM weekly_reports WHERE project_id = ? ORDER BY week_key DESC LIMIT 5", (project_id,)
     ).fetchall()
@@ -426,7 +411,6 @@ def collect_template_sources(conn, project_id):
         "materials": [{"filename": row["filename"], "summary": row["summary"]} for row in materials],
         "repositories": [{"repo": row["repo"], "git_mode": row["git_mode"], "notes": row["notes"]} for row in repos],
         "weekly_update_present": bool(update),
-        "weekly_outcome_count": outcome_count,
         "report_history_weeks": [row["week_key"] for row in history],
     }
 
@@ -505,7 +489,7 @@ Generated for {context['week_key']} from local workspace context.
 {(context.get('weekly_update') or {}).get('blockers', '') or 'No blockers recorded.'}
 
 ## Risk Forecast
-Review overdue milestones, blocked planned outcomes, source availability, missing project inputs, and stale project evidence.
+Review overdue milestones, source availability, missing project inputs, and stale project evidence.
 
 ## Next Week Plan
 {(context.get('weekly_update') or {}).get('next_steps', '') or 'No next steps recorded.'}
@@ -514,5 +498,5 @@ Review overdue milestones, blocked planned outcomes, source availability, missin
 {sum(len(repo.get('commits', [])) for repo in context.get('git_commits_this_week', []))} commit(s) this week across {len(context['github_activity'])} repository source(s).
 
 ## Source/Input References
-{len(context.get('new_materials_this_week', []))} new material file(s) this week, {len(context['weekly_planned_outcomes'])} planned outcome(s).
+{len(context.get('new_materials_this_week', []))} new material file(s) this week.
 """

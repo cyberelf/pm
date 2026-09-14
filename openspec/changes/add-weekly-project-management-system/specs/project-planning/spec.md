@@ -15,17 +15,6 @@ The system SHALL allow a user to create and update a project plan containing obj
 - **WHEN** a user assigns an owner label to a milestone or deliverable
 - **THEN** the system stores the label as planning text without creating user membership, roles, or permissions
 
-### Requirement: Weekly planned outcomes
-The system SHALL allow a user to define planned outcomes for each project week.
-
-#### Scenario: Add weekly planned outcome
-- **WHEN** a user adds planned outcomes for a project week
-- **THEN** the system stores those outcomes and associates them with that week
-
-#### Scenario: Use planned outcomes in report context
-- **WHEN** a weekly report is generated for a project week
-- **THEN** the system includes that week's planned outcomes in the report context
-
 ### Requirement: Plan history
 The system SHALL preserve enough plan change history to explain differences between past reports and the current plan.
 

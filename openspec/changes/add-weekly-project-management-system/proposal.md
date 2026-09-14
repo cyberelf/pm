@@ -5,7 +5,7 @@ Individual knowledge workers need a consistent way to track weekly project work 
 ## What Changes
 
 - Add project creation and settings so each project can define metadata, schedule, source materials, GitHub links, and report generation configuration.
-- Add project planning support for milestones, planned work, optional free-text owner labels, timelines, and expected weekly outcomes.
+- Add project planning support for milestones, planned work, optional free-text owner labels, and timelines.
 - Add weekly progress update support with multiple configured update times per week.
 - Add manual immediate report generation so the workspace user can generate or regenerate the current project-week report on demand.
 - Define each project week by the project's timezone using ISO week boundaries from Monday through Sunday.
@@ -29,7 +29,7 @@ Individual knowledge workers need a consistent way to track weekly project work 
 ### New Capabilities
 
 - `project-settings`: Project creation, configuration, source materials, GitHub associations, update schedules, and report prompt/provider settings.
-- `project-planning`: Project plans, milestones, planned weekly outcomes, optional free-text owner labels, and timeline tracking.
+- `project-planning`: Project plans, milestones, optional free-text owner labels, and timeline tracking.
 - `weekly-progress-reporting`: Weekly progress capture, scheduled update points, report regeneration rules, Markdown storage, and page rendering.
 - `report-generation-integrations`: CLI-based report generation using Codex or Claude Code with project-specific prompts and gathered context.
 - `progress-risk-tracking`: Progress status tracking and risk warning behavior derived from plans, updates, reports, and missing or delayed activity.

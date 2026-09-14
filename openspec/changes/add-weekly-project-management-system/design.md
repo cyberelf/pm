@@ -11,7 +11,7 @@ The first release runs as a local personal web application: the browser provides
 - Model projects with settings for schedule, report provider, prompt, uploaded materials, and GitHub repository links.
 - Scope the first release to a personal single-user workspace where each project has exactly one owner.
 - Run the first release as a local web application whose backend can access the local CLI tools and workspace files.
-- Capture project plans and weekly expected outcomes so reports and risk checks have a baseline.
+- Capture project plans so reports and risk checks have a baseline.
 - Collect manual weekly updates and source changes into a normalized context package for report generation.
 - Read GitHub repository metadata and activity through the local `gh` CLI for the first release.
 - Run Codex CLI or Claude Code CLI through a provider abstraction that can be configured per project.
@@ -84,7 +84,7 @@ The first release runs as a local personal web application: the browser provides
 
 12. Treat GitHub integration as an activity source, not a source of project authority.
 
-   Rationale: project plans, weekly expected outcomes, and manual updates remain the product's source of truth. GitHub commits, pull requests, and issues enrich the report and risk checks. The alternative was deriving project state mainly from GitHub, which would not work for non-code tasks and uploaded materials.
+   Rationale: project plans and manual updates remain the product's source of truth. GitHub commits, pull requests, and issues enrich the report and risk checks. The alternative was deriving project state mainly from GitHub, which would not work for non-code tasks and uploaded materials.
 
 13. Use the local authenticated GitHub CLI (`gh`) for first-release GitHub access.
 
@@ -92,7 +92,7 @@ The first release runs as a local personal web application: the browser provides
 
 14. Generate system risk warnings with deterministic rules and keep model-predicted risks in report content.
 
-   Rationale: overdue milestones, missing weekly updates, no activity after a scheduled update time, and blocked weekly outcomes can be tested and explained as project risks. Report generation failures, GitHub connectivity/authentication failures, and material extraction failures are operational diagnostics and remain outside project risk warnings. The generated weekly report can still include a risk section where the CLI provider summarizes risks and forecasts likely follow-on risks, but those generated statements remain report content unless a deterministic project-risk rule also creates a warning. The first release does not support manually promoting report risk forecasts into system warnings. The alternative was allowing generated text or user-selected generated text to create dashboard warnings, which is deferred because it would require additional source tracking and triage semantics.
+   Rationale: overdue milestones and missing weekly updates can be tested and explained as project risks. Report generation failures, GitHub connectivity/authentication failures, and material extraction failures are operational diagnostics and remain outside project risk warnings. The generated weekly report can still include a risk section where the CLI provider summarizes risks and forecasts likely follow-on risks, but those generated statements remain report content unless a deterministic project-risk rule also creates a warning. The first release does not support manually promoting report risk forecasts into system warnings. The alternative was allowing generated text or user-selected generated text to create dashboard warnings, which is deferred because it would require additional source tracking and triage semantics.
 
 15. Treat the first release as a personal single-user workspace.
 

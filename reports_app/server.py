@@ -922,12 +922,6 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     self.json(workspace(conn, project_id))
                     return
-                if len(parts) == 4 and parts[3] == "weekly-outcomes" and method == "PUT":
-                    save_outcomes(conn, project_id, self.body_json())
-                    evaluate_risks(conn, project_id)
-                    conn.commit()
-                    self.json(workspace(conn, project_id))
-                    return
                 if len(parts) == 4 and parts[3] == "weekly-update" and method == "PUT":
                     save_weekly_update(conn, project_id, self.body_json())
                     evaluate_risks(conn, project_id)
@@ -1072,12 +1066,11 @@ def workspace(conn, project_id):
         "materials": material_rows(conn, project_id, project["timezone"]),
         "repos": repo_rows(conn, project_id),
         "plan": plan_dict(conn, project_id),
-        "outcomes": [dict(row) for row in conn.execute("SELECT * FROM weekly_outcomes WHERE project_id = ? AND week_key = ? ORDER BY id", (project_id, week_key))],
         "weekly_update": row_to_dict(conn.execute("SELECT * FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)).fetchone()),
         "report": report_dict,
         "report_history": report_history,
         "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? ORDER BY id DESC", (project_id, week_key))],
-        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'blocked_outcome') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
+        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "progress_status": progress_status(conn, project_id),
     }
@@ -1432,32 +1425,6 @@ def save_plan(conn, project_id, payload):
         "INSERT INTO plan_versions (project_id, version, snapshot_json, created_at) VALUES (?, ?, ?, ?)",
         (project_id, version, json.dumps(snapshot), now),
     )
-
-
-def save_outcomes(conn, project_id, payload):
-    project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
-    week_key = payload.get("week_key") or current_week_key(project["timezone"])
-    now = iso_now()
-    conn.execute("DELETE FROM weekly_outcomes WHERE project_id = ? AND week_key = ?", (project_id, week_key))
-    for item in payload.get("outcomes") or []:
-        if not (item.get("title") or "").strip():
-            continue
-        conn.execute(
-            """
-            INSERT INTO weekly_outcomes (project_id, week_key, title, details, status, owner_label, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                project_id,
-                week_key,
-                item["title"].strip(),
-                item.get("details") or "",
-                item.get("status") or "planned",
-                item.get("owner_label") or "",
-                now,
-                now,
-            ),
-        )
 
 
 def save_weekly_update(conn, project_id, payload):

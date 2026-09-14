@@ -64,7 +64,7 @@ from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, suggest_report_template, strip_template_fences
 from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
-from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_outcomes, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
+from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 import time
 from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
@@ -2590,11 +2590,10 @@ class CoreTest(unittest.TestCase):
                 "deliverables": [],
             },
         )
-        save_outcomes(self.conn, self.project_id, {"outcomes": [{"title": "Blocked", "status": "blocked"}]})
         evaluate_risks(self.conn, self.project_id)
         rules = {row["rule"] for row in self.conn.execute("SELECT rule FROM risk_warnings")}
         self.assertIn("overdue_milestone", rules)
-        self.assertIn("blocked_outcome", rules)
+        self.assertNotIn("blocked_outcome", rules)
         self.assertEqual(progress_status(self.conn, self.project_id), "blocked")
 
     def test_risk_warning_resolves_when_condition_clears(self):
@@ -2919,7 +2918,6 @@ class InternalAgentTest(unittest.TestCase):
             "github_activity": [],
             "git_commits_this_week": [],
             "new_materials_this_week": [],
-            "weekly_planned_outcomes": [],
         }
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "1"}):
             with mock.patch("reports_app.internal_agent.generate_internal_report") as gen:

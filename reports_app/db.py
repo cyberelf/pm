@@ -101,18 +101,6 @@ CREATE TABLE IF NOT EXISTS plan_versions (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS weekly_outcomes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    week_key TEXT NOT NULL,
-    title TEXT NOT NULL,
-    details TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'planned',
-    owner_label TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS weekly_updates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

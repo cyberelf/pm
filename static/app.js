@@ -1543,15 +1543,8 @@ function renderPlan(ws) {
       <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
       <div class="row"><button class="primary">保存计划</button></div>
     </form>
-    <form id="outcome-form" class="panel">
-      <div class="panel-head"><h2>本周计划产出</h2><span>${escapeHtml(ws.week_key)}</span></div>
-      <div id="outcomes">${renderOutcomes(ws.outcomes)}</div>
-      <button type="button" onclick="addOutcome()">+ 添加产出</button>
-      <div class="row"><button class="primary">保存产出</button></div>
-    </form>
   `;
   $("plan-form").onsubmit = savePlan;
-  $("outcome-form").onsubmit = saveOutcomes;
 }
 
 function renderPlanItems(items) {
@@ -1575,28 +1568,6 @@ async function savePlan(event) {
   const groups = (id) => Array.from($(id).querySelectorAll(".plan-item")).map(row => itemPayload(row)).filter(i => i.title);
   await api(`/api/projects/${state.projectId}/plan`, { method: "PUT", body: JSON.stringify({ objectives: event.target.objectives.value, milestones: groups("milestones"), deliverables: groups("deliverables") }) });
   toast("计划已保存");
-  await loadWorkspace();
-}
-
-function renderOutcomes(items) {
-  return (items.length ? items : [{ title: "", details: "", status: "planned", owner_label: "" }]).map(item => `
-    <div class="row outcome-item">
-      <input name="title" placeholder="产出" value="${escapeAttr(item.title || "")}">
-      <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
-      <select name="status">${statusOptions(item.status)}</select>
-      <input name="details" placeholder="说明" value="${escapeAttr(item.details || "")}">
-      <button type="button" class="danger" onclick="this.closest('.outcome-item').remove()">移除</button>
-    </div>
-  `).join("");
-}
-
-function addOutcome() { $("outcomes").insertAdjacentHTML("beforeend", renderOutcomes([{ title: "", status: "planned" }])); }
-
-async function saveOutcomes(event) {
-  event.preventDefault();
-  const outcomes = Array.from($("outcomes").querySelectorAll(".outcome-item")).map(row => itemPayload(row)).filter(i => i.title);
-  await api(`/api/projects/${state.projectId}/weekly-outcomes`, { method: "PUT", body: JSON.stringify({ outcomes }) });
-  toast("产出已保存");
   await loadWorkspace();
 }
 

@@ -671,7 +671,7 @@ strong { color: var(--ink); }
 .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .form-grid .wide { grid-column: 1 / -1; }
 .row { min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.schedule-row, .plan-item, .outcome-item {
+.schedule-row, .plan-item {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(120px, 0.8fr) minmax(130px, 0.8fr) minmax(120px, 0.7fr) auto;
@@ -686,8 +686,7 @@ strong { color: var(--ink); }
 .schedule-row .switch { align-self: end; height: 40px; }
 .schedule-row-disabled { background: var(--surface-soft); }
 .schedule-last-fire { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
-.outcome-item { grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.8fr) minmax(130px, 0.7fr) minmax(160px, 1fr) auto; }
-#milestones, #deliverables, #outcomes, #schedule-list { min-width: 0; display: grid; gap: 10px; }
+#milestones, #deliverables, #schedule-list { min-width: 0; display: grid; gap: 10px; }
 .metric {
   min-width: 0;
   min-height: 132px;
@@ -1000,8 +999,8 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .sidebar { width: 224px; padding-inline: 12px; }
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
   .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .schedule-row, .plan-item, .outcome-item { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .schedule-row button, .plan-item button, .outcome-item button { justify-self: start; }
+  .schedule-row, .plan-item { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .schedule-row button, .plan-item button { justify-self: start; }
   .todo-board { overflow-x: auto; touch-action: pan-y; }
 }
 
@@ -1159,7 +1158,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .pager-dots button, .todo-board-dots button { width: 8px; height: 8px; min-height: 8px; padding: 0; border: 0; border-radius: 9999px; background: var(--surface-strong); transition: width 160ms ease, background 160ms ease; }
   .pager-dots button.active, .todo-board-dots button.active { width: 22px; background: var(--accent); }
   .empty { width: calc(100% - 32px); margin-top: 32px; padding: 32px 20px; }
-  .status-strip, .form-grid, .schedule-row, .plan-item, .outcome-item { grid-template-columns: 1fr; }
+  .status-strip, .form-grid, .schedule-row, .plan-item { grid-template-columns: 1fr; }
   .panel { gap: 16px; padding: 18px; }
   .panel-head { align-items: flex-start; flex-direction: column; gap: 7px; }
   .panel-head span { max-width: none; text-align: left; }

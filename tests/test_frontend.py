@@ -142,7 +142,7 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("overflow-x: auto;", styles)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", styles)
         self.assertIn("@media (max-width: 767px)", styles)
-        self.assertIn(".status-strip, .form-grid, .schedule-row, .plan-item, .outcome-item { grid-template-columns: 1fr; }", styles)
+        self.assertIn(".status-strip, .form-grid, .schedule-row, .plan-item { grid-template-columns: 1fr; }", styles)
 
     def test_material_upload_supports_multiple_files_and_summary_editing(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
@@ -293,7 +293,6 @@ globalThis.fetch = async (path, options) => {
         self.assertNotIn(">Save Manual Material<", source)
         self.assertNotIn(">Remove</button>", source)
         self.assertIn('<button type="button" class="danger" onclick="this.closest(\'.plan-item\').remove()">移除</button>', source)
-        self.assertIn('<button type="button" class="danger" onclick="this.closest(\'.outcome-item\').remove()">移除</button>', source)
         self.assertGreaterEqual(source.count('onclick="deleteMaterial(${m.id})"'), 2)
         self.assertIn('method: "DELETE"', source)
         self.assertIn('window.confirm("确定删除这条资料？删除后无法恢复。")', source)

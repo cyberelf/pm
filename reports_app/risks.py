@@ -27,7 +27,6 @@ def evaluate_risks(conn, project_id):
           AND rule IN (
             'missing_update',
             'overdue_milestone',
-            'blocked_outcome',
             'generation_failed',
             'github_unavailable',
             'material_extraction_failed'
@@ -63,11 +62,6 @@ def evaluate_risks(conn, project_id):
                     item.get("title", ""),
                     item.get("title", ""),
                 )
-    for row in conn.execute(
-        "SELECT id, title FROM weekly_outcomes WHERE project_id = ? AND week_key = ? AND status = 'blocked'",
-        (project_id, week_key),
-    ):
-        upsert_warning(conn, project_id, week_key, "blocked_outcome", "high", "Weekly outcome is blocked", row["title"], str(row["id"]))
 
 
 def progress_status(conn, project_id):
@@ -77,7 +71,7 @@ def progress_status(conn, project_id):
         """
         SELECT severity FROM risk_warnings
         WHERE project_id = ? AND week_key = ? AND status = 'active'
-          AND rule IN ('missing_update', 'overdue_milestone', 'blocked_outcome')
+          AND rule IN ('missing_update', 'overdue_milestone')
         """,
         (project_id, week_key),
     ).fetchall()
@@ -85,14 +79,4 @@ def progress_status(conn, project_id):
         return "blocked"
     if active:
         return "at risk"
-    done = conn.execute(
-        "SELECT COUNT(*) AS n FROM weekly_outcomes WHERE project_id = ? AND week_key = ? AND status = 'complete'",
-        (project_id, week_key),
-    ).fetchone()["n"]
-    total = conn.execute(
-        "SELECT COUNT(*) AS n FROM weekly_outcomes WHERE project_id = ? AND week_key = ?",
-        (project_id, week_key),
-    ).fetchone()["n"]
-    if total and done == total:
-        return "complete"
     return "on track"

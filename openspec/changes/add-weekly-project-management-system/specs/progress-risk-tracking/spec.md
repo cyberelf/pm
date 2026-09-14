@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
 ### Requirement: Progress status tracking
-The system SHALL track project progress status from plan milestones, weekly planned outcomes, manual updates, and deterministic project-risk rules.
+The system SHALL track project progress status from plan milestones, manual updates, and deterministic project-risk rules.
 
 #### Scenario: Calculate weekly progress status
-- **WHEN** a project week has planned outcomes and progress updates
+- **WHEN** a project week has plan milestones and progress updates
 - **THEN** the system determines whether the week is on track, at risk, blocked, or complete
 
 #### Scenario: Reflect milestone progress
@@ -19,15 +19,12 @@ The system SHALL create a risk warning when a configured weekly update time pass
 - **THEN** the system creates or updates a missing update risk warning
 
 ### Requirement: Plan delay risk warning
-The system SHALL create a risk warning when milestones or planned weekly outcomes are overdue or marked blocked.
+The system SHALL create a risk warning when plan milestones are overdue.
 
 #### Scenario: Warn on overdue milestone
 - **WHEN** a milestone target date has passed and the milestone is not complete
 - **THEN** the system creates or updates an overdue milestone risk warning
 
-#### Scenario: Warn on blocked outcome
-- **WHEN** a weekly planned outcome is marked blocked
-- **THEN** the system creates or updates a blocked outcome risk warning
 
 ### Requirement: System diagnostics separation
 The system SHALL display source and generation failures as operational diagnostics without creating project risk warnings.

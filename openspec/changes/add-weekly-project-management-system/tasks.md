@@ -1,6 +1,6 @@
 ## 1. Domain Model and Storage
 
-- [x] 1.1 Define persistence models for personal projects with one owner, project settings, report templates, update schedules, source materials, GitHub repository links, project plans, milestones, deliverables, weekly planned outcomes, weekly progress updates, weekly reports, generation jobs, and risk warnings
+- [x] 1.1 Define persistence models for personal projects with one owner, project settings, report templates, update schedules, source materials, GitHub repository links, project plans, milestones, deliverables, weekly progress updates, weekly reports, generation jobs, and risk warnings
 - [x] 1.2 Add validation for required project fields, schedule weekday/time/timezone values, supported report providers, GitHub repository link format, and local `gh` availability/authentication status
 - [x] 1.3 Add storage support for uploaded Markdown, plain text, and PDF project materials, file metadata, extraction status, and source context references
 - [x] 1.4 Add plan history or version metadata needed to compare generated reports against the plan baseline used at generation time
@@ -18,7 +18,7 @@
 ## 3. Project Planning
 
 - [x] 3.1 Implement project plan editing for objectives, milestones, deliverables, optional free-text owner labels, target dates, and statuses
-- [x] 3.2 Implement weekly planned outcome creation and editing per project week
+- [x] 3.2 ~~Implement weekly planned outcome creation and editing per project week~~ (removed: weekly planned outcomes feature dropped)
 - [x] 3.3 Render the current project plan in the project workspace with milestone and deliverable status and free-text owner labels
 - [x] 3.4 Record plan change timestamps or versions when plan content changes after report generation
 
@@ -41,7 +41,7 @@
 
 ## 6. Report Generation
 
-- [x] 6.1 Implement report context snapshot assembly from project metadata, plan baseline, weekly planned outcomes, manual updates, Markdown/plain-text/PDF material summaries and extraction statuses, GitHub activity summaries, previous current-week report, project system prompt, and effective report template
+- [x] 6.1 Implement report context snapshot assembly from project metadata, plan baseline, manual updates, Markdown/plain-text/PDF/HTML material summaries and extraction statuses, GitHub activity summaries, previous current-week report, a fixed system prompt, and effective report template
 - [x] 6.2 Implement the default Markdown weekly report template with sections for this week's summary, completed work, in-progress work, blockers and risks, risk forecast, next week plan, GitHub activity summary, and source/input references
 - [x] 6.3 Implement a report provider adapter interface for CLI-based generation using temporary input and output files
 - [x] 6.4 Implement the Codex CLI provider adapter with temporary working directory setup, context file input, Markdown output file reading, timeout handling, and failure reporting
@@ -67,7 +67,7 @@
 
 - [x] 8.1 Implement progress status calculation for on track, at risk, blocked, and complete states
 - [x] 8.2 Implement missing update risk warnings after configured update times pass without current-period input or activity
-- [x] 8.3 Implement overdue milestone and blocked weekly outcome risk warnings
+- [x] 8.3 Implement overdue milestone risk warnings (blocked weekly outcome warnings removed with the outcomes feature)
 - [x] 8.4 Display unavailable local `gh`, inaccessible GitHub repositories, material extraction failures, and report generation failures as diagnostics rather than project risk warnings
 - [x] 8.5 Keep generated report risk forecasts as Markdown report content separate from deterministic system risk warning records
 - [x] 8.6 Ensure the first-release risk UI does not provide promotion from generated report risk forecasts into system warnings
