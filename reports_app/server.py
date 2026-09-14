@@ -1067,6 +1067,13 @@ def workspace(conn, project_id):
         "repos": repo_rows(conn, project_id),
         "plan": plan_dict(conn, project_id),
         "weekly_update": row_to_dict(conn.execute("SELECT * FROM weekly_updates WHERE project_id = ? AND week_key = ?", (project_id, week_key)).fetchone()),
+        "update_history": [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM weekly_updates WHERE project_id = ? AND week_key != ? ORDER BY week_key DESC LIMIT 12",
+                (project_id, week_key),
+            )
+        ],
         "report": report_dict,
         "report_history": report_history,
         "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? ORDER BY id DESC", (project_id, week_key))],
@@ -1079,7 +1086,7 @@ def workspace(conn, project_id):
 def report_archive(conn, project_id, week_key):
     row = conn.execute(
         """
-        SELECT week_key, content_md, updated_at
+        SELECT week_key, content_md, supplement_json, updated_at
         FROM weekly_reports
         WHERE project_id = ? AND week_key = ?
         """,
@@ -1089,6 +1096,8 @@ def report_archive(conn, project_id, week_key):
         return None
     item = dict(row)
     item["content_html"] = render_markdown(item.pop("content_md"))
+    raw = item.pop("supplement_json") or ""
+    item["supplement"] = json.loads(raw) if raw else None
     return item
 
 

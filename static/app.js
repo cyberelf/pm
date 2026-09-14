@@ -1630,23 +1630,47 @@ async function savePlan(event) {
   await loadWorkspace();
 }
 
+const SUPPLEMENT_FIELDS = [
+  ["completed", "已完成"],
+  ["in_progress", "进行中"],
+  ["blockers", "阻塞事项"],
+  ["risks", "风险"],
+  ["next_steps", "下一步计划"],
+];
+
+function supplementFieldsHtml(item) {
+  return SUPPLEMENT_FIELDS.map(([key, label]) => {
+    const value = (item[key] || "").trim();
+    return value ? `<p><strong>${label}</strong><br>${escapeHtml(value)}</p>` : "";
+  }).join("");
+}
+
 function renderUpdates(ws) {
   const u = ws.weekly_update || {};
   $("tab-updates").innerHTML = `
     <form id="update-form" class="panel form-grid">
-      <div class="panel-head wide"><h2>本周进展</h2><span>${escapeHtml(ws.week_key)}</span></div>
+      <div class="panel-head wide"><h2>本周补充</h2><span>${escapeHtml(ws.week_key)}</span></div>
       ${textarea("completed", "已完成", u.completed || "", "wide")}
       ${textarea("in_progress", "进行中", u.in_progress || "", "wide")}
       ${textarea("blockers", "阻塞事项", u.blockers || "", "wide")}
       ${textarea("risks", "风险", u.risks || "", "wide")}
       ${textarea("next_steps", "下一步计划", u.next_steps || "", "wide")}
-      <div class="wide row"><button class="primary">保存进展</button></div>
+      <div class="wide row"><button class="primary">保存本周补充</button></div>
     </form>
+    <div id="supplement-history" class="panel">
+      <div class="panel-head"><h2>补充历史</h2><span>生成周报时同步留档</span></div>
+      ${(ws.update_history || []).map(item => `
+        <details class="history-report" data-history-week="${escapeAttr(item.week_key)}">
+          <summary>${escapeHtml(item.week_key)}<small>更新于 ${escapeHtml(formatChinaTime(item.updated_at))}</small></summary>
+          <div class="history-report-body">${supplementFieldsHtml(item) || "<p>该周没有填写内容。</p>"}</div>
+        </details>
+      `).join("") || "<p>还没有历史补充。</p>"}
+    </div>
   `;
   $("update-form").onsubmit = async (event) => {
     event.preventDefault();
     await api(`/api/projects/${state.projectId}/weekly-update`, { method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(event.target).entries())) });
-    toast("本周进展已保存");
+    toast("本周补充已保存");
     await loadWorkspace();
   };
 }
@@ -1970,7 +1994,10 @@ async function onHistoryReportToggle(details) {
   const weekKey = details.dataset.historyWeek;
   try {
     const data = await api(`/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}`);
-    body.innerHTML = data.content_html;
+    const supplement = data.supplement
+      ? `<div class="panel"><div class="panel-head"><h3>该周补充</h3><span>生成周报时留档</span></div>${supplementFieldsHtml(data.supplement) || "<p>该周没有填写内容。</p>"}</div>`
+      : "";
+    body.innerHTML = data.content_html + supplement;
   } catch (error) {
     body.dataset.loaded = "";
     body.innerHTML = `<p>${escapeHtml(error.message)}</p>`;

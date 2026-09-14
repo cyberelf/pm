@@ -284,6 +284,9 @@ def migrate_schema(conn):
     job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(generation_jobs)")}
     if "queued_at" not in job_columns:
         conn.execute("ALTER TABLE generation_jobs ADD COLUMN queued_at TEXT")
+    report_columns = {row["name"] for row in conn.execute("PRAGMA table_info(weekly_reports)")}
+    if "supplement_json" not in report_columns:
+        conn.execute("ALTER TABLE weekly_reports ADD COLUMN supplement_json TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         DELETE FROM github_repos

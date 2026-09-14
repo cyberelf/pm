@@ -11,6 +11,25 @@ The system SHALL allow a user to record progress updates for a project week, inc
 - **WHEN** a user edits an existing progress update for the same project week
 - **THEN** the system saves the revised update and marks the project week as having changed input
 
+### Requirement: Supplement snapshot and history
+The system SHALL snapshot the current week's supplement into the weekly report row at each successful generation and expose past weeks' supplements as history synced with the reports.
+
+#### Scenario: Snapshot supplement on generation
+- **WHEN** a weekly report generation succeeds for a project week that has a supplement
+- **THEN** the system stores that week's supplement content alongside the report content
+
+#### Scenario: Refresh snapshot on regeneration
+- **WHEN** the same project week's report is regenerated after the supplement changed
+- **THEN** the system replaces the stored supplement snapshot with the supplement used by the new generation
+
+#### Scenario: Archive exposes generation-time supplement
+- **WHEN** a user expands a historical weekly report
+- **THEN** the system shows the supplement snapshot taken at that report's generation, or nothing for reports generated before snapshots existed
+
+#### Scenario: List supplement history
+- **WHEN** a user opens the weekly supplement view
+- **THEN** the system lists past weeks' supplements newest first, excluding the current week, bounded to a recent window
+
 ### Requirement: Multiple weekly update times
 The system SHALL support multiple configured update times within the same week for each project as refresh checkpoints for the same project-week report.
 

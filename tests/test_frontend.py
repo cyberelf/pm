@@ -296,6 +296,16 @@ globalThis.fetch = async (path, options) => {
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_supplement_history_and_archive_supplement_controls_exist(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="supplement-history"', source)
+        self.assertIn("ws.update_history", source)
+        self.assertIn("该周补充", source)
+        self.assertIn("data.supplement", source)
+        self.assertIn("function supplementFieldsHtml(", source)
+        self.assertIn("<h2>本周补充</h2>", source)
+        self.assertIn("还没有历史补充。", source)
+
     def test_unlocked_materials_have_delete_controls(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")

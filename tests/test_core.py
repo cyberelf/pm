@@ -2414,6 +2414,71 @@ class CoreTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_generation_snapshots_weekly_supplement_into_report(self):
+        save_weekly_update(self.conn, self.project_id, {"completed": "A"})
+        generate_report(self.conn, self.project_id, "manual", force=True)
+        row = self.conn.execute(
+            "SELECT supplement_json FROM weekly_reports WHERE project_id = ? AND week_key = ?",
+            (self.project_id, current_week_key("Asia/Shanghai")),
+        ).fetchone()
+        self.assertEqual(json.loads(row["supplement_json"])["completed"], "A")
+
+        # regenerating in the same week refreshes the snapshot (UPDATE branch)
+        save_weekly_update(self.conn, self.project_id, {"completed": "B"})
+        generate_report(self.conn, self.project_id, "manual", force=True)
+        row = self.conn.execute(
+            "SELECT supplement_json FROM weekly_reports WHERE project_id = ? AND week_key = ?",
+            (self.project_id, current_week_key("Asia/Shanghai")),
+        ).fetchone()
+        self.assertEqual(json.loads(row["supplement_json"])["completed"], "B")
+
+    def test_generation_without_supplement_stores_empty_snapshot(self):
+        generate_report(self.conn, self.project_id, "manual", force=True)
+        row = self.conn.execute(
+            "SELECT supplement_json FROM weekly_reports WHERE project_id = ? AND week_key = ?",
+            (self.project_id, current_week_key("Asia/Shanghai")),
+        ).fetchone()
+        self.assertEqual(row["supplement_json"], "")
+
+    def test_workspace_exposes_supplement_history(self):
+        now_week = current_week_key("Asia/Shanghai")
+        save_weekly_update(self.conn, self.project_id, {"completed": "current"})
+        self.conn.execute(
+            "UPDATE weekly_updates SET week_key = '2026-W20', updated_at = '2026-05-15T00:00:00+00:00' WHERE project_id = ?",
+            (self.project_id,),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO weekly_updates (project_id, week_key, completed, created_at, updated_at)
+            VALUES (?, '2026-W25', 'past A', '2026-06-20T00:00:00+00:00', '2026-06-20T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO weekly_updates (project_id, week_key, completed, created_at, updated_at)
+            VALUES (?, '2026-W30', 'past B', '2026-07-25T00:00:00+00:00', '2026-07-25T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        data = workspace(self.conn, self.project_id)
+        history = data["update_history"]
+        self.assertEqual([item["week_key"] for item in history], ["2026-W30", "2026-W25", "2026-W20"])
+        self.assertNotIn(now_week, {item["week_key"] for item in history})
+        self.assertEqual(history[0]["completed"], "past B")
+
+        # history is bounded to the most recent 12 weeks
+        for index in range(14):
+            self.conn.execute(
+                """
+                INSERT INTO weekly_updates (project_id, week_key, completed, created_at, updated_at)
+                VALUES (?, ?, ?, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+                """,
+                (self.project_id, f"2025-W{index + 1:02d}", f"item {index}"),
+            )
+        data = workspace(self.conn, self.project_id)
+        self.assertEqual(len(data["update_history"]), 12)
+
     def test_workspace_includes_read_only_report_history(self):
         now_week = current_week_key("Asia/Shanghai")
         self.conn.execute(
@@ -3251,10 +3316,10 @@ class InternalAgentTest(unittest.TestCase):
     def test_archived_report_endpoint_renders_body_on_demand(self):
         self.conn.execute(
             """
-            INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
-            VALUES (?, '2026-W25', '# Old Report\n\n归档正文', 1, '2026-06-21T00:00:00+00:00', '2026-06-21T00:00:00+00:00')
+            INSERT INTO weekly_reports (project_id, week_key, content_md, supplement_json, latest_job_id, created_at, updated_at)
+            VALUES (?, '2026-W25', '# Old Report\n\n归档正文', ?, 1, '2026-06-21T00:00:00+00:00', '2026-06-21T00:00:00+00:00')
             """,
-            (self.project_id,),
+            (self.project_id, json.dumps({"completed": "旧补充"}, ensure_ascii=False)),
         )
         self.conn.commit()
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -3271,6 +3336,24 @@ class InternalAgentTest(unittest.TestCase):
             self.assertEqual(payload["week_key"], "2026-W25")
             self.assertIn("<h1>Old Report</h1>", payload["content_html"])
             self.assertNotIn("content_md", payload)
+            self.assertEqual(payload["supplement"], {"completed": "旧补充"})
+
+            # legacy rows without a snapshot expose supplement: null
+            self.conn.execute(
+                """
+                INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
+                VALUES (?, '2026-W24', '# Older Report', 1, '2026-06-14T00:00:00+00:00', '2026-06-14T00:00:00+00:00')
+                """,
+                (self.project_id,),
+            )
+            self.conn.commit()
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "GET", f"/api/projects/{self.project_id}/reports/2026-W24")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertIsNone(payload["supplement"])
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             self.api_request(client, "GET", f"/api/projects/{self.project_id}/reports/1999-W01")

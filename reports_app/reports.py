@@ -197,6 +197,8 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
             conn.commit()
         return None
     context, snapshot_hash = assemble_context(conn, project_id, week_key)
+    supplement = context.get("weekly_update")
+    supplement_json = json.dumps(supplement, ensure_ascii=False) if supplement else ""
     now = iso_now()
     if job_id is None:
         cur = conn.execute(
@@ -228,16 +230,16 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE weekly_reports SET content_md = ?, latest_job_id = ?, updated_at = ? WHERE id = ?",
-                (output_md, job_id, completed, existing["id"]),
+                "UPDATE weekly_reports SET content_md = ?, supplement_json = ?, latest_job_id = ?, updated_at = ? WHERE id = ?",
+                (output_md, supplement_json, job_id, completed, existing["id"]),
             )
         else:
             conn.execute(
                 """
-                INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO weekly_reports (project_id, week_key, content_md, supplement_json, latest_job_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (project_id, week_key, output_md, job_id, completed, completed),
+                (project_id, week_key, output_md, supplement_json, job_id, completed, completed),
             )
         conn.commit()
         return job_id

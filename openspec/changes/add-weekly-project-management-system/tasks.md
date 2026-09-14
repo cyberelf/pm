@@ -121,3 +121,9 @@
 - [x] 10.1 Rework the workspace navigation to 总览 / 过程资料 / 本周补充 / 周报 / 计划和风险 / 设置 with the 设置 tab promoted to a first-level navigation button
 - [x] 10.2 Move manual materials before file uploads in the 过程资料 tab and split 计划和风险 into 项目计划 and 进度风险 sub-tabs
 - [x] 10.3 Move 系统诊断 into the 设置 tab as its own sub-tab and remove the standalone risks tab
+
+## 11. Supplement history
+
+- [x] 11.1 Snapshot the current week's supplement into the weekly report row on every successful generation and refresh it on same-week regeneration
+- [x] 11.2 Expose the generation-time supplement in archived report payloads and render it under expanded historical reports
+- [x] 11.3 List past weeks' supplements (newest first, excluding the current week, bounded) in the 本周补充 tab
