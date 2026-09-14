@@ -841,6 +841,8 @@ async function restoreQueues() {
         voiceJobs.set(task.id, { status: task.status, transcript: "" });
       } else if (task.kind === "report") {
         reportJobs.set(task.id, { projectId: task.project_id, status: task.status });
+      } else if (task.kind === "template") {
+        reportJobs.set(task.id, { projectId: task.project_id, kind: "template", status: task.status });
       }
     }
     if (voiceJobs.size) {
@@ -1421,7 +1423,7 @@ function templateField(p) {
         <button type="button" class="template-wand" title="AI 生成周报模板" aria-label="AI 生成周报模板" onclick="suggestReportTemplate()">${faIcon("wand")}</button>
       </div>
       <textarea name="report_template">${escapeHtml(p.report_template || "")}</textarea>
-      <small>魔棒按当前填写内容、项目数据来源与最近一期周报生成模板，点击“保存设置”后生效</small>
+      <small>魔棒按当前填写内容、项目数据来源与最近一期周报生成模板，生成后自动保存</small>
     </div>
   `;
 }
@@ -1430,23 +1432,31 @@ async function suggestReportTemplate() {
   const field = document.querySelector("#settings-form textarea[name='report_template']");
   if (!field) return;
   try {
-    const data = await withBusy("正在生成周报模板", "正在根据项目要求、数据来源与最近周报设计模板，可能需要一到两分钟…", async () => {
-      return await api(`/api/projects/${state.projectId}/suggest-template`, {
-        method: "POST",
-        body: JSON.stringify({ requirements: field.value }),
-      });
+    const data = await api(`/api/projects/${state.projectId}/suggest-template`, {
+      method: "POST",
+      body: JSON.stringify({ requirements: field.value }),
     });
-    if (!(data && (data.template || "").trim())) {
-      toast("模板生成结果为空，请重试，或检查全局设置里的 LLM 配置");
-      return;
-    }
-    field.value = data.template;
-    toast("模板已生成，保存设置后生效");
+    reportJobs.set(data.id, { projectId: state.projectId, kind: "template", status: data.status || "queued" });
+    toast("模板生成任务已提交，完成后自动保存");
+    startQueuePolling();
   } catch (error) {
-    // surface the real reason (timeout, LLM failure, network drop) instead of
-    // failing silently after the long wait
-    toast(`模板生成失败：${error.message}`);
+    toast(`模板生成任务提交失败：${error.message}`);
   }
+}
+
+async function templateJobFinished(jobId, job) {
+  let finished = null;
+  try {
+    finished = await api(`/api/projects/${job.projectId}/workspace`);
+  } catch {
+    toast("模板任务已结束");
+    return;
+  }
+  if (job.projectId === state.projectId) updateWorkspace(finished);
+  const record = finished.template_job;
+  const name = (finished.project && finished.project.name) || "项目";
+  if (record && record.id === jobId && record.status === "success") toast(`「${name}」周报模板已生成并保存`);
+  else toast(`「${name}」模板生成失败：${(record && record.failure_reason) || "未知错误"}`);
 }
 
 function projectRunToggle(p) {
@@ -2052,14 +2062,16 @@ async function pollTaskQueue() {
   }
   const tasks = data.tasks || [];
   for (const [id, job] of Array.from(reportJobs.entries())) {
-    const task = tasks.find((item) => item.kind === "report" && item.id === id);
+    const kind = job.kind || "report";
+    const task = tasks.find((item) => item.kind === kind && item.id === id);
     if (task) {
       job.status = task.status;
       continue;
     }
     // the job left the active set: it finished, failed, or was skipped
     reportJobs.delete(id);
-    await reportJobFinished(id, job);
+    if (kind === "template") await templateJobFinished(id, job);
+    else await reportJobFinished(id, job);
   }
   renderQueueProgress(data);
   if (!reportJobs.size) stopQueuePolling();

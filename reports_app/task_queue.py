@@ -25,7 +25,7 @@ from .config import (
     QUEUE_PARALLELISM_SETTING,
 )
 from .db import connect, get_setting
-from .reports import run_report_job
+from .reports import run_report_job, run_template_job
 from .timeutil import current_week_key, iso_now
 from .validation import ValidationError
 from .voice_todos import create_voice_job, run_voice_job
@@ -179,6 +179,44 @@ def enqueue_report_generation(conn, db_path, project_id, trigger_type, force=Fal
     return job_id
 
 
+def enqueue_template_generation(conn, db_path, project_id, requirements):
+    """Queue a template design job with the same capacity accounting and a
+    duplicate guard as report generation. The generated template is saved to
+    the project automatically when the task succeeds."""
+    project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        raise ValidationError("project not found")
+    requirements = (requirements or "").strip()[:8000]
+    week_key = current_week_key(project["timezone"])
+    now = iso_now()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        duplicate = conn.execute(
+            "SELECT id FROM generation_jobs WHERE project_id = ? AND trigger_type = 'template' AND status IN ('queued', 'running')",
+            (project_id,),
+        ).fetchone()
+        if duplicate:
+            raise ValidationError("this project already has a template design job queued or running")
+        capacity = queue_capacity(conn)
+        if active_task_count(conn) >= capacity:
+            raise QueueFullError(f"task queue is full (capacity {capacity})")
+        cur = conn.execute(
+            """
+            INSERT INTO generation_jobs
+            (project_id, week_key, trigger_type, provider, status, queued_at, started_at)
+            VALUES (?, ?, 'template', ?, 'queued', ?, ?)
+            """,
+            (project_id, week_key, project["report_provider"], now, now),
+        )
+        job_id = cur.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    get_task_queue(db_path).submit(run_template_job, db_path, job_id, project_id, requirements)
+    return job_id
+
+
 def enqueue_voice_job(conn, db_path, payload, asr_endpoint, asr_model, asr_language, user_id):
     """Insert a queued voice job and hand it to the shared task queue with the
     same capacity accounting as report generation."""
@@ -224,7 +262,7 @@ def task_queue_state(conn, user_id=None, is_admin=False):
         params,
     ):
         item = dict(row)
-        item["kind"] = "report"
+        item["kind"] = "template" if row["trigger_type"] == "template" else "report"
         item["project_name"] = project_names.get(item["project_id"], "")
         tasks.append(item)
     for row in conn.execute(

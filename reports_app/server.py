@@ -76,7 +76,8 @@ from .materials import (
     update_material_summary,
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
-from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report, suggest_report_template
+from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report
+from .task_queue import enqueue_template_generation
 from .risks import evaluate_risks, progress_status
 from .task_queue import (
     QueueFullError,
@@ -855,8 +856,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 4 and parts[3] == "suggest-template" and method == "POST":
                     payload = self.body_json()
-                    template = suggest_report_template(conn, project_id, str(payload.get("requirements") or ""))
-                    self.json({"template": template})
+                    template_job_id = enqueue_template_generation(conn, self.server.db_path, project_id, str(payload.get("requirements") or ""))
+                    conn.commit()
+                    self.json({"id": template_job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
                     return
                 if len(parts) == 4 and parts[3] == "materials" and method == "POST":
                     payload = self.body_json()
@@ -1076,7 +1078,8 @@ def workspace(conn, project_id):
         ],
         "report": report_dict,
         "report_history": report_history,
-        "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? ORDER BY id DESC", (project_id, week_key))],
+        "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? AND trigger_type != 'template' ORDER BY id DESC", (project_id, week_key))],
+        "template_job": row_to_dict(conn.execute("SELECT id, week_key, trigger_type, provider, status, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'template' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
         "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "progress_status": progress_status(conn, project_id),

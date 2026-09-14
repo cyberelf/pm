@@ -74,19 +74,23 @@ The system SHALL provide a default Markdown weekly report template when a projec
 - **THEN** the system uses the project-specific template instead of the default template
 
 ### Requirement: AI-assisted template design
-The system SHALL let the workspace user request an AI-drafted project report template based on the requirements typed in the template editor, the project's available data sources, and the most recent generated report as a structural reference, without saving the draft until project settings are saved.
+The system SHALL let the workspace user request an AI-drafted project report template based on the requirements typed in the template editor, the project's available data sources, and the most recent generated report as a structural reference. Template design runs as a queued background task through the shared task queue, and the generated template is saved to the project automatically when the task succeeds.
 
-#### Scenario: Design a template from current inputs
+#### Scenario: Queue a template design task
 - **WHEN** the user triggers template design from the project settings template editor
-- **THEN** the system assembles the editor content, a network-free snapshot of the project's data sources, and the latest generated report, asks the internal agent to draft a Markdown template, and returns it for review
+- **THEN** the system enqueues a template design task with the editor content, a network-free snapshot of the project's data sources, and the latest generated report, and returns immediately
 
-#### Scenario: Keep the stored template unchanged until saved
-- **WHEN** a template design request completes
-- **THEN** the system returns the drafted template to the editor without modifying the stored project report template
+#### Scenario: Duplicate template design task rejected
+- **WHEN** the user triggers template design while a template design task for the same project is queued or running
+- **THEN** the system rejects the new submission and reports that a template task is already in flight
+
+#### Scenario: Save generated template automatically
+- **WHEN** a template design task succeeds
+- **THEN** the system saves the drafted template as the project report template and the workspace reflects it on the next load
 
 #### Scenario: Report template design failure
 - **WHEN** the internal agent fails or returns an empty template during template design
-- **THEN** the system reports the failure to the user and leaves the stored template unchanged
+- **THEN** the system records the failure on the task, reports it to the user, and leaves the stored template unchanged
 
 ### Requirement: Platform-mediated provider handoff
 The system SHALL invoke CLI report providers through a temporary working directory and expose project information through a read-only platform context CLI.

@@ -61,8 +61,8 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, suggest_report_template, strip_template_fences
-from reports_app.task_queue import get_task_queue, queue_capacity, queue_parallelism
+from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, generate_report_template, strip_template_fences
+from reports_app.task_queue import QueueFullError, enqueue_template_generation, get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
@@ -1366,36 +1366,95 @@ class CoreTest(unittest.TestCase):
         self.assertIn("# Latest Report", prompt)
         self.assertIn("只输出模板本身的 Markdown", prompt)
 
-    def test_suggest_report_template_fake_provider_and_fences(self):
-        template = suggest_report_template(self.conn, self.project_id, "突出风险预测")
+    def test_generate_report_template_saves_and_tracks_job(self):
+        template = generate_report_template(self.conn, self.project_id, "突出风险预测")
         self.assertEqual(template, FAKE_SUGGESTED_TEMPLATE.strip())
         self.assertTrue(template.startswith("#"))
         self.assertIn("##", template)
+        # generation results are saved to the project automatically
         saved = self.conn.execute("SELECT report_template FROM projects WHERE id = ?", (self.project_id,)).fetchone()
-        self.assertEqual(saved["report_template"], "")
+        self.assertEqual(saved["report_template"], FAKE_SUGGESTED_TEMPLATE.strip())
 
-        # fake provider is on in setUp; turn it off to exercise the real path
+        # the queued-task lifecycle records success and keeps the template
+        self.conn.execute(
+            """
+            INSERT INTO generation_jobs (project_id, week_key, trigger_type, provider, status, queued_at, started_at)
+            VALUES (?, '2026-W36', 'template', 'internal', 'queued', '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        job_id = self.conn.execute("SELECT MAX(id) AS id FROM generation_jobs").fetchone()["id"]
+        self.conn.commit()
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": ""}):
             with mock.patch("reports_app.internal_agent.internal_chat", return_value="```markdown\n# Styled Template\n```") as chat:
-                template = suggest_report_template(self.conn, self.project_id, "", timeout=5)
-            self.assertEqual(template, "# Styled Template")
+                generate_report_template(self.conn, self.project_id, "", timeout=5, job_id=job_id)
             self.assertEqual(chat.call_args.kwargs["max_tokens"], 4096)
             self.assertEqual(chat.call_args.kwargs["temperature"], 0)
+        row = self.conn.execute(
+            "SELECT status, output_md FROM generation_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        self.assertEqual(row["status"], "success")
+        self.assertEqual(row["output_md"], "# Styled Template")
+        saved = self.conn.execute("SELECT report_template FROM projects WHERE id = ?", (self.project_id,)).fetchone()
+        self.assertEqual(saved["report_template"], "# Styled Template")
+
+        # failures mark the job failed, keep the stored template, and direct
+        # calls raise a visible ValidationError
+        with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": ""}):
+            with mock.patch("reports_app.internal_agent.internal_chat", side_effect=RuntimeError("provider down")):
+                self.assertIsNone(generate_report_template(self.conn, self.project_id, "", timeout=5, job_id=job_id))
+            row = self.conn.execute(
+                "SELECT status, failure_reason FROM generation_jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            self.assertEqual(row["status"], "failed")
+            self.assertIn("模板生成失败", row["failure_reason"])
+            saved = self.conn.execute("SELECT report_template FROM projects WHERE id = ?", (self.project_id,)).fetchone()
+            self.assertEqual(saved["report_template"], "# Styled Template")
 
             with mock.patch("reports_app.internal_agent.internal_chat", side_effect=RuntimeError("provider down")):
                 with self.assertRaises(ValidationError) as ctx:
-                    suggest_report_template(self.conn, self.project_id, "")
+                    generate_report_template(self.conn, self.project_id, "")
             self.assertIn("模板生成失败", str(ctx.exception))
 
             with mock.patch("reports_app.internal_agent.internal_chat", return_value="   "):
                 with self.assertRaises(ValidationError):
-                    suggest_report_template(self.conn, self.project_id, "")
+                    generate_report_template(self.conn, self.project_id, "")
 
-    def test_suggest_template_endpoint_returns_template_without_saving(self):
+    def test_enqueue_template_generation_duplicate_and_capacity_guards(self):
         self.conn.execute(
-            "UPDATE projects SET report_template = '# Existing Template' WHERE id = ?", (self.project_id,)
+            """
+            INSERT INTO generation_jobs (project_id, week_key, trigger_type, provider, status, queued_at, started_at)
+            VALUES (?, '2026-W36', 'template', 'internal', 'queued', '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00')
+            """,
+            (self.project_id,),
         )
         self.conn.commit()
+        with self.assertRaises(ValidationError):
+            enqueue_template_generation(self.conn, self.db_path, self.project_id, "req")
+        # capacity counts queued template jobs like any other task; a capacity
+        # of 1 with the queued template job above must reject the next
+        # submission once the duplicate guard no longer applies
+        self.conn.execute("UPDATE generation_jobs SET status = 'success' WHERE trigger_type = 'template'")
+        self.conn.execute(
+            """
+            INSERT INTO generation_jobs (project_id, week_key, trigger_type, provider, status, queued_at, started_at)
+            VALUES (?, '2026-W36', 'manual', 'internal', 'queued', '2026-09-01T00:00:00+00:00', '2026-09-01T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        set_setting(self.conn, "queue_capacity", "1")
+        self.conn.commit()
+        with self.assertRaises(QueueFullError):
+            enqueue_template_generation(self.conn, self.db_path, self.project_id, "req")
+        # with a free slot a finished template job no longer blocks submissions
+        self.conn.execute("UPDATE generation_jobs SET status = 'success' WHERE trigger_type != 'template'")
+        self.conn.commit()
+        job_id = enqueue_template_generation(self.conn, self.db_path, self.project_id, "req")
+        row = self.conn.execute("SELECT trigger_type, status FROM generation_jobs WHERE id = ?", (job_id,)).fetchone()
+        self.assertEqual(row["trigger_type"], "template")
+        self.assertEqual(row["status"], "queued")
+
+    def test_suggest_template_endpoint_queues_and_autosaves(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.db_path = self.db_path
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1412,13 +1471,33 @@ class CoreTest(unittest.TestCase):
             response = client.getresponse()
             result = json.loads(response.read())
             client.close()
-            self.assertEqual(response.status, 200)
-            self.assertTrue(result["template"].startswith("#"))
+            self.assertEqual(response.status, 202)
+            self.assertEqual(result["status"], "queued")
+            job_id = result["id"]
 
+            # the shared runner completes the fake-provider job in the
+            # background and saves the template to the project
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                row = self.conn.execute(
+                    "SELECT status FROM generation_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                if row and row["status"] in ("success", "failed"):
+                    break
+                time.sleep(0.05)
+            self.conn.commit()
+            row = self.conn.execute("SELECT status FROM generation_jobs WHERE id = ?", (job_id,)).fetchone()
+            self.assertEqual(row["status"], "success")
             saved = self.conn.execute(
                 "SELECT report_template FROM projects WHERE id = ?", (self.project_id,)
             ).fetchone()
-            self.assertEqual(saved["report_template"], "# Existing Template")
+            self.assertEqual(saved["report_template"], FAKE_SUGGESTED_TEMPLATE.strip())
+
+            # workspace keeps 生成历史 report-only and exposes the template job
+            data = workspace(self.conn, self.project_id)
+            self.assertNotIn("template", {item["trigger_type"] for item in data["jobs"]})
+            self.assertEqual(data["template_job"]["id"], job_id)
+            self.assertEqual(data["template_job"]["status"], "success")
 
             client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
             self.api_request(client, "POST", "/api/projects/999999/suggest-template", body="{}", headers={"Content-Type": "application/json"})

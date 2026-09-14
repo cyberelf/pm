@@ -453,25 +453,71 @@ def strip_template_fences(raw):
     return value.strip()
 
 
-def suggest_report_template(conn, project_id, requirements, timeout=300):
-    """Design a fresh report template with the internal agent. Read-only: the
-    generated template is returned for review, not saved. REPORTS_FAKE_PROVIDER
-    keeps tests and dry runs offline."""
+def generate_report_template(conn, project_id, requirements, timeout=300, job_id=None):
+    """Design a fresh report template with the internal agent and save it to
+    the project automatically. Template design runs as a queued background
+    task: with a job_id the generation_jobs row is driven through the
+    queued/running/success|failed lifecycle and failures are recorded in
+    failure_reason. Direct calls without a job_id skip the bookkeeping and
+    raise ValidationError on failure. REPORTS_FAKE_PROVIDER keeps tests and
+    dry runs offline."""
+    project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        raise LookupError("project not found")
+    requirements = (requirements or "").strip()[:8000]
+    now = iso_now()
+    if job_id is not None:
+        conn.execute(
+            "UPDATE generation_jobs SET status = 'running', input_summary = ?, started_at = ? WHERE id = ?",
+            (f"template design; requirements {len(requirements)} chars", now, job_id),
+        )
+        conn.commit()
+
+    def _fail(message):
+        if job_id is None:
+            raise ValidationError(message)
+        conn.execute(
+            "UPDATE generation_jobs SET status = 'failed', failure_reason = ?, completed_at = ? WHERE id = ?",
+            (message[:2000], iso_now(), job_id),
+        )
+        conn.commit()
+        return None
+
     sources = collect_template_sources(conn, project_id)
     last_report = latest_report_markdown(conn, project_id)[:6000]
-    prompt = build_template_suggestion_prompt((requirements or "").strip()[:8000], sources, last_report)
+    prompt = build_template_suggestion_prompt(requirements, sources, last_report)
     if fake_provider_enabled():
-        return FAKE_SUGGESTED_TEMPLATE.strip()
-    from .internal_agent import internal_chat, resolve_llm_settings
+        template = FAKE_SUGGESTED_TEMPLATE.strip()
+    else:
+        from .internal_agent import internal_chat, resolve_llm_settings
 
-    try:
-        raw = internal_chat(prompt, resolve_llm_settings(conn), timeout=timeout, max_tokens=4096, temperature=0)
-    except RuntimeError as exc:
-        raise ValidationError(f"模板生成失败：{exc}") from exc
-    template = strip_template_fences(raw)
+        try:
+            raw = internal_chat(prompt, resolve_llm_settings(conn), timeout=timeout, max_tokens=4096, temperature=0)
+        except RuntimeError as exc:
+            return _fail(f"模板生成失败：{exc}")
+        template = strip_template_fences(raw)
     if not template:
-        raise ValidationError("模板生成结果为空，请稍后重试")
+        return _fail("模板生成结果为空，请重试")
+    conn.execute(
+        "UPDATE projects SET report_template = ?, updated_at = ? WHERE id = ?",
+        (template, iso_now(), project_id),
+    )
+    if job_id is not None:
+        conn.execute(
+            "UPDATE generation_jobs SET status = 'success', output_md = ?, completed_at = ? WHERE id = ?",
+            (template, iso_now(), job_id),
+        )
+    conn.commit()
     return template
+
+
+def run_template_job(db_path, job_id, project_id, requirements, timeout=300):
+    """Task-queue worker for a queued template design job. Opens its own
+    database connection; the generated template is saved by
+    generate_report_template itself."""
+    with connect(db_path) as conn:
+        generate_report_template(conn, project_id, requirements, timeout=timeout, job_id=job_id)
+        conn.commit()
 
 
 def fake_report(context):

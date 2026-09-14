@@ -195,12 +195,14 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('type="button" class="template-wand"', source)
         self.assertIn("async function suggestReportTemplate()", source)
         self.assertIn("/suggest-template", source)
-        self.assertIn("模板生成失败", source)
-        self.assertIn("模板生成结果为空", source)
-        self.assertIn("模板已生成，保存设置后生效", source)
+        self.assertIn("模板生成任务已提交，完成后自动保存", source)
+        self.assertIn("模板生成任务提交失败", source)
+        self.assertIn("async function templateJobFinished(", source)
+        self.assertIn("周报模板已生成并保存", source)
+        self.assertIn("生成后自动保存", source)
         self.assertIn(".template-wand {", styles)
 
-    def test_suggest_report_template_fills_textarea_and_reports_errors(self):
+    def test_suggest_report_template_submits_async_and_autosaves(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
         harness = r"""
@@ -250,9 +252,8 @@ globalThis.fetch = async (path, options) => {
   toast = (message) => { toasts.push(message); };
   state.projectId = 1;
 
-  // posts the current content directly (no confirm gate) and fills the textarea
   templateFieldEl.value = "# Requirements";
-  responses.push({ template: "# Generated" });
+  responses.push({ id: 77, status: "queued" });
   await suggestReportTemplate();
   if (fetchCalls.length !== 1 || fetchCalls[0].path !== "/api/projects/1/suggest-template" || fetchCalls[0].options.method !== "POST") {
     throw new Error("did not POST to suggest-template");
@@ -260,33 +261,45 @@ globalThis.fetch = async (path, options) => {
   if (!fetchCalls[0].options.body.includes('"requirements":"# Requirements"')) {
     throw new Error(`unexpected requirements payload: ${fetchCalls[0].options.body}`);
   }
-  if (templateFieldEl.value !== "# Generated") {
-    throw new Error("the generated template was not filled into the textarea");
+  const tracked = reportJobs.get(77);
+  if (!tracked || tracked.kind !== "template" || tracked.projectId !== 1) {
+    throw new Error("the queued template job was not tracked");
   }
-  if (!toasts.some((message) => message.includes("模板已生成"))) {
+  if (!toasts.some((message) => message.includes("模板生成任务已提交"))) {
+    throw new Error(`submit toast missing: ${toasts.join("|")}`);
+  }
+
+  // polling adopts the running task and completes through the workspace fetch
+  responses.push({ active: 1, tasks: [{ kind: "template", id: 77, project_id: 1, status: "running" }] });
+  await pollTaskQueue();
+  if (reportJobs.get(77).status !== "running") {
+    throw new Error("polling did not adopt the running template task");
+  }
+  responses.push({ active: 0, tasks: [] });
+  responses.push({ project: { id: 1, name: "Demo" }, jobs: [], template_job: { id: 77, status: "success" } });
+  await pollTaskQueue();
+  if (reportJobs.has(77)) {
+    throw new Error("the finished template job stayed tracked");
+  }
+  if (!toasts.some((message) => message.includes("周报模板已生成并保存"))) {
     throw new Error(`success toast missing: ${toasts.join("|")}`);
   }
 
-  // an empty template payload must not wipe the textarea
-  responses.push({ template: "   " });
+  // a failed template job reports the recorded failure reason
+  responses.push({ id: 78, status: "queued" });
   await suggestReportTemplate();
-  if (templateFieldEl.value !== "# Generated") {
-    throw new Error("an empty template result wiped the textarea");
-  }
-  if (!toasts.some((message) => message.includes("模板生成结果为空"))) {
-    throw new Error(`empty-result toast missing: ${toasts.join("|")}`);
+  responses.push({ active: 0, tasks: [] });
+  responses.push({ project: { id: 1, name: "Demo" }, jobs: [], template_job: { id: 78, status: "failed", failure_reason: "模板生成失败：provider down" } });
+  await pollTaskQueue();
+  if (!toasts.some((message) => message.includes("模板生成失败") && message.includes("provider down"))) {
+    throw new Error(`failure toast missing: ${toasts.join("|")}`);
   }
 
-  // API failures surface a visible toast and keep the current content
-  globalThis.fetch = async () => { throw new Error("internal agent LLM call failed: boom"); };
+  // submit failures surface a visible toast instead of failing silently
+  globalThis.fetch = async () => { throw new Error("boom"); };
   await suggestReportTemplate();
-  if (templateFieldEl.value !== "# Generated") {
-    throw new Error("a failed generation wiped the textarea");
-  }
-  // the api() wrapper maps network failures to a generic message; what matters
-  // is that the failure is surfaced at all (server 400s pass through verbatim)
-  if (!toasts.some((message) => message.includes("模板生成失败"))) {
-    throw new Error(`failure toast missing: ${toasts.join("|")}`);
+  if (!toasts.some((message) => message.includes("模板生成任务提交失败"))) {
+    throw new Error(`submit-failure toast missing: ${toasts.join("|")}`);
   }
 })().catch((error) => {
   console.error(error);

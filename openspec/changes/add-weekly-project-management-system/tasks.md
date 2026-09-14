@@ -127,3 +127,9 @@
 - [x] 11.1 Snapshot the current week's supplement into the weekly report row on every successful generation and refresh it on same-week regeneration
 - [x] 11.2 Expose the generation-time supplement in archived report payloads and render it under expanded historical reports
 - [x] 11.3 List past weeks' supplements (newest first, excluding the current week, bounded) in the 本周补充 tab
+
+## 12. Template design as a queued task
+
+- [x] 12.1 Route AI template design through the shared task queue with duplicate and capacity guards instead of a synchronous request
+- [x] 12.2 Save the generated template to the project automatically on task success and record failures on the task
+- [x] 12.3 Surface template task progress through the queue snapshot with completion and failure toasts
