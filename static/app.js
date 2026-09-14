@@ -1415,15 +1415,23 @@ function switchSettingsSubTab(tab) {
   });
 }
 
+function templateJobPending() {
+  for (const job of reportJobs.values()) {
+    if (job.kind === "template" && job.projectId === state.projectId) return true;
+  }
+  return false;
+}
+
 function templateField(p) {
+  const pending = templateJobPending();
   return `
     <div class="wide template-field">
       <div class="template-field-head">
         <span>项目周报模板</span>
-        <button type="button" class="template-wand" title="AI 生成周报模板" aria-label="AI 生成周报模板" onclick="suggestReportTemplate()">${faIcon("wand")}</button>
+        <button type="button" id="template-wand-btn" class="template-wand" title="AI 生成周报模板" aria-label="AI 生成周报模板" onclick="suggestReportTemplate()" ${pending ? "disabled" : ""}>${faIcon("wand")}</button>
       </div>
       <textarea name="report_template">${escapeHtml(p.report_template || "")}</textarea>
-      <small>魔棒按当前填写内容、项目数据来源与最近一期周报生成模板，生成后自动保存</small>
+      <small id="template-field-hint">${pending ? "模板生成中，完成后自动保存并刷新…" : "魔棒按当前填写内容、项目数据来源与最近一期周报生成模板，生成后自动保存"}</small>
     </div>
   `;
 }
@@ -1437,6 +1445,10 @@ async function suggestReportTemplate() {
       body: JSON.stringify({ requirements: field.value }),
     });
     reportJobs.set(data.id, { projectId: state.projectId, kind: "template", status: data.status || "queued" });
+    const hint = document.querySelector("#template-field-hint");
+    if (hint) hint.textContent = "模板生成中，完成后自动保存并刷新…";
+    const wand = document.querySelector("#template-wand-btn");
+    if (wand) wand.disabled = true;
     toast("模板生成任务已提交，完成后自动保存");
     startQueuePolling();
   } catch (error) {
@@ -1999,7 +2011,8 @@ function renderReport(ws) {
 function renderHistoryReport(report) {
   return `
     <details class="history-report" data-history-week="${escapeAttr(report.week_key)}" ontoggle="onHistoryReportToggle(this)">
-      <summary><strong>${escapeHtml(report.week_key)}</strong><span>${escapeHtml(formatChinaTime(report.updated_at))}</span><span class="status">read-only</span><button onclick="event.preventDefault(); exportReportPdf('${escapeAttr(report.week_key)}')">导出 PDF</button></summary>
+      <summary><strong>${escapeHtml(report.week_key)}</strong><span>${escapeHtml(formatChinaTime(report.updated_at))}</span><span class="status">read-only</span></summary>
+      <div class="row"><button type="button" onclick="exportReportPdf('${escapeAttr(report.week_key)}')">导出 PDF</button></div>
       <article class="report history-report-body"><p>展开时加载正文…</p></article>
     </details>
   `;
@@ -2096,7 +2109,7 @@ async function reportJobFinished(jobId, job) {
 function renderQueueProgress(data) {
   const bubble = $("task-queue-progress");
   if (!bubble) return;
-  const tasks = ((data && data.tasks) || []).filter((task) => task.kind === "report");
+  const tasks = ((data && data.tasks) || []).filter((task) => task.kind === "report" || task.kind === "template");
   if (!tasks.length) {
     bubble.classList.add("hidden");
     return;
@@ -2106,7 +2119,7 @@ function renderQueueProgress(data) {
   const limits = data.parallelism && data.capacity ? `（并行 ${data.parallelism} · 上限 ${data.capacity}）` : "";
   bubble.classList.remove("hidden");
   bubble.innerHTML = `<small>任务队列：${running} 生成中 · ${queued} 排队${limits}</small>${tasks.map((task) =>
-    `<span class="queue-task-line">${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.project_name || "")} ${escapeHtml(task.week_key || "")}</span>`).join("")}`;
+    `<span class="queue-task-line">${task.kind === "template" ? "模板 · " : ""}${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.project_name || "")} ${escapeHtml(task.week_key || "")}</span>`).join("")}`;
 }
 
 function confirmProjectGeneration(projectId) {
