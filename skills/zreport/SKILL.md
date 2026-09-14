@@ -47,7 +47,7 @@ instead of working around the CLI.
 
 - Text material: `echo "..." | zreport project materials add -p <project> --text - --title "Title"`
 - Attachments: `zreport project materials add -p <project> --file a.md b.pdf`
-  (supported: .md .markdown .txt .pdf)
+  (supported: .md .markdown .txt .html .htm .pdf)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then
   `zreport todo done <ID> -p <project> -r "closing note"` (done archives the

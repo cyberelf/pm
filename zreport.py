@@ -39,7 +39,7 @@ from urllib.parse import urlparse
 DEFAULT_SERVER = "http://127.0.0.1:8765"
 __version__ = "1.2.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
-MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".pdf": "application/pdf"}
+MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".html": "text/html", ".htm": "text/html", ".pdf": "application/pdf"}
 TODO_STATUSES = ("todo", "doing")
 # The editable copy lives at skills/zreport/SKILL.md in the repo; this
 # embedded copy ships inside the wheel (the package is a single module), and
@@ -94,7 +94,7 @@ instead of working around the CLI.
 
 - Text material: `echo "..." | zreport project materials add -p <project> --text - --title "Title"`
 - Attachments: `zreport project materials add -p <project> --file a.md b.pdf`
-  (supported: .md .markdown .txt .pdf)
+  (supported: .md .markdown .txt .html .htm .pdf)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then
   `zreport todo done <ID> -p <project> -r "closing note"` (done archives the
@@ -542,7 +542,7 @@ def build_parser():
     materials_add.add_argument("-p", "--project", required=True, help="project ID or name")
     materials_add.add_argument("--text", help="text content; pass - to read from stdin")
     materials_add.add_argument("--title", help="text material title (default: CLI note)")
-    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .pdf, multiple allowed)")
+    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .html .htm .pdf, multiple allowed)")
     materials_add.set_defaults(func=cmd_materials_add)
 
     project_weekly = project_sub.add_parser("weekly", help="weekly reports")

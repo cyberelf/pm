@@ -41,7 +41,7 @@ zreport materials add <project> --text "..." [--title "..."]
 echo "..." | zreport materials add <project> --text -
                                        submit text material from stdin
 zreport materials add <project> --file a.md b.pdf
-                                       upload attachments (.md .markdown .txt .pdf)
+                                       upload attachments (.md .markdown .txt .html .htm .pdf)
 zreport todo add "Title" -d "Details"  create a TODO
 zreport todo status <ID> doing|todo    change a TODO's status
 zreport todo done <ID> -p <project> -r "closing note"
