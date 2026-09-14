@@ -115,3 +115,9 @@
 - [x] 11.12 Replace native report-generation confirmation with an application-styled message box
 - [x] 11.13 Restyle the workspace switch as a borderless soft-shadow paper curl and apply blue/green/gray board column themes
 - [x] 11.14 Update regressions, restart the local service, and verify live assets and routes
+
+## 10. Workspace navigation restructure
+
+- [x] 10.1 Rework the workspace navigation to 总览 / 过程资料 / 本周补充 / 周报 / 计划和风险 / 设置 with the 设置 tab promoted to a first-level navigation button
+- [x] 10.2 Move manual materials before file uploads in the 过程资料 tab and split 计划和风险 into 项目计划 and 进度风险 sub-tabs
+- [x] 10.3 Move 系统诊断 into the 设置 tab as its own sub-tab and remove the standalone risks tab

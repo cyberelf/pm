@@ -41,7 +41,9 @@ const state = {
   appearance: "light",
   branchOptions: {},
   tab: "overview",
-  sourceTab: "files",
+  sourceTab: "manual",
+  planSubTab: "plan",
+  settingsSubTab: "project",
   busy: false,
 };
 
@@ -1301,7 +1303,6 @@ function render() {
   renderUpdates(ws);
   renderSources(ws);
   renderReport(ws);
-  renderRisks(ws);
   ensureTableScrollContainers();
   switchTab(state.tab);
 }
@@ -1348,38 +1349,68 @@ function renderOverview(ws) {
 function renderSettings(ws) {
   const p = ws.project;
   $("tab-settings").innerHTML = `
-    <form id="settings-form" class="panel form-grid">
-      <div class="panel-head wide">
-        <div class="panel-title"><h2>项目设置</h2><span>项目与报告配置</span></div>
-        <div class="panel-actions"><button class="primary" type="submit">保存设置</button></div>
-      </div>
-      ${input("name", "名称", p.name)}
-      ${projectRunToggle(p)}
-      ${input("start_date", "开始日期", p.start_date, "date")}
-      ${input("end_date", "结束日期", p.end_date || "", "date")}
-      ${timezoneSelect("timezone", "时区", p.timezone)}
-      ${textarea("description", "描述", p.description, "wide")}
-      ${templateField(p)}
-      <div class="wide panel">
-        <div class="panel-head"><h3>更新时间点</h3><span>同一项目周内覆盖当前周报</span></div>
-        <div id="schedule-list">${renderSchedules(ws.schedules, p.timezone)}</div>
-        <button type="button" onclick="addSchedule()">+ 添加时间点</button>
-      </div>
-      <div class="wide row settings-save-row"><button class="primary" type="submit">保存设置</button></div>
-    </form>
-    <div class="panel">
-      <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
-      <div class="row">
-        <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
-        <input id="repo-input" placeholder="owner/repo">
-        <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
-        <button type="button" onclick="addRepo()">添加仓库</button>
-      </div>
-      <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>暂无仓库。</td></tr>"}</tbody></table>
+    <div class="source-tabs" role="tablist" aria-label="设置分类">
+      <button type="button" data-subtab="project" role="tab" onclick="switchSettingsSubTab('project')">项目设置</button>
+      <button type="button" data-subtab="git" role="tab" onclick="switchSettingsSubTab('git')">Git 仓库</button>
+      <button type="button" data-subtab="diagnostics" role="tab" onclick="switchSettingsSubTab('diagnostics')">系统诊断</button>
     </div>
+    <section id="settings-sub-project" class="source-view" role="tabpanel">
+      <form id="settings-form" class="panel form-grid">
+        <div class="panel-head wide">
+          <div class="panel-title"><h2>项目设置</h2><span>项目与报告配置</span></div>
+          <div class="panel-actions"><button class="primary" type="submit">保存设置</button></div>
+        </div>
+        ${input("name", "名称", p.name)}
+        ${projectRunToggle(p)}
+        ${input("start_date", "开始日期", p.start_date, "date")}
+        ${input("end_date", "结束日期", p.end_date || "", "date")}
+        ${timezoneSelect("timezone", "时区", p.timezone)}
+        ${textarea("description", "描述", p.description, "wide")}
+        ${templateField(p)}
+        <div class="wide panel">
+          <div class="panel-head"><h3>更新时间点</h3><span>同一项目周内覆盖当前周报</span></div>
+          <div id="schedule-list">${renderSchedules(ws.schedules, p.timezone)}</div>
+          <button type="button" onclick="addSchedule()">+ 添加时间点</button>
+        </div>
+        <div class="wide row settings-save-row"><button class="primary" type="submit">保存设置</button></div>
+      </form>
+    </section>
+    <section id="settings-sub-git" class="source-view hidden" role="tabpanel">
+      <div class="panel">
+        <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
+        <div class="row">
+          <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
+          <input id="repo-input" placeholder="owner/repo">
+          <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
+          <button type="button" onclick="addRepo()">添加仓库</button>
+        </div>
+        <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>暂无仓库。</td></tr>"}</tbody></table>
+      </div>
+    </section>
+    <section id="settings-sub-diagnostics" class="source-view hidden" role="tabpanel">
+      <div class="panel">
+        <div class="panel-head"><h2>系统诊断</h2><span>资料源与生成状态</span></div>
+        <table class="table"><thead><tr><th>类型</th><th>严重度</th><th>标题</th><th>更新时间</th></tr></thead><tbody>${(ws.source_diagnostics || []).map(d => `<tr><td>${escapeHtml(d.kind)}</td><td><span class="status ${d.severity}">${escapeHtml(statusLabel(d.severity))}</span></td><td>${escapeHtml(d.title)}<br>${escapeHtml(d.details || "")}</td><td>${escapeHtml(formatChinaTime(d.updated_at))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无诊断信息。</td></tr>"}</tbody></table>
+      </div>
+    </section>
   `;
   $("settings-form").onsubmit = saveSettings;
   onRepoModeChange();
+  switchSettingsSubTab(state.settingsSubTab);
+}
+
+function switchSettingsSubTab(tab) {
+  state.settingsSubTab = tab;
+  const root = $("tab-settings");
+  root.querySelectorAll("[data-subtab]").forEach((button) => {
+    const active = button.dataset.subtab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  ["project", "git", "diagnostics"].forEach((name) => {
+    const view = root.querySelector(`#settings-sub-${name}`);
+    if (view) view.classList.toggle("hidden", name !== tab);
+  });
 }
 
 function templateField(p) {
@@ -1532,19 +1563,47 @@ async function saveSettings(event) {
 
 function renderPlan(ws) {
   $("tab-plan").innerHTML = `
-    <form id="plan-form" class="panel">
-      <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物</span></div>
-      ${textarea("objectives", "目标", ws.plan.objectives)}
-      <h3>里程碑</h3>
-      <div id="milestones">${renderPlanItems(ws.plan.milestones)}</div>
-      <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
-      <h3>交付物</h3>
-      <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
-      <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
-      <div class="row"><button class="primary">保存计划</button></div>
-    </form>
+    <div class="source-tabs" role="tablist" aria-label="计划和风险">
+      <button type="button" data-subtab="plan" role="tab" onclick="switchPlanSubTab('plan')">项目计划</button>
+      <button type="button" data-subtab="risk" role="tab" onclick="switchPlanSubTab('risk')">进度风险</button>
+    </div>
+    <section id="plan-sub-plan" class="source-view" role="tabpanel">
+      <form id="plan-form" class="panel">
+        <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物</span></div>
+        ${textarea("objectives", "目标", ws.plan.objectives)}
+        <h3>里程碑</h3>
+        <div id="milestones">${renderPlanItems(ws.plan.milestones)}</div>
+        <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
+        <h3>交付物</h3>
+        <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
+        <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
+        <div class="row"><button class="primary">保存计划</button></div>
+      </form>
+    </section>
+    <section id="plan-sub-risk" class="source-view hidden" role="tabpanel">
+      <div class="panel">
+        <div class="panel-head"><h2>进度和风险</h2><span>仅项目相关风险</span></div>
+        <p>进度状态：<span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(statusLabel(ws.progress_status))}</span></p>
+        <table class="table"><thead><tr><th>严重度</th><th>规则</th><th>标题</th><th>状态</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td data-label="严重度"><span class="status ${r.severity}">${statusLabel(r.severity)}</span></td><td data-label="规则">${escapeHtml(r.rule)}</td><td data-label="标题">${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td data-label="状态">${escapeHtml(statusLabel(r.status))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无风险。</td></tr>"}</tbody></table>
+      </div>
+    </section>
   `;
   $("plan-form").onsubmit = savePlan;
+  switchPlanSubTab(state.planSubTab);
+}
+
+function switchPlanSubTab(tab) {
+  state.planSubTab = tab;
+  const root = $("tab-plan");
+  root.querySelectorAll("[data-subtab]").forEach((button) => {
+    const active = button.dataset.subtab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  ["plan", "risk"].forEach((name) => {
+    const view = root.querySelector(`#plan-sub-${name}`);
+    if (view) view.classList.toggle("hidden", name !== tab);
+  });
 }
 
 function renderPlanItems(items) {
@@ -1595,8 +1654,8 @@ function renderUpdates(ws) {
 function renderSources(ws) {
   $("tab-sources").innerHTML = `
     <div class="source-tabs" role="tablist" aria-label="资料类型">
-      <button type="button" data-source-tab="files" role="tab" onclick="switchSourceTab('files')">文件资料</button>
       <button type="button" data-source-tab="manual" role="tab" onclick="switchSourceTab('manual')">手工资料</button>
+      <button type="button" data-source-tab="files" role="tab" onclick="switchSourceTab('files')">文件资料</button>
     </div>
     <section id="source-files" class="source-view" role="tabpanel">
       <div class="panel source-panel">
@@ -1636,7 +1695,7 @@ function switchSourceTab(tab) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  ["files", "manual"].forEach((name) => {
+  ["manual", "files"].forEach((name) => {
     const view = $(`source-${name}`);
     if (view) view.classList.toggle("hidden", name !== tab);
   });
@@ -1920,20 +1979,6 @@ async function onHistoryReportToggle(details) {
 
 function exportReportPdf(weekKey) {
   window.location.href = `/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}/pdf`;
-}
-
-function renderRisks(ws) {
-  $("tab-risks").innerHTML = `
-    <div class="panel">
-      <div class="panel-head"><h2>进度和风险</h2><span>仅项目相关风险</span></div>
-      <p>进度状态：<span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(statusLabel(ws.progress_status))}</span></p>
-      <table class="table"><thead><tr><th>严重度</th><th>规则</th><th>标题</th><th>状态</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td data-label="严重度"><span class="status ${r.severity}">${statusLabel(r.severity)}</span></td><td data-label="规则">${escapeHtml(r.rule)}</td><td data-label="标题">${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td data-label="状态">${escapeHtml(statusLabel(r.status))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无风险。</td></tr>"}</tbody></table>
-    </div>
-    <div class="panel">
-      <div class="panel-head"><h2>系统诊断</h2><span>资料源与生成状态</span></div>
-      <table class="table"><thead><tr><th>类型</th><th>严重度</th><th>标题</th><th>更新时间</th></tr></thead><tbody>${(ws.source_diagnostics || []).map(d => `<tr><td>${escapeHtml(d.kind)}</td><td><span class="status ${d.severity}">${escapeHtml(statusLabel(d.severity))}</span></td><td>${escapeHtml(d.title)}<br>${escapeHtml(d.details || "")}</td><td>${escapeHtml(formatChinaTime(d.updated_at))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无诊断信息。</td></tr>"}</tbody></table>
-    </div>
-  `;
 }
 
 const reportJobs = new Map();

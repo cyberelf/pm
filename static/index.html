@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=53" />
+    <link rel="stylesheet" href="/styles.css?v=54" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -81,25 +81,24 @@
 
           <nav class="tabs" aria-label="Workspace views">
             <button data-tab="overview" class="active">总览</button>
-            <button data-tab="sources">资料源</button>
+            <button data-tab="sources">过程资料</button>
+            <button data-tab="updates">本周补充</button>
             <button data-tab="report">周报</button>
-            <button data-tab="plan">计划</button>
-            <button data-tab="updates">本周进展</button>
-            <button data-tab="risks">风险</button>
+            <button data-tab="plan">计划和风险</button>
+            <button data-tab="settings">设置</button>
           </nav>
 
           <section id="empty-state" class="empty">
             <h2>创建项目</h2>
-            <p>从项目设置开始，然后添加计划、资料源、本周进展和自动周报。</p>
+            <p>从项目设置开始，然后添加计划、过程资料、本周补充和自动周报。</p>
           </section>
 
           <section id="workspace" class="workspace hidden">
             <div id="tab-overview" class="tab-panel"></div>
             <div id="tab-sources" class="tab-panel hidden"></div>
+            <div id="tab-updates" class="tab-panel hidden"></div>
             <div id="tab-report" class="tab-panel hidden"></div>
             <div id="tab-plan" class="tab-panel hidden"></div>
-            <div id="tab-updates" class="tab-panel hidden"></div>
-            <div id="tab-risks" class="tab-panel hidden"></div>
             <div id="tab-settings" class="tab-panel hidden"></div>
           </section>
         </main>
@@ -406,6 +405,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=50"></script>
+    <script src="/app.js?v=52"></script>
   </body>
 </html>
