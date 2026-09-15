@@ -530,9 +530,19 @@ strong { color: var(--ink); }
   box-shadow: var(--shadow-soft);
 }
 .todo-card h3 { font-size: 15px; overflow-wrap: anywhere; }
-.todo-card-editable { cursor: text; }
+.todo-card:not(.todo-card-editor) { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.todo-card-editable { cursor: grab; }
 .todo-card-editable:hover { border-color: var(--board-accent-blue-soft); box-shadow: 0 3px 12px rgba(15, 23, 42, 0.16); }
 .todo-card-editable:focus-visible { outline: 2px solid var(--board-accent-blue-soft); outline-offset: 2px; }
+.todo-card-armed { opacity: 0.85; }
+.todo-card-lifted { opacity: 0.35; border-style: dashed; transition: opacity 120ms ease; }
+.todo-card-ghost {
+  position: fixed; left: 0; top: 0; z-index: 58; margin: 0;
+  pointer-events: none; opacity: 0.96;
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.45);
+}
+.todo-card-ghost .todo-card-actions { display: none; }
+body.todo-drag-in-progress { cursor: grabbing; user-select: none; -webkit-user-select: none; }
 .todo-markdown { color: var(--body); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .todo-markdown > :first-child { margin-top: 0; }
 .todo-markdown > :last-child { margin-bottom: 0; }

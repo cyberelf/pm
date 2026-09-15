@@ -363,6 +363,7 @@ function playPageTurn() {
 function renderTodoBoard() {
   const board = $("todo-board");
   if (!board) return;
+  if (todoDrag.active || todoDrag.armed) return; // 拖拽进行中不重绘，落盘后由接口回包刷新
   const columns = [
     { status: "todo", title: "待办" },
     { status: "doing", title: "进行中" },
@@ -372,7 +373,7 @@ function renderTodoBoard() {
   board.innerHTML = columns.map((column) => {
     const items = state.todos.filter((todo) => todo.status === column.status);
     return `
-      <section class="todo-column todo-column-${column.status}">
+      <section class="todo-column todo-column-${column.status}" data-lane="${column.status}">
         <div class="todo-column-head"><h2>${column.title}</h2><span>${items.length}</span></div>
         <div class="todo-card-list">
           ${items.map(renderTodoCard).join("")}
@@ -421,6 +422,271 @@ function syncTodoBoardDots(board) {
   dots.querySelectorAll("button").forEach((dot, i) => dot.classList.toggle("active", i === index));
 }
 
+// —— 看板拖拽：卡片支持同列上下排序与跨列移动；触屏长按抬起，桌面按住即拖 ——
+const todoDrag = {
+  active: false, armed: false, fromLane: "", card: null, pointerId: -1,
+  touch: false, startX: 0, startY: 0, grabX: 0, grabY: 0, lastX: 0, lastY: 0,
+  ghost: null, origin: null, longPressTimer: 0, raf: 0,
+};
+
+function setupTodoBoardDrag() {
+  const board = $("todo-board");
+  if (!board || board._dragBound) return;
+  board._dragBound = true;
+  board.addEventListener("pointerdown", (event) => {
+    if (todoDrag.active || todoDrag.armed) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const card = event.target.closest(".todo-card[data-todo-id]");
+    if (!card || event.target.closest("button, a, input, textarea, [data-todo-editor]")) return;
+    todoDrag.armed = true;
+    todoDrag.card = card;
+    todoDrag.pointerId = event.pointerId;
+    todoDrag.touch = event.pointerType === "touch";
+    todoDrag.fromLane = card.closest(".todo-column")?.dataset.lane || "todo";
+    todoDrag.startX = todoDrag.lastX = event.clientX;
+    todoDrag.startY = todoDrag.lastY = event.clientY;
+    window.addEventListener("pointermove", onTodoDragMove);
+    window.addEventListener("pointerup", onTodoDragEnd);
+    window.addEventListener("pointercancel", onTodoDragCancel);
+    if (todoDrag.touch) {
+      card.classList.add("todo-card-armed");
+      todoDrag.longPressTimer = setTimeout(() => beginTodoDrag(), 240);
+    }
+  });
+  // 拖拽中压掉原生滚动，否则触屏上手势会被页面滚动/翻页抢占
+  board.addEventListener("touchmove", (event) => {
+    if (todoDrag.active) event.preventDefault();
+  }, { passive: false });
+  board.addEventListener("touchend", (event) => {
+    if (todoDrag.active) event.preventDefault();
+  }, { passive: false });
+  board.addEventListener("contextmenu", (event) => {
+    if (todoDrag.active || (todoDrag.armed && todoDrag.touch)) event.preventDefault();
+  });
+}
+
+function beginTodoDrag() {
+  const card = todoDrag.card;
+  if (!card || !todoDrag.armed) return;
+  todoDrag.armed = false;
+  todoDrag.active = true;
+  card.classList.remove("todo-card-armed");
+  const rect = card.getBoundingClientRect();
+  todoDrag.grabX = todoDrag.touch ? rect.width / 2 : todoDrag.lastX - rect.left;
+  todoDrag.grabY = todoDrag.touch ? rect.height / 2 : todoDrag.lastY - rect.top;
+  const ghost = card.cloneNode(true);
+  ghost.removeAttribute("data-todo-id");
+  ghost.classList.remove("todo-card-armed", "todo-card-lifted");
+  ghost.classList.add("todo-card-ghost");
+  ghost.style.width = `${rect.width}px`;
+  document.body.appendChild(ghost);
+  todoDrag.ghost = ghost;
+  todoDrag.origin = { parent: card.parentNode, next: card.nextSibling };
+  card.classList.add("todo-card-lifted");
+  document.body.classList.add("todo-drag-in-progress");
+  $("todo-board")._todoDragActive = true; // 让看板滑动翻页给拖拽让位
+  if (todoDrag.touch && navigator.vibrate) navigator.vibrate(10);
+  suppressTodoCardClick();
+  window.addEventListener("keydown", onTodoDragKey);
+  positionTodoGhost();
+  todoDrag.raf = requestAnimationFrame(todoDragFrame);
+}
+
+function positionTodoGhost() {
+  if (!todoDrag.ghost) return;
+  const liftY = todoDrag.touch ? -16 : 0;
+  todoDrag.ghost.style.transform =
+    `translate(${todoDrag.lastX - todoDrag.grabX}px, ${todoDrag.lastY - todoDrag.grabY + liftY}px) rotate(1.5deg) scale(1.02)`;
+}
+
+function onTodoDragMove(event) {
+  if (event.pointerId !== todoDrag.pointerId) return;
+  if (todoDrag.armed) {
+    const dx = event.clientX - todoDrag.startX;
+    const dy = event.clientY - todoDrag.startY;
+    if (todoDrag.touch) {
+      // 移动明显即视为滚动/翻页手势，放弃本次长按
+      if (Math.hypot(dx, dy) > 10) cancelTodoDragArm();
+    } else if (Math.hypot(dx, dy) > 4) {
+      beginTodoDrag();
+    }
+  }
+  if (!todoDrag.active) return;
+  todoDrag.lastX = event.clientX;
+  todoDrag.lastY = event.clientY;
+  positionTodoGhost();
+}
+
+function todoDragFrame() {
+  if (!todoDrag.active) return;
+  autoScrollTodoBoard();
+  updateTodoInsertion(todoDrag.lastX, todoDrag.lastY);
+  todoDrag.raf = requestAnimationFrame(todoDragFrame);
+}
+
+function autoScrollTodoBoard() {
+  const EDGE = 32;
+  const SPEED = 12;
+  const board = $("todo-board");
+  // 横向：手机分页模式下把卡片拖到屏幕边缘可翻到相邻列
+  if (board.scrollWidth > board.clientWidth + 1) {
+    const rect = board.getBoundingClientRect();
+    if (todoDrag.lastX < rect.left + EDGE) board.scrollLeft -= SPEED;
+    else if (todoDrag.lastX > rect.right - EDGE) board.scrollLeft += SPEED;
+  }
+  // 纵向：滚动页面本身，方便长列拖到视口外
+  const scroller = document.scrollingElement;
+  if (scroller) {
+    if (todoDrag.lastY < EDGE) scroller.scrollTop -= SPEED;
+    else if (todoDrag.lastY > window.innerHeight - EDGE) scroller.scrollTop += SPEED;
+  }
+}
+
+function updateTodoInsertion(x, y) {
+  const card = todoDrag.card;
+  if (!card) return;
+  const board = $("todo-board");
+  const acceptLanes = todoDrag.fromLane === "closed" ? ["closed"] : ["todo", "doing"];
+  let targetColumn = null;
+  for (const column of board.querySelectorAll(".todo-column")) {
+    if (!acceptLanes.includes(column.dataset.lane)) continue;
+    const rect = column.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top - 12 && y <= rect.bottom + 12) {
+      targetColumn = column;
+      break;
+    }
+  }
+  if (!targetColumn) return; // 悬停在无关区域时保持上一个落点
+  const list = targetColumn.querySelector(".todo-card-list");
+  const cards = [...list.querySelectorAll(".todo-card[data-todo-id]")].filter((el) => el !== card);
+  let before = null;
+  for (const el of cards) {
+    const rect = el.getBoundingClientRect();
+    if (y < rect.top + rect.height / 2) {
+      before = el;
+      break;
+    }
+  }
+  const ref = before || list.querySelector(".todo-draft, .todo-empty");
+  if (card.parentNode === ref?.parentNode && card.nextElementSibling === ref) return;
+  (ref?.parentNode || list).insertBefore(card, ref);
+}
+
+function onTodoDragEnd(event) {
+  if (event.pointerId !== todoDrag.pointerId) return;
+  if (todoDrag.active) commitTodoDragDrop();
+  else if (todoDrag.armed) cancelTodoDragArm();
+}
+
+function onTodoDragCancel() {
+  if (todoDrag.active) cancelTodoDrag();
+  else if (todoDrag.armed) cancelTodoDragArm();
+}
+
+function onTodoDragKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelTodoDrag();
+  }
+}
+
+function cancelTodoDragArm() {
+  if (todoDrag.longPressTimer) {
+    clearTimeout(todoDrag.longPressTimer);
+    todoDrag.longPressTimer = 0;
+  }
+  if (todoDrag.card) todoDrag.card.classList.remove("todo-card-armed");
+  stopTodoDragListeners();
+  todoDrag.armed = false;
+  todoDrag.card = null;
+}
+
+function commitTodoDragDrop() {
+  const card = todoDrag.card;
+  const board = $("todo-board");
+  const laneOrder = [...board.querySelectorAll(".todo-column")].map((column) => column.dataset.lane);
+  const targetLane = card.closest(".todo-column")?.dataset.lane;
+  cleanupTodoDrag();
+  card.classList.remove("todo-card-lifted");
+  const lanes = {};
+  board.querySelectorAll(".todo-column").forEach((column) => {
+    lanes[column.dataset.lane] = [...column.querySelectorAll(".todo-card[data-todo-id]")]
+      .map((el) => Number(el.dataset.todoId));
+  });
+  const byId = new Map(state.todos.map((todo) => [todo.id, todo]));
+  const seen = new Set();
+  const next = [];
+  for (const [lane, ids] of Object.entries(lanes)) {
+    for (const id of ids) {
+      const todo = byId.get(id);
+      if (!todo || seen.has(id)) continue;
+      todo.status = lane;
+      seen.add(id);
+      next.push(todo);
+    }
+  }
+  // 拖拽期间后台新出现的卡片（如语音 TODO）兜底保留
+  for (const todo of state.todos) {
+    if (!seen.has(todo.id)) next.push(todo);
+  }
+  state.todos = next;
+  renderTodoBoard();
+  // 手机分页模式：落点列可能不在当前页，吸附过去
+  if (board.scrollWidth > board.clientWidth + 1) {
+    const laneIndex = laneOrder.indexOf(targetLane);
+    if (laneIndex >= 0) board.scrollLeft = laneIndex * board.clientWidth;
+  }
+  api("/api/todos/reorder", { method: "POST", body: JSON.stringify({ lanes }) })
+    .then((data) => updateTodos(data))
+    .catch((error) => {
+      toast(error.message);
+      loadTodos();
+    });
+}
+
+function cancelTodoDrag() {
+  const { card, origin } = todoDrag;
+  cleanupTodoDrag();
+  if (card && origin) {
+    card.classList.remove("todo-card-lifted");
+    origin.parent.insertBefore(card, origin.next);
+  }
+}
+
+function cleanupTodoDrag() {
+  if (todoDrag.raf) cancelAnimationFrame(todoDrag.raf);
+  todoDrag.raf = 0;
+  if (todoDrag.longPressTimer) {
+    clearTimeout(todoDrag.longPressTimer);
+    todoDrag.longPressTimer = 0;
+  }
+  stopTodoDragListeners();
+  todoDrag.ghost?.remove();
+  todoDrag.ghost = null;
+  document.body.classList.remove("todo-drag-in-progress");
+  $("todo-board")._todoDragActive = false;
+  if (todoDrag.card) todoDrag.card.classList.remove("todo-card-armed");
+  todoDrag.active = false;
+  todoDrag.armed = false;
+  todoDrag.card = null;
+}
+
+function stopTodoDragListeners() {
+  window.removeEventListener("pointermove", onTodoDragMove);
+  window.removeEventListener("pointerup", onTodoDragEnd);
+  window.removeEventListener("pointercancel", onTodoDragCancel);
+  window.removeEventListener("keydown", onTodoDragKey);
+}
+
+function suppressTodoCardClick() {
+  const stop = (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  };
+  document.addEventListener("click", stop, { capture: true, once: true });
+  setTimeout(() => document.removeEventListener("click", stop, true), 600);
+}
+
 function renderTodoCard(todo) {
   if (state.todoEditorId === todo.id) return renderTodoEditor(todo);
   const openActions = todo.status === "todo"
@@ -436,7 +702,7 @@ function renderTodoCard(todo) {
     : "";
   const editable = true;
   return `
-    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" ${editable ? `onclick="if (!event.target.closest('a')) beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter' && !event.target.closest('a')) beginTodoEdit(${todo.id})"` : ""}>
+    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" data-todo-id="${todo.id}" ondragstart="return false" ${editable ? `onclick="if (!event.target.closest('a')) beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter' && !event.target.closest('a')) beginTodoEdit(${todo.id})"` : ""}>
       <h3>${escapeHtml(todo.title)}</h3>
       ${todo.description ? `<div class="todo-markdown">${todo.description_html}</div>` : ""}
       ${todo.status === "closed" ? `
@@ -2378,6 +2644,7 @@ function attachSwipeNav(el, options = {}) {
   let gesture = "idle";
   const enabled = options.enabled || (() => true);
   el.addEventListener("touchstart", (event) => {
+    if (el._todoDragActive) { gesture = "idle"; return; }
     if (typeof el._pageSnapPending === "number") {
       // finish a smooth snap that a previous gesture or re-render interrupted
       el.scrollLeft = el._pageSnapPending;
@@ -2394,6 +2661,7 @@ function attachSwipeNav(el, options = {}) {
     startedAt = Date.now();
   }, { passive: true });
   el.addEventListener("touchmove", (event) => {
+    if (el._todoDragActive) { gesture = "idle"; return; }
     if (gesture === "idle" || gesture === "vertical") return;
     const dx = event.touches[0].clientX - startX;
     const dy = event.touches[0].clientY - startY;
@@ -2434,6 +2702,7 @@ function attachSwipeNav(el, options = {}) {
     watchdogRetries = 0;
   };
   const settle = () => {
+    if (el._todoDragActive) return;
     const width = el.clientWidth || 1;
     const dx = lastX - startX;
     const elapsed = Date.now() - startedAt;
@@ -2470,6 +2739,7 @@ workspacePagerQuery.addEventListener("change", applyWorkspacePagerMode);
 applyWorkspacePagerMode();
 attachSwipeNav(workspaceElement, { enabled: () => workspaceElement.classList.contains("pager-mode") });
 attachSwipeNav($("todo-board"));
+setupTodoBoardDrag();
 window.addEventListener("resize", () => {
   if (!workspacePagerQuery.matches) return;
   requestAnimationFrame(() => {

@@ -469,6 +469,257 @@ globalThis.fetch = async (path, options) => {
         self.assertIn("position: fixed;", styles)
         self.assertIn("transition: height 240ms ease;", styles)
 
+    def test_todo_board_supports_drag_reorder_across_lanes(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        # 卡片带稳定 id 锚点，列带 lane 锚点，拖拽落点靠它们读取
+        self.assertIn('data-todo-id="${todo.id}"', source)
+        self.assertIn('data-lane="${column.status}"', source)
+        self.assertIn('ondragstart="return false"', source)
+        # 拖拽期间整板重绘会让被拖卡片从 DOM 消失
+        self.assertIn("if (todoDrag.active || todoDrag.armed) return;", source)
+        self.assertIn("function setupTodoBoardDrag(", source)
+        self.assertLess(source.index('attachSwipeNav($("todo-board"));'), source.index("setupTodoBoardDrag();"))
+        # 拖拽时看板滑动翻页必须让位
+        self.assertIn("if (el._todoDragActive)", source)
+        # 触屏长按抬卡；桌面按住移动即拖
+        self.assertIn('todoDrag.longPressTimer = setTimeout(() => beginTodoDrag(), 240);', source)
+        self.assertIn("/api/todos/reorder", source)
+        self.assertIn('body: JSON.stringify({ lanes })', source)
+        # 已关闭列只接受列内重排，未关闭卡片不能拖入
+        self.assertIn('todoDrag.fromLane === "closed" ? ["closed"] : ["todo", "doing"]', source)
+        # 手机分页下拖到边缘自动横向翻页，落点列吸附回正
+        self.assertIn("function autoScrollTodoBoard()", source)
+        self.assertIn("board.scrollLeft = laneIndex * board.clientWidth;", source)
+        # 拖拽失败回滚到服务端顺序
+        self.assertIn("toast(error.message);\n      loadTodos();", source)
+        self.assertIn(".todo-card-armed {", styles)
+        self.assertIn(".todo-card-lifted {", styles)
+        self.assertIn(".todo-card-ghost {", styles)
+        self.assertIn("body.todo-drag-in-progress {", styles)
+        self.assertIn("cursor: grab;", styles)
+        self.assertIn("-webkit-touch-callout: none;", styles)
+
+    def test_todo_drag_moves_cards_within_and_across_lanes(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+function makeClassList() {
+  const set = new Set();
+  return {
+    add: (...names) => names.forEach((name) => set.add(name)),
+    remove: (...names) => names.forEach((name) => set.delete(name)),
+    toggle: () => {},
+    contains: (name) => set.has(name),
+  };
+}
+function insertEl(parent, child, ref) {
+  if (child.parentNode && child.parentNode !== parent) {
+    const old = child.parentNode.children.indexOf(child);
+    if (old >= 0) child.parentNode.children.splice(old, 1);
+    child.parentNode.children.forEach((c, i) => { c._next = child.parentNode.children[i + 1] || null; });
+  }
+  const at = parent.children.indexOf(child);
+  if (at >= 0) parent.children.splice(at, 1);
+  child.parentNode = parent;
+  const idx = ref ? parent.children.indexOf(ref) : parent.children.length;
+  parent.children.splice(idx, 0, child);
+  parent.children.forEach((c, i) => { c._next = parent.children[i + 1] || null; });
+}
+function makeEl(name, rect) {
+  return {
+    _name: name,
+    _handlers: {},
+    dataset: {},
+    style: {},
+    children: [],
+    parentNode: null,
+    _next: null,
+    getBoundingClientRect: () => rect,
+    classList: makeClassList(),
+    appendChild(child) { insertEl(this, child, null); },
+    insertBefore(child, ref) { insertEl(this, child, ref); },
+    remove() { if (this.parentNode) insertEl(this.parentNode, this, this); },
+    removeAttribute() {},
+    cloneNode() { return makeEl(`${name}-ghost`, rect); },
+    closest(selector) {
+      let cur = this;
+      while (cur) {
+        if (selector === ".todo-column" && cur._isColumn) return cur;
+        if (selector === ".todo-card-list" && cur._isList) return cur;
+        if (selector === ".todo-card[data-todo-id]" && cur._isCard) return cur;
+        if (selector === "button, a, input, textarea, [data-todo-editor]" && cur._isInteractive) return cur;
+        cur = cur.parentNode;
+      }
+      return null;
+    },
+    querySelector(selector) {
+      if (selector === ".todo-card-list") return this.children.find((c) => c._isList) || null;
+      if (selector === ".todo-draft, .todo-empty") return this.children.find((c) => c._isDraft || c._isEmpty) || null;
+      return null;
+    },
+    querySelectorAll(selector) {
+      const collect = (el, pred) => {
+        const found = [];
+        for (const child of el.children) {
+          if (pred(child)) found.push(child);
+          found.push(...collect(child, pred));
+        }
+        return found;
+      };
+      if (selector === ".todo-card[data-todo-id]") return collect(this, (c) => c._isCard);
+      if (selector === ".todo-column") return collect(this, (c) => c._isColumn);
+      return [];
+    },
+    addEventListener(type, handler) { this._handlers[type] = handler; },
+  };
+}
+const cardIds = (el) => el.children.filter((c) => c._isCard).map((c) => c.dataset.todoId);
+
+const columns = {};
+const laneBounds = { todo: [0, 320], doing: [320, 640], closed: [640, 960] };
+for (const lane of ["todo", "doing", "closed"]) {
+  const column = makeEl(`column-${lane}`, { left: laneBounds[lane][0], top: 0, right: laneBounds[lane][1], bottom: 900 });
+  column._isColumn = true;
+  column.dataset.lane = lane;
+  const list = makeEl(`list-${lane}`, { left: laneBounds[lane][0], top: 40, right: laneBounds[lane][1], bottom: 900 });
+  list._isList = true;
+  column.appendChild(list);
+  columns[lane] = { column, list };
+}
+const draft = makeEl("draft", { left: 0, top: 300, right: 320, bottom: 380 });
+draft._isDraft = true;
+const emptyNote = makeEl("empty", { left: 640, top: 60, right: 960, bottom: 100 });
+emptyNote._isEmpty = true;
+function makeCard(id, rect) {
+  const card = makeEl(`card-${id}`, rect);
+  card._isCard = true;
+  card.dataset.todoId = String(id);
+  return card;
+}
+const cardA = makeCard(1, { left: 0, top: 60, right: 320, bottom: 140 });
+const cardB = makeCard(2, { left: 0, top: 150, right: 320, bottom: 230 });
+const cardC = makeCard(3, { left: 320, top: 60, right: 640, bottom: 140 });
+const cardD = makeCard(4, { left: 640, top: 60, right: 960, bottom: 140 });
+columns.todo.list.appendChild(cardA);
+columns.todo.list.appendChild(cardB);
+columns.todo.list.appendChild(draft);
+columns.doing.list.appendChild(cardC);
+columns.closed.list.appendChild(cardD);
+columns.closed.list.appendChild(emptyNote);
+
+const board = makeEl("board", { left: 0, top: 0, right: 960, bottom: 900 });
+board.scrollWidth = 960;
+board.clientWidth = 960;
+board.scrollLeft = 0;
+for (const lane of ["todo", "doing", "closed"]) board.appendChild(columns[lane].column);
+
+const elements = new Map([["todo-board", board]]);
+globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+globalThis.document = {
+  body: makeEl("body", { left: 0, top: 0, right: 960, bottom: 900 }),
+  getElementById: (id) => elements.get(id) || null,
+  querySelectorAll: () => [],
+  addEventListener() {},
+  removeEventListener() {},
+  scrollingElement: { scrollTop: 0 },
+};
+globalThis.window = {
+  innerHeight: 900,
+  _handlers: {},
+  addEventListener(type, handler) { (this._handlers[type] = this._handlers[type] || []).push(handler); },
+  removeEventListener(type, handler) { this._handlers[type] = (this._handlers[type] || []).filter((h) => h !== handler); },
+};
+globalThis.navigator = {};
+const rafQueue = [];
+globalThis.requestAnimationFrame = (callback) => rafQueue.push(callback);
+globalThis.cancelAnimationFrame = () => {};
+globalThis.setTimeout = () => 0;
+globalThis.clearTimeout = () => {};
+const fetchCalls = [];
+globalThis.fetch = async (path, options) => {
+  fetchCalls.push({ path, options });
+  return { ok: true, text: async () => JSON.stringify({ todos: [] }), json: async () => ({ todos: [] }) };
+};
+const pump = () => rafQueue.splice(0).forEach((callback) => callback());
+const pointerEvent = (type, x, y, target) => ({
+  pointerId: 1, pointerType: "mouse", button: 0, clientX: x, clientY: y, target,
+  preventDefault() {},
+});
+const fire = (type, event) => {
+  const boardHandler = board._handlers[type];
+  if (boardHandler) boardHandler(event);
+  for (const handler of [...(globalThis.window._handlers[type] || [])]) handler(event);
+};
+"""
+        assertions = r"""
+(async () => {
+  renderTodoBoard = () => {};
+  toast = () => {};
+  state.todos = [
+    { id: 1, title: "A", status: "todo", position: 0 },
+    { id: 2, title: "B", status: "todo", position: 1 },
+    { id: 3, title: "C", status: "doing", position: 0 },
+    { id: 4, title: "D", status: "closed", position: 0 },
+  ];
+  setupTodoBoardDrag();
+
+  // 桌面鼠标：按住待办卡片 A 向下移动即抬起
+  fire("pointerdown", pointerEvent("pointerdown", 160, 100, cardA));
+  fire("pointermove", pointerEvent("pointermove", 160, 250, cardA));
+  if (!todoDrag.active) throw new Error("mouse drag did not lift the card");
+  // 仍在「待办」列内：A 应排到 B 之后、草稿卡片之前
+  pump();
+  if (cardIds(columns.todo.list).join() !== "2,1") {
+    throw new Error(`same-lane reorder failed: ${cardIds(columns.todo.list)}`);
+  }
+  // 指针进入「进行中」列且低于 C 的中点：A 应跨列排在 C 之后
+  fire("pointermove", pointerEvent("pointermove", 500, 200, cardA));
+  pump();
+  if (cardA.parentNode !== columns.doing.list) throw new Error("card did not cross into the doing lane");
+  if (cardIds(columns.doing.list).join() !== "3,1") {
+    throw new Error(`cross-lane order wrong: ${cardIds(columns.doing.list)}`);
+  }
+  fire("pointerup", pointerEvent("pointerup", 500, 200, cardA));
+  if (fetchCalls.length !== 1 || fetchCalls[0].path !== "/api/todos/reorder") {
+    throw new Error(`expected reorder POST, got ${JSON.stringify(fetchCalls)}`);
+  }
+  const lanes = JSON.parse(fetchCalls[0].options.body).lanes;
+  if (JSON.stringify(lanes) !== JSON.stringify({ todo: [2], doing: [3, 1], closed: [4] })) {
+    throw new Error(`unexpected lanes payload: ${JSON.stringify(lanes)}`);
+  }
+  if (JSON.stringify(state.todos.map((t) => t.id)) !== "[2,3,1,4]") {
+    throw new Error(`optimistic state wrong: ${JSON.stringify(state.todos.map((t) => t.id))}`);
+  }
+  if (todoDrag.active) throw new Error("drag state leaked after drop");
+
+  // 已关闭卡片：拖到「待办」列上方也不得离开「已关闭」列
+  fire("pointerdown", pointerEvent("pointerdown", 800, 100, cardD));
+  fire("pointermove", pointerEvent("pointermove", 800, 260, cardD));
+  if (!todoDrag.active) throw new Error("closed card drag did not lift");
+  fire("pointermove", pointerEvent("pointermove", 160, 250, cardD));
+  pump();
+  if (cardD.parentNode !== columns.closed.list) throw new Error("closed card left the closed lane");
+  fire("pointerup", pointerEvent("pointerup", 160, 250, cardD));
+  const closedLanes = JSON.parse(fetchCalls[1].options.body).lanes;
+  if (closedLanes.closed[0] !== 4 || closedLanes.todo.includes(4)) {
+    throw new Error(`closed lane payload wrong: ${JSON.stringify(closedLanes)}`);
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+        result = subprocess.run(
+            ["node"],
+            input=f"{harness}\n{source}\n{assertions}",
+            cwd=ROOT_DIR,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_todo_inline_editor_creates_and_updates_on_auto_save(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
