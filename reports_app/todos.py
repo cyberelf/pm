@@ -7,6 +7,16 @@ from .validation import ValidationError
 
 
 OPEN_STATUSES = {"todo", "doing"}
+TODO_LANES = ("todo", "doing", "closed")
+
+
+def _lane_top_position(conn, user_id, status):
+    """New arrivals sit at the top of their lane, matching the historical
+    newest-first order that updated_at DESC used to provide."""
+    return conn.execute(
+        "SELECT COALESCE(MIN(position), 0) - 1 FROM todos WHERE user_id = ? AND status = ?",
+        (user_id, status),
+    ).fetchone()[0]
 
 
 def todo_rows(conn, user_id):
@@ -18,7 +28,7 @@ def todo_rows(conn, user_id):
             LEFT JOIN projects ON projects.id = todos.project_id
             WHERE todos.user_id = ?
             ORDER BY CASE todos.status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END,
-                     todos.updated_at DESC, todos.id DESC
+                     todos.position ASC, todos.updated_at DESC, todos.id DESC
             """,
             (user_id,),
         ):
@@ -43,10 +53,11 @@ def create_todo(conn, payload, user_id):
     now = iso_now()
     cur = conn.execute(
         """
-        INSERT INTO todos (title, description, status, user_id, created_at, updated_at)
-        VALUES (?, ?, 'todo', ?, ?, ?)
+        INSERT INTO todos (title, description, status, user_id, created_at, updated_at, position)
+        VALUES (?, ?, 'todo', ?, ?, ?, (SELECT COALESCE(MIN(position), 0) - 1
+                                        FROM todos WHERE user_id = ? AND status = 'todo'))
         """,
-        (title, description, user_id, now, now),
+        (title, description, user_id, now, now, user_id),
     )
     return cur.lastrowid
 
@@ -67,9 +78,12 @@ def update_todo(conn, todo_id, payload, user_id):
     )
     if sync_material:
         _assert_material_unlocked(conn, row)
+    position = row["position"]
+    if status != row["status"]:
+        position = _lane_top_position(conn, user_id, status)
     conn.execute(
-        "UPDATE todos SET title = ?, description = ?, status = ?, updated_at = ? WHERE id = ?",
-        (title, description, status, iso_now(), todo_id),
+        "UPDATE todos SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?",
+        (title, description, status, position, iso_now(), todo_id),
     )
     if sync_material:
         content = _material_content({"title": title, "description": description}, row["close_reason"])
@@ -131,12 +145,51 @@ def close_todo(conn, todo_id, payload, user_id):
         """
         UPDATE todos
         SET status = 'closed', close_reason = ?, project_id = ?, material_id = ?,
-            closed_at = ?, updated_at = ?
+            closed_at = ?, updated_at = ?, position = ?
         WHERE id = ?
         """,
-        (reason, project_id, material_id, now, now, todo_id),
+        (reason, project_id, material_id, now, now, _lane_top_position(conn, user_id, "closed"), todo_id),
     )
     return material_id
+
+
+def reorder_todos(conn, payload, user_id):
+    """Persist a board drag result: {"lanes": {lane: [todo_id, ...]}}.
+    Cards reorder freely between 待办 and 进行中; 已关闭 only accepts
+    in-lane reordering, and closed cards can never leave it."""
+    lanes = payload.get("lanes")
+    if not isinstance(lanes, dict) or not lanes:
+        raise ValidationError("lanes mapping is required")
+    positions = {}
+    for lane, ids in lanes.items():
+        if lane not in TODO_LANES:
+            raise ValidationError("unknown TODO lane")
+        if not isinstance(ids, list):
+            raise ValidationError("lane order must be a list of todo ids")
+        for index, raw_id in enumerate(ids):
+            try:
+                todo_id = int(raw_id)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError("invalid todo id") from exc
+            if todo_id in positions:
+                raise ValidationError("todo listed in multiple positions")
+            positions[todo_id] = (lane, index)
+    rows = {todo_id: _todo(conn, todo_id, user_id) for todo_id in positions}
+    for todo_id, (lane, _index) in positions.items():
+        status = rows[todo_id]["status"]
+        if status == "closed" and lane != "closed":
+            raise ValidationError("closed TODO status cannot be changed")
+        if status != "closed" and lane == "closed":
+            raise ValidationError("close a TODO with a reason; drag only between todo and doing")
+    now = iso_now()
+    for todo_id, (lane, index) in positions.items():
+        row = rows[todo_id]
+        if row["status"] == lane and row["position"] == index:
+            continue
+        conn.execute(
+            "UPDATE todos SET status = ?, position = ?, updated_at = ? WHERE id = ?",
+            (lane, index, now, todo_id),
+        )
 
 
 def _assert_material_unlocked(conn, row):

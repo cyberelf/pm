@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS todos (
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'todo',
+    position INTEGER NOT NULL DEFAULT 0,
     close_reason TEXT NOT NULL DEFAULT '',
     project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
     material_id INTEGER REFERENCES materials(id) ON DELETE SET NULL,
@@ -314,6 +315,9 @@ def migrate_schema(conn):
     admin_id = admin["id"]
     for table in table_columns:
         conn.execute(f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL", (admin_id,))
+    if "position" not in table_columns["todos"]:
+        # 看板拖拽需要显式位次；存量数据全为 0，靠 updated_at 兜底保持原有顺序
+        conn.execute("ALTER TABLE todos ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         "UPDATE projects SET owner = ? WHERE owner = ?",
         (admin["username"], "local-user"),

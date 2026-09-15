@@ -67,7 +67,7 @@ from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 import time
-from reports_app.todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
+from reports_app.todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, update_todo
 from reports_app.voice_todos import (
     build_voice_todo_prompt,
     create_todos_from_voice,
@@ -185,6 +185,116 @@ class CoreTest(unittest.TestCase):
         self.assertNotIn("<script>", todo["description_html"])
         with self.assertRaises(ValidationError):
             update_todo(self.conn, todo_id, {"status": "closed"}, self.user_id)
+
+    def test_todo_reorder_sorts_within_and_across_lanes(self):
+        first = create_todo(self.conn, {"title": "First"}, self.user_id)
+        second = create_todo(self.conn, {"title": "Second"}, self.user_id)
+        third = create_todo(self.conn, {"title": "Third"}, self.user_id)
+        # 新建卡片置顶，保持历史的最新在前顺序
+        self.assertEqual([row["id"] for row in todo_rows(self.conn, self.user_id)], [third, second, first])
+        # 同列上下拖动
+        reorder_todos(self.conn, {"lanes": {"todo": [first, third, second], "doing": [], "closed": []}}, self.user_id)
+        self.assertEqual(
+            [row["id"] for row in todo_rows(self.conn, self.user_id) if row["status"] == "todo"],
+            [first, third, second],
+        )
+        # 跨列拖到「进行中」
+        reorder_todos(self.conn, {"lanes": {"todo": [first], "doing": [second, third], "closed": []}}, self.user_id)
+        rows = todo_rows(self.conn, self.user_id)
+        self.assertEqual([row["id"] for row in rows if row["status"] == "todo"], [first])
+        self.assertEqual([row["id"] for row in rows if row["status"] == "doing"], [second, third])
+        # 部分提交（只送一列）也可以
+        reorder_todos(self.conn, {"lanes": {"doing": [third, second]}}, self.user_id)
+        rows = todo_rows(self.conn, self.user_id)
+        self.assertEqual([row["id"] for row in rows if row["status"] == "doing"], [third, second])
+
+    def test_todo_reorder_guards_closed_lane_rules(self):
+        todo_id = create_todo(self.conn, {"title": "Open item"}, self.user_id)
+        other_id = create_todo(self.conn, {"title": "Other item"}, self.user_id)
+        close_todo(self.conn, other_id, {"reason": "done"}, self.user_id)
+        # 已关闭的卡片不能被拖出「已关闭」列
+        with self.assertRaises(ValidationError):
+            reorder_todos(self.conn, {"lanes": {"todo": [other_id], "doing": [], "closed": []}}, self.user_id)
+        # 未关闭的卡片不能被拖进「已关闭」列
+        with self.assertRaises(ValidationError):
+            reorder_todos(self.conn, {"lanes": {"todo": [], "doing": [], "closed": [todo_id]}}, self.user_id)
+        # 已关闭列内部可以重排
+        another_id = create_todo(self.conn, {"title": "Another"}, self.user_id)
+        close_todo(self.conn, another_id, {"reason": "also done"}, self.user_id)
+        reorder_todos(self.conn, {"lanes": {"closed": [other_id, another_id]}}, self.user_id)
+        self.assertEqual(
+            [row["id"] for row in todo_rows(self.conn, self.user_id) if row["status"] == "closed"],
+            [other_id, another_id],
+        )
+
+    def test_todo_reorder_rejects_bad_payload(self):
+        todo_id = create_todo(self.conn, {"title": "Solo"}, self.user_id)
+        for payload in (
+            {},
+            {"lanes": {}},
+            {"lanes": {"backlog": [todo_id]}},
+            {"lanes": {"todo": "solo"}},
+            {"lanes": {"todo": ["abc"]}},
+            {"lanes": {"todo": [todo_id, todo_id]}},
+        ):
+            with self.assertRaises(ValidationError):
+                reorder_todos(self.conn, payload, self.user_id)
+        with self.assertRaises(ValidationError):
+            reorder_todos(self.conn, {"lanes": {"todo": [99999]}}, self.user_id)
+
+    def test_todo_status_change_lands_on_top_of_target_lane(self):
+        first = create_todo(self.conn, {"title": "First"}, self.user_id)
+        second = create_todo(self.conn, {"title": "Second"}, self.user_id)
+        reorder_todos(self.conn, {"lanes": {"todo": [second, first], "doing": [], "closed": []}}, self.user_id)
+        # 按钮移动（非拖拽）也应落到目标列顶部
+        update_todo(self.conn, first, {"status": "doing"}, self.user_id)
+        self.assertEqual(
+            [row["id"] for row in todo_rows(self.conn, self.user_id) if row["status"] == "doing"],
+            [first],
+        )
+        reorder_todos(self.conn, {"lanes": {"todo": [second], "doing": [first], "closed": []}}, self.user_id)
+        close_todo(self.conn, second, {"reason": "done"}, self.user_id)
+        self.assertEqual(
+            [row["id"] for row in todo_rows(self.conn, self.user_id) if row["status"] == "closed"],
+            [second],
+        )
+
+    def test_todo_reorder_endpoint_persists_order(self):
+        first = create_todo(self.conn, {"title": "First"}, self.user_id)
+        second = create_todo(self.conn, {"title": "Second"}, self.user_id)
+        self.conn.commit()
+        server, thread = self._live_server()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            status, _ = self._raw_request(
+                client,
+                "POST",
+                "/api/todos/reorder",
+                body=json.dumps({"lanes": {"todo": [second], "doing": [], "closed": []}}),
+            )
+            self.assertEqual(status, 401)
+            status, payload = self._raw_request(
+                client,
+                "POST",
+                "/api/todos/reorder",
+                body=json.dumps({"lanes": {"todo": [second, first], "doing": [], "closed": []}}),
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual([row["id"] for row in payload["todos"]], [second, first])
+            status, payload = self._raw_request(
+                client,
+                "POST",
+                "/api/todos/reorder",
+                body=json.dumps({"lanes": {"backlog": [first]}}),
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 400)
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def _live_server(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

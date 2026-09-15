@@ -89,7 +89,7 @@ from .task_queue import (
 )
 from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
-from .todos import close_todo, create_todo, delete_todo, todo_rows, update_todo
+from .todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, update_todo
 from .asr import normalize_asr_endpoint
 from .voice_todos import (
     cancel_voice_job,
@@ -804,6 +804,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "DELETE":
                 delete_todo(conn, int(parts[2]), user_id)
+                conn.commit()
+                self.json({"todos": todo_rows(conn, user_id)})
+                return
+            if path == "/api/todos/reorder" and method == "POST":
+                reorder_todos(conn, self.body_json(), user_id)
                 conn.commit()
                 self.json({"todos": todo_rows(conn, user_id)})
                 return
