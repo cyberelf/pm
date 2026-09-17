@@ -259,6 +259,27 @@ class CoreTest(unittest.TestCase):
             [second],
         )
 
+    def test_todo_reorder_and_noop_updates_keep_timestamps(self):
+        first = create_todo(self.conn, {"title": "First"}, self.user_id)
+        second = create_todo(self.conn, {"title": "Second"}, self.user_id)
+
+        def updated_at(todo_id):
+            return self.conn.execute(
+                "SELECT updated_at FROM todos WHERE id = ?", (todo_id,)
+            ).fetchone()["updated_at"]
+
+        before = {todo_id: updated_at(todo_id) for todo_id in (first, second)}
+        # 同列拖动、跨列拖动都只调位次，不改动 updated_at
+        reorder_todos(self.conn, {"lanes": {"todo": [second, first], "doing": [], "closed": []}}, self.user_id)
+        reorder_todos(self.conn, {"lanes": {"todo": [second], "doing": [first], "closed": []}}, self.user_id)
+        self.assertEqual({todo_id: updated_at(todo_id) for todo_id in (first, second)}, before)
+        # 无改动的保存（如编辑卡片失焦自动保存）同样不更新时间戳
+        update_todo(self.conn, first, {"title": "First", "status": "doing"}, self.user_id)
+        self.assertEqual(updated_at(first), before[first])
+        # 只有内容真正变化才更新时间戳
+        update_todo(self.conn, first, {"description": "real change"}, self.user_id)
+        self.assertNotEqual(updated_at(first), before[first])
+
     def test_todo_reorder_endpoint_persists_order(self):
         first = create_todo(self.conn, {"title": "First"}, self.user_id)
         second = create_todo(self.conn, {"title": "Second"}, self.user_id)

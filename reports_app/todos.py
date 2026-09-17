@@ -71,6 +71,8 @@ def update_todo(conn, todo_id, payload, user_id):
         raise ValidationError("TODO status must be todo or doing; use close to finish it")
     title = _required_text(payload.get("title", row["title"]), "TODO title is required", 200)
     description = (payload.get("description", row["description"]) or "").strip()[:4000]
+    if title == row["title"] and description == (row["description"] or "") and status == row["status"]:
+        return  # no-op save (e.g. editor blur without edits): keep updated_at untouched
     sync_material = (
         row["status"] == "closed"
         and row["material_id"]
@@ -181,14 +183,14 @@ def reorder_todos(conn, payload, user_id):
             raise ValidationError("closed TODO status cannot be changed")
         if status != "closed" and lane == "closed":
             raise ValidationError("close a TODO with a reason; drag only between todo and doing")
-    now = iso_now()
     for todo_id, (lane, index) in positions.items():
         row = rows[todo_id]
         if row["status"] == lane and row["position"] == index:
             continue
+        # 拖拽只调位次，不算内容更新，不能改动 updated_at
         conn.execute(
-            "UPDATE todos SET status = ?, position = ?, updated_at = ? WHERE id = ?",
-            (lane, index, now, todo_id),
+            "UPDATE todos SET status = ?, position = ? WHERE id = ?",
+            (lane, index, todo_id),
         )
 
 
