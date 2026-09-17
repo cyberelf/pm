@@ -226,7 +226,7 @@ function toast(message) {
   setTimeout(() => el.classList.add("hidden"), 2800);
 }
 
-// —— 填写即自动保存：防抖落盘、失焦立即保存，状态提示取代保存按钮 ——
+// —— 失焦自动保存：输入过程不打扰，焦点离开字段后立即落盘，状态提示取代保存按钮 ——
 const autoSaveRegistry = new Map(); // key -> { run, schedule, timer }
 
 function serializeAutoSaveFields(root) {
@@ -248,7 +248,7 @@ function setAutoSaveStatus(root, stateName, message = "") {
     : message;
 }
 
-function setupAutoSave(key, root, save, { delay = 700 } = {}) {
+function setupAutoSave(key, root, save) {
   if (!root) return;
   const previous = autoSaveRegistry.get(key);
   if (previous?.timer) clearTimeout(previous.timer);
@@ -280,22 +280,22 @@ function setupAutoSave(key, root, save, { delay = 700 } = {}) {
       }
     }
   };
-  const schedule = (ms = delay) => {
+  const schedule = () => {
     clearTimeout(entry.timer);
-    entry.timer = setTimeout(run, ms);
+    entry.timer = setTimeout(run, 0);
   };
   entry.run = run;
   entry.schedule = schedule;
-  root.addEventListener("input", () => schedule());
-  root.addEventListener("change", () => schedule());
-  // 焦点离开或页面隐藏时立即落盘；快照守卫保证无改动时不发请求
+  // 文本输入的 change 在失焦时触发，勾选/下拉在选择完成时触发
+  root.addEventListener("change", schedule);
+  // 焦点离开整个表单或页面隐藏时兜底落盘；快照守卫保证无改动时不发请求
   root.addEventListener("focusout", () => setTimeout(() => {
-    if (!root.contains(document.activeElement)) schedule(0);
+    if (!root.contains(document.activeElement)) schedule();
   }, 0));
 }
 
 function touchAutoSave(key) {
-  autoSaveRegistry.get(key)?.schedule(0);
+  autoSaveRegistry.get(key)?.schedule();
 }
 
 // 程序化改写表单值后（如启动时渲染设置）重置快照，避免无编辑时的误保存
@@ -878,6 +878,12 @@ async function saveTodoEditor(rawId) {
   const path = rawId === "draft" ? "/api/todos" : `/api/todos/${Number(rawId)}`;
   const method = rawId === "draft" ? "POST" : "PUT";
   const todo = rawId === "draft" ? null : state.todos.find((item) => item.id === Number(rawId));
+  if (todo && todo.title === title && (todo.description || "") === description) {
+    // 无改动直接收起编辑卡片：不发请求，也不更新时间戳
+    state.todoEditorId = null;
+    renderTodoBoard();
+    return;
+  }
   const payload = { title, description };
   if (todo) payload.status = todo.status;
   const data = await api(path, { method, body: JSON.stringify(payload) });

@@ -800,9 +800,14 @@ globalThis.fetch = async (path, options) => {
     throw new Error(`untouched form should not save, got ${JSON.stringify(fetchCalls)}`);
   }
 
-  // 修改容量后防抖到点即保存（pump 即时间流逝）
+  // 输入过程（input）不落盘，失焦（change）才保存
   capacityField.value = "7";
   fire("input", {});
+  pump();
+  if (fetchCalls.length !== 0) {
+    throw new Error(`typing alone should not save, got ${JSON.stringify(fetchCalls)}`);
+  }
+  fire("change", {});
   pump();
   if (fetchCalls.length !== 1 || fetchCalls[0].path !== "/api/settings") {
     throw new Error(`expected one settings PUT, got ${JSON.stringify(fetchCalls)}`);
@@ -819,7 +824,7 @@ globalThis.fetch = async (path, options) => {
 
   // 非法输入报错且不发请求
   capacityField.value = "abc";
-  fire("input", {});
+  fire("change", {});
   pump();
   for (let i = 0; i < 10; i++) {
     await new Promise((resolve) => timers.push(resolve));
