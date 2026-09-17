@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.3.0"
 DATA_DIR = ROOT_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "reports.sqlite3"
