@@ -226,6 +226,99 @@ function toast(message) {
   setTimeout(() => el.classList.add("hidden"), 2800);
 }
 
+// —— 填写即自动保存：防抖落盘、失焦立即保存，状态提示取代保存按钮 ——
+const autoSaveRegistry = new Map(); // key -> { run, schedule, timer }
+
+function serializeAutoSaveFields(root) {
+  return Array.from(root.querySelectorAll("input, textarea, select"))
+    .map((el) => `${el.id || el.name}|${el.type === "checkbox" ? (el.checked ? "1" : "0") : el.value}`)
+    .join("\n");
+}
+
+function setAutoSaveStatus(root, stateName, message = "") {
+  const status = root.querySelector(".autosave-status");
+  if (!status) return;
+  status.classList.toggle("is-saving", stateName === "saving");
+  status.classList.toggle("is-saved", stateName === "saved");
+  status.classList.toggle("is-error", stateName === "error");
+  const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  status.textContent = stateName === "saving" ? "保存中…"
+    : stateName === "saved" ? `已自动保存 ${time}`
+    : stateName === "error" ? `保存失败：${message}`
+    : message;
+}
+
+function setupAutoSave(key, root, save, { delay = 700 } = {}) {
+  if (!root) return;
+  const previous = autoSaveRegistry.get(key);
+  if (previous?.timer) clearTimeout(previous.timer);
+  const entry = { run: null, schedule: null, timer: 0, root, state: null };
+  autoSaveRegistry.set(key, entry);
+  const state = { snapshot: serializeAutoSaveFields(root), running: false, rerun: false };
+  entry.state = state;
+  const run = async () => {
+    entry.timer = 0;
+    if (state.running) {
+      state.rerun = true;
+      return;
+    }
+    if (serializeAutoSaveFields(root) === state.snapshot) return;
+    state.running = true;
+    setAutoSaveStatus(root, "saving");
+    try {
+      await save();
+      state.snapshot = serializeAutoSaveFields(root);
+      setAutoSaveStatus(root, "saved");
+    } catch (error) {
+      setAutoSaveStatus(root, "error", error.message);
+      toast(error.message);
+    } finally {
+      state.running = false;
+      if (state.rerun) {
+        state.rerun = false;
+        run();
+      }
+    }
+  };
+  const schedule = (ms = delay) => {
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(run, ms);
+  };
+  entry.run = run;
+  entry.schedule = schedule;
+  root.addEventListener("input", () => schedule());
+  root.addEventListener("change", () => schedule());
+  // 焦点离开或页面隐藏时立即落盘；快照守卫保证无改动时不发请求
+  root.addEventListener("focusout", () => setTimeout(() => {
+    if (!root.contains(document.activeElement)) schedule(0);
+  }, 0));
+}
+
+function touchAutoSave(key) {
+  autoSaveRegistry.get(key)?.schedule(0);
+}
+
+// 程序化改写表单值后（如启动时渲染设置）重置快照，避免无编辑时的误保存
+function refreshAutoSaveSnapshot(key) {
+  const entry = autoSaveRegistry.get(key);
+  if (entry?.root) entry.state.snapshot = serializeAutoSaveFields(entry.root);
+}
+
+function flushAllAutoSaves() {
+  for (const entry of autoSaveRegistry.values()) {
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = 0;
+      entry.run();
+    }
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushAllAutoSaves();
+});
+window.addEventListener("pagehide", flushAllAutoSaves);
+
 async function loadState() {
   const data = await api("/api/state");
   state.projects = data.projects;
@@ -1220,6 +1313,7 @@ function renderVoiceSettings() {
   if (model) model.value = state.asrModel || "";
   const language = $("asr-language-select");
   if (language) language.value = ["zh", "en", "auto"].includes(state.asrLanguage) ? state.asrLanguage : "zh";
+  refreshAutoSaveSnapshot("voice-settings");
 }
 
 async function saveVoiceSettings() {
@@ -1234,7 +1328,6 @@ async function saveVoiceSettings() {
   state.asrEndpoint = data.asr_endpoint;
   state.asrModel = data.asr_model;
   state.asrLanguage = data.asr_language;
-  toast("语音设置已保存");
 }
 
 function renderLlmSettings() {
@@ -1250,6 +1343,7 @@ function renderLlmSettings() {
     key.value = "";
     key.placeholder = state.llmApiKeySet ? "已配置，留空保持不变" : "sk-...";
   }
+  refreshAutoSaveSnapshot("llm-settings");
 }
 
 async function saveLlmSettings() {
@@ -1267,8 +1361,10 @@ async function saveLlmSettings() {
   state.llmBaseUrl = data.llm_base_url;
   state.llmModel = data.llm_model;
   state.llmApiKeySet = !!data.llm_api_key_set;
-  renderLlmSettings();
-  toast("内部 Agent 设置已保存");
+  // 自动保存中不能整块重绘（会打断输入），只刷新 Key 占位提示
+  if (keyInput) {
+    keyInput.placeholder = state.llmApiKeySet ? "已配置，留空保持不变" : "sk-...";
+  }
 }
 
 function renderQueueSettings() {
@@ -1277,20 +1373,24 @@ function renderQueueSettings() {
   capacity.value = state.queueCapacity || 5;
   const parallel = $("queue-parallelism-input");
   if (parallel) parallel.value = state.queueParallelism || 2;
+  refreshAutoSaveSnapshot("queue-settings");
 }
 
 async function saveQueueSettings() {
+  const capacity = Number($("queue-capacity-input")?.value);
+  const parallelism = Number($("queue-parallelism-input")?.value);
+  if (!Number.isInteger(capacity) || capacity < 1 || !Number.isInteger(parallelism) || parallelism < 1) {
+    throw new Error("队列容量和并行执行数需为正整数");
+  }
   const data = await api("/api/settings", {
     method: "PUT",
     body: JSON.stringify({
-      queue_capacity: Number($("queue-capacity-input")?.value),
-      queue_parallelism: Number($("queue-parallelism-input")?.value),
+      queue_capacity: capacity,
+      queue_parallelism: parallelism,
     }),
   });
   state.queueCapacity = data.queue_capacity;
   state.queueParallelism = data.queue_parallelism;
-  renderQueueSettings();
-  toast("任务队列设置已保存");
 }
 
 const GITHUB_TOKEN_KIND_LABELS = { classic: "经典", "fine-grained": "细粒度" };
@@ -1325,6 +1425,7 @@ function addGithubTokenRow() {
   state.githubTokens = collectGithubTokenRows();
   state.githubTokens.push({ label: "", owner: "", hint: "" });
   renderGithubTokenList();
+  refreshAutoSaveSnapshot("git-settings");
   const rows = document.querySelectorAll("[data-github-token-row]");
   rows[rows.length - 1]?.querySelector("[data-github-token-label]")?.focus();
 }
@@ -1346,6 +1447,7 @@ function renderGitSettings() {
   if (githubEnabled) githubEnabled.checked = state.githubEnabled !== false;
   const gitlabEnabled = $("gitlab-enabled-input");
   if (gitlabEnabled) gitlabEnabled.checked = state.gitlabEnabled !== false;
+  refreshAutoSaveSnapshot("git-settings");
 }
 
 async function saveGitSettings() {
@@ -1368,8 +1470,13 @@ async function saveGitSettings() {
   state.gitlabTokenSet = !!data.gitlab_token_set;
   state.gitlabUrl = data.gitlab_url || "";
   state.gitlabSkipVerify = !!data.gitlab_skip_verify;
-  renderGitSettings();
-  toast("Git 集成设置已保存");
+  // 自动保存中不能重绘正在编辑的输入框，只刷新令牌占位提示
+  const list = $("github-token-list");
+  if (list && !list.contains(document.activeElement)) renderGithubTokenList();
+  const gitlabTokenInput = $("gitlab-token-input");
+  if (gitlabTokenInput) {
+    gitlabTokenInput.placeholder = state.gitlabTokenSet ? "已配置，留空保持不变" : "glpat-...";
+  }
 }
 
 async function loadUsers() {
@@ -1625,8 +1732,7 @@ function renderSettings(ws) {
     <section id="settings-sub-project" class="source-view" role="tabpanel">
       <form id="settings-form" class="panel form-grid">
         <div class="panel-head wide">
-          <div class="panel-title"><h2>项目设置</h2><span>项目与报告配置</span></div>
-          <div class="panel-actions"><button class="primary" type="submit">保存设置</button></div>
+          <div class="panel-title"><h2>项目设置</h2><span>项目与报告配置 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
         </div>
         ${input("name", "名称", p.name)}
         ${projectRunToggle(p)}
@@ -1640,7 +1746,6 @@ function renderSettings(ws) {
           <div id="schedule-list">${renderSchedules(ws.schedules, p.timezone)}</div>
           <button type="button" onclick="addSchedule()">+ 添加时间点</button>
         </div>
-        <div class="wide row settings-save-row"><button class="primary" type="submit">保存设置</button></div>
       </form>
     </section>
     <section id="settings-sub-git" class="source-view hidden" role="tabpanel">
@@ -1663,6 +1768,12 @@ function renderSettings(ws) {
     </section>
   `;
   $("settings-form").onsubmit = saveSettings;
+  setupAutoSave("project-settings", $("settings-form"), saveSettings);
+  // 仓库行的补充说明与分支勾选也是填写即保存（分支 change 事件会冒泡到行上）
+  document.querySelectorAll("textarea[id^='repo-notes-']").forEach((el) => {
+    const id = Number(el.id.replace("repo-notes-", ""));
+    setupAutoSave(`repo-notes-${id}`, el.closest("tr"), () => saveRepoNotes(id));
+  });
   onRepoModeChange();
   switchSettingsSubTab(state.settingsSubTab);
 }
@@ -1776,7 +1887,7 @@ function renderRepoRow(r) {
       <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
-      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="saveRepoNotes(${r.id})">保存</button><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
+      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
     </tr>
   `;
 }
@@ -1829,7 +1940,7 @@ function renderSchedules(schedules, timezone) {
       <label>星期 <input name="schedule_weekday" type="number" min="1" max="7" value="${s.weekday}"></label>
       <label>时间 <input name="schedule_time" value="${escapeHtml(s.local_time)}"></label>
       ${timezoneSelect("schedule_timezone", "时区", s.timezone)}
-      <button type="button" class="danger" onclick="this.closest('.schedule-row').remove()">移除</button>
+      <button type="button" class="danger" onclick="this.closest('.schedule-row').remove(); touchAutoSave('project-settings')">移除</button>
       <small class="schedule-last-fire">${s.last_checked_at ? `上次触发 ${escapeHtml(formatChinaTime(s.last_checked_at))}` : "尚未触发"}</small>
     </div>
   `;}).join("");
@@ -1837,11 +1948,14 @@ function renderSchedules(schedules, timezone) {
 
 function addSchedule() {
   $("schedule-list").insertAdjacentHTML("beforeend", renderSchedules([{ weekday: 5, local_time: "18:00", timezone: CHINA_TIMEZONE }], CHINA_TIMEZONE));
+  touchAutoSave("project-settings");
 }
 
 async function saveSettings(event) {
-  event.preventDefault();
-  const fd = new FormData(event.target);
+  event?.preventDefault();
+  const form = $("settings-form");
+  if (!form) return;
+  const fd = new FormData(form);
   const schedules = Array.from(document.querySelectorAll("#schedule-list .schedule-row"))
     .map(row => ({
       enabled: row.querySelector("input[data-schedule-enabled]").checked,
@@ -1854,8 +1968,23 @@ async function saveSettings(event) {
   payload.status = $("project-enabled-input")?.checked ? "active" : "paused";
   payload.schedules = schedules;
   await api(`/api/projects/${state.projectId}/settings`, { method: "PUT", body: JSON.stringify(payload) });
-  toast("设置已保存");
-  await loadWorkspace();
+  // 自动保存不整板刷新（会打断输入），只同步内存里的项目摘要并刷新侧栏
+  if (state.workspace?.project) {
+    Object.assign(state.workspace.project, {
+      name: payload.name,
+      description: payload.description,
+      start_date: payload.start_date,
+      end_date: payload.end_date,
+      timezone: payload.timezone,
+      report_template: payload.report_template,
+      status: payload.status,
+    });
+    state.workspace.schedules = schedules;
+  }
+  const name = payload.name || "";
+  $("project-title").textContent = name;
+  $("project-bar-name").textContent = name;
+  renderProjects();
 }
 
 function renderPlan(ws) {
@@ -1866,7 +1995,7 @@ function renderPlan(ws) {
     </div>
     <section id="plan-sub-plan" class="source-view" role="tabpanel">
       <form id="plan-form" class="panel">
-        <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物</span></div>
+        <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
         ${textarea("objectives", "目标", ws.plan.objectives)}
         <h3>里程碑</h3>
         <div id="milestones">${renderPlanItems(ws.plan.milestones)}</div>
@@ -1874,7 +2003,6 @@ function renderPlan(ws) {
         <h3>交付物</h3>
         <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
         <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
-        <div class="row"><button class="primary">保存计划</button></div>
       </form>
     </section>
     <section id="plan-sub-risk" class="source-view hidden" role="tabpanel">
@@ -1886,6 +2014,7 @@ function renderPlan(ws) {
     </section>
   `;
   $("plan-form").onsubmit = savePlan;
+  setupAutoSave("plan", $("plan-form"), savePlan);
   switchPlanSubTab(state.planSubTab);
 }
 
@@ -1910,7 +2039,7 @@ function renderPlanItems(items) {
       <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
       <input name="target_date" type="date" value="${escapeAttr(item.target_date || "")}">
       <select name="status">${statusOptions(item.status)}</select>
-      <button type="button" class="danger" onclick="this.closest('.plan-item').remove()">移除</button>
+      <button type="button" class="danger" onclick="this.closest('.plan-item').remove(); touchAutoSave('plan')">移除</button>
     </div>
   `).join("");
 }
@@ -1920,11 +2049,16 @@ function addPlanItem(id) {
 }
 
 async function savePlan(event) {
-  event.preventDefault();
+  event?.preventDefault();
+  const form = $("plan-form");
+  if (!form) return;
   const groups = (id) => Array.from($(id).querySelectorAll(".plan-item")).map(row => itemPayload(row)).filter(i => i.title);
-  await api(`/api/projects/${state.projectId}/plan`, { method: "PUT", body: JSON.stringify({ objectives: event.target.objectives.value, milestones: groups("milestones"), deliverables: groups("deliverables") }) });
-  toast("计划已保存");
-  await loadWorkspace();
+  await api(`/api/projects/${state.projectId}/plan`, { method: "PUT", body: JSON.stringify({ objectives: form.objectives.value, milestones: groups("milestones"), deliverables: groups("deliverables") }) });
+  if (state.workspace?.plan) {
+    state.workspace.plan.objectives = form.objectives.value;
+    state.workspace.plan.milestones = groups("milestones");
+    state.workspace.plan.deliverables = groups("deliverables");
+  }
 }
 
 const SUPPLEMENT_FIELDS = [
@@ -1946,13 +2080,12 @@ function renderUpdates(ws) {
   const u = ws.weekly_update || {};
   $("tab-updates").innerHTML = `
     <form id="update-form" class="panel form-grid">
-      <div class="panel-head wide"><h2>本周补充</h2><span>${escapeHtml(ws.week_key)}</span></div>
+      <div class="panel-head wide"><h2>本周补充</h2><span>${escapeHtml(ws.week_key)} · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
       ${textarea("completed", "已完成", u.completed || "", "wide")}
       ${textarea("in_progress", "进行中", u.in_progress || "", "wide")}
       ${textarea("blockers", "阻塞事项", u.blockers || "", "wide")}
       ${textarea("risks", "风险", u.risks || "", "wide")}
       ${textarea("next_steps", "下一步计划", u.next_steps || "", "wide")}
-      <div class="wide row"><button class="primary">保存本周补充</button></div>
     </form>
     <div id="supplement-history" class="panel">
       <div class="panel-head"><h2>补充历史</h2><span>生成周报时同步留档</span></div>
@@ -1964,12 +2097,17 @@ function renderUpdates(ws) {
       `).join("") || "<p>还没有历史补充。</p>"}
     </div>
   `;
-  $("update-form").onsubmit = async (event) => {
-    event.preventDefault();
-    await api(`/api/projects/${state.projectId}/weekly-update`, { method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(event.target).entries())) });
-    toast("本周补充已保存");
-    await loadWorkspace();
-  };
+  $("update-form").onsubmit = saveWeeklyUpdate;
+  setupAutoSave("weekly-update", $("update-form"), saveWeeklyUpdate);
+}
+
+async function saveWeeklyUpdate(event) {
+  event?.preventDefault();
+  const form = $("update-form");
+  if (!form) return;
+  const payload = Object.fromEntries(new FormData(form).entries());
+  await api(`/api/projects/${state.projectId}/weekly-update`, { method: "PUT", body: JSON.stringify(payload) });
+  if (state.workspace) state.workspace.weekly_update = payload;
 }
 
 function renderSources(ws) {
@@ -1995,11 +2133,11 @@ function renderSources(ws) {
     </section>
     <section id="source-manual" class="source-view hidden" role="tabpanel">
       <div class="panel source-panel">
-        <div class="panel-head"><h2>手工资料</h2><span>仅本周录入的资料可以修改</span></div>
-        <div class="manual-material-form">
+        <div class="panel-head"><h2>手工资料</h2><span>仅本周录入的资料可以修改 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
+        <div class="manual-material-form" id="manual-material-form">
           <input id="manual-material-title" placeholder="资料标题">
           <textarea id="manual-material-content" placeholder="输入本周新增的背景、决策、会议记录或补充资料"></textarea>
-          <button onclick="saveManualMaterial()">保存手工资料</button>
+          <span class="autosave-status" aria-live="polite"></span>
         </div>
         <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map(renderManualMaterialRow).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
       </div>
@@ -2007,6 +2145,17 @@ function renderSources(ws) {
   `;
   switchSourceTab(state.sourceTab);
   setupMaterialDropzone();
+  // 新建手工资料：首次落盘创建，之后继续编辑同一条；表格刷新交给下一次 loadWorkspace
+  manualDraftMaterialId = 0;
+  setupAutoSave("manual-material-draft", $("manual-material-form"), saveManualMaterial);
+  $("tab-sources").querySelectorAll("textarea[id^='material-summary-']").forEach((el) => {
+    const id = Number(el.id.replace("material-summary-", ""));
+    setupAutoSave(`material-summary-${id}`, el.closest("tr"), () => updateMaterialSummary(id));
+  });
+  $("tab-sources").querySelectorAll("input[id^='manual-title-']").forEach((el) => {
+    const id = Number(el.id.replace("manual-title-", ""));
+    setupAutoSave(`manual-material-${id}`, el.closest("tr"), () => updateManualMaterial(id));
+  });
 }
 
 function switchSourceTab(tab) {
@@ -2068,14 +2217,14 @@ function renderUploadedMaterialRow(m) {
     <td data-label="提取"><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
     <td data-label="摘要"><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
     <td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
-    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button onclick="updateMaterialSummary(${m.id})">保存摘要</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
+    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
   </tr>`;
 }
 
 function renderManualMaterialRow(m) {
   const content = escapeHtml(m.content || "");
   if (m.editable) {
-    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button onclick="updateManualMaterial(${m.id})">保存</button><button class="danger" onclick="deleteMaterial(${m.id})">删除</button></div></td></tr>`;
+    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button class="danger" onclick="deleteMaterial(${m.id})">删除</button></div></td></tr>`;
   }
   return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><span class="status">已锁定</span></div></td></tr>`;
 }
@@ -2150,21 +2299,25 @@ async function updateMaterialSummary(id) {
     method: "PUT",
     body: JSON.stringify({ summary: $(`material-summary-${id}`).value }),
   });
-  toast("资料摘要已更新");
-  await loadWorkspace();
 }
 
+let manualDraftMaterialId = 0;
+
 async function saveManualMaterial() {
-  await api(`/api/projects/${state.projectId}/materials`, {
-    method: "POST",
-    body: JSON.stringify({
-      source_type: "manual",
-      title: $("manual-material-title").value,
-      content: $("manual-material-content").value,
-    }),
-  });
-  toast("手工资料已保存");
-  await loadWorkspace();
+  const title = $("manual-material-title")?.value.trim() || "";
+  const content = $("manual-material-content")?.value || "";
+  if (!title) {
+    const root = $("manual-material-form");
+    if (root && content.trim()) setAutoSaveStatus(root, "idle", "填写标题后自动保存");
+    return;
+  }
+  const body = JSON.stringify({ source_type: "manual", title, content });
+  if (manualDraftMaterialId) {
+    await api(`/api/projects/${state.projectId}/materials/${manualDraftMaterialId}`, { method: "PUT", body });
+  } else {
+    const data = await api(`/api/projects/${state.projectId}/materials`, { method: "POST", body });
+    manualDraftMaterialId = data.id;
+  }
 }
 
 async function updateManualMaterial(id) {
@@ -2175,8 +2328,6 @@ async function updateManualMaterial(id) {
       content: $(`manual-content-${id}`).value,
     }),
   });
-  toast("手工资料已更新");
-  await loadWorkspace();
 }
 
 async function deleteMaterial(id) {
@@ -2195,12 +2346,11 @@ async function addRepo() {
 
 async function saveRepoNotes(id) {
   const branches = selectedRepoBranches(id);
-  if (!branches.length) return toast("请至少选择一个分支");
+  if (!branches.length) throw new Error("请至少选择一个跟踪分支");
   const repo = (state.workspace.repos || []).find((item) => item.id === id);
   const payload = { notes: $(`repo-notes-${id}`).value, branches, git_mode: repo && repo.git_mode === "gitlab" ? "gitlab" : "github" };
   await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
-  toast("仓库已保存");
-  await loadWorkspace();
+  if (repo) Object.assign(repo, payload);
 }
 
 async function refreshRepo(id) {
@@ -2806,10 +2956,10 @@ document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () =
   switchAppMode(target);
 });
 $("open-global-settings").onclick = () => toggleSettingsView(true);
-$("save-voice-settings").onclick = () => saveVoiceSettings().catch((error) => toast(error.message));
-$("save-llm-settings").onclick = () => saveLlmSettings().catch((error) => toast(error.message));
-$("save-queue-settings").onclick = () => saveQueueSettings().catch((error) => toast(error.message));
-$("save-git-settings").onclick = () => saveGitSettings().catch((error) => toast(error.message));
+setupAutoSave("voice-settings", $("voice-settings-panel"), saveVoiceSettings);
+setupAutoSave("llm-settings", $("llm-settings-panel"), saveLlmSettings);
+setupAutoSave("queue-settings", $("queue-settings-panel"), saveQueueSettings);
+setupAutoSave("git-settings", $("git-settings-panel"), saveGitSettings);
 $("save-password").onclick = () => changeOwnPassword().catch((error) => toast(error.message));
 $("login-form").onsubmit = login;
 $("logout-button").onclick = logout;

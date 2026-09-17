@@ -133,8 +133,8 @@
               </div>
               <div id="appearance-swatches" class="theme-swatches"></div>
             </div>
-            <div class="panel">
-              <div class="panel-head"><h2>Git 集成</h2><span>配置你自己的 GitHub / GitLab 访问令牌</span></div>
+            <div class="panel" id="git-settings-panel">
+              <div class="panel-head"><h2>Git 集成</h2><span>配置你自己的 GitHub / GitLab 访问令牌 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div id="git-integration-admin" class="git-integration-admin hidden">
                 <label class="switch-row"><span class="switch"><input id="github-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitHub 集成（全局，仅管理员可改）</span></label>
                 <label class="switch-row"><span class="switch"><input id="gitlab-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitLab 集成（全局，仅管理员可改）</span></label>
@@ -157,12 +157,11 @@
                 <small class="git-provider-hint">最小范围 read_api（个人访问令牌，只读 API）；访问私有项目需要 Reporter 及以上角色。自建实例使用自签名证书时，连接会报 certificate verify failed（含 EE certificate key too weak），勾选跳过校验即可。</small>
               </div>
               <div class="voice-settings">
-                <button id="save-git-settings" class="primary" type="button">保存</button>
                 <small>令牌与服务器地址保存在你的账号下，接口不会回传令牌；令牌留空表示保持已保存的值。仓库状态读取和 commits 抓取通过 GitHub / GitLab REST API 使用你的配置；所有 GitLab 仓库统一使用这里的 GitLab 服务器地址；GitHub 未配置令牌时只能访问公开仓库。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden">
-              <div class="panel-head"><h2>内部 Agent LLM</h2><span>周报生成与语音 TODO 整理都通过内部 Agent 调用</span></div>
+            <div class="panel admin-only hidden" id="llm-settings-panel">
+              <div class="panel-head"><h2>内部 Agent LLM</h2><span>周报生成与语音 TODO 整理都通过内部 Agent 调用 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label>LLM Provider
                   <select id="llm-provider-select">
@@ -179,12 +178,11 @@
                 <label>API Key
                   <input id="llm-api-key-input" type="password" autocomplete="off" placeholder="sk-...">
                 </label>
-                <button id="save-llm-settings" class="primary" type="button">保存</button>
                 <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden">
-              <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO</span></div>
+            <div class="panel admin-only hidden" id="voice-settings-panel">
+              <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label>识别服务地址
                   <input id="asr-endpoint-input" placeholder="http://127.0.0.1:8766/inference">
@@ -199,12 +197,11 @@
                     <option value="auto">自动检测</option>
                   </select>
                 </label>
-                <button id="save-voice-settings" class="primary" type="button">保存</button>
                 <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本由内部 Agent 整理成 TODO 项，整理失败时按原始转写创建。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden">
-              <div class="panel-head"><h2>任务队列</h2><span>周报生成与语音 TODO 共用的后台队列</span></div>
+            <div class="panel admin-only hidden" id="queue-settings-panel">
+              <div class="panel-head"><h2>任务队列</h2><span>周报生成与语音 TODO 共用的后台队列 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label>队列容量
                   <input id="queue-capacity-input" type="number" min="1" max="20" placeholder="5">
@@ -212,7 +209,6 @@
                 <label>并行执行数
                   <input id="queue-parallelism-input" type="number" min="1" max="4" placeholder="2">
                 </label>
-                <button id="save-queue-settings" class="primary" type="button">保存</button>
                 <small>提交超过容量时新任务会被拒绝；并行执行数决定同时运行的任务数，其余在队列中按提交顺序等待。修改立即生效，无需重启服务。</small>
               </div>
             </div>

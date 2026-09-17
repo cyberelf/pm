@@ -74,13 +74,16 @@ class FrontendTest(unittest.TestCase):
         self.assertNotIn('${input("status", "状态", p.status)}', source)
         self.assertIn("function syncProjectToggleState(input)", source)
         self.assertIn("已停用 · 不再自动生成周报", source)
-        self.assertIn('panel-actions"><button class="primary" type="submit">保存设置</button>', source)
-        self.assertIn('class="wide row settings-save-row"', source)
+        self.assertNotIn('type="submit">保存设置</button>', source)
+        self.assertNotIn('settings-save-row', source)
+        self.assertIn('setupAutoSave("project-settings", $("settings-form"), saveSettings);', source)
+        self.assertIn('修改后自动保存', source)
         self.assertIn(".project-row.paused .project-item strong {", styles)
         self.assertIn(".project-item-flag {", styles)
         self.assertIn(".project-toggle-row {", styles)
         self.assertIn(".project-toggle-state {", styles)
-        self.assertIn(".settings-save-row button { width: 100%; }", styles)
+        self.assertIn(".autosave-status {", styles)
+        self.assertIn(".autosave-status.is-error {", styles)
 
     def test_voice_todo_fab_and_global_agent_setting(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
@@ -95,7 +98,9 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('<option value="zh">中文</option>', html)
         self.assertIn('<option value="en">English</option>', html)
         self.assertIn('<option value="auto">自动检测</option>', html)
-        self.assertIn('id="save-voice-settings"', html)
+        self.assertNotIn('id="save-voice-settings"', html)
+        self.assertIn('id="voice-settings-panel"', html)
+        self.assertIn('setupAutoSave("voice-settings", $("voice-settings-panel"), saveVoiceSettings);', source)
         self.assertIn("按住说话，创建语音 TODO", html)
         self.assertIn("setupVoiceTodoFab();", source)
         self.assertIn('fab.addEventListener("pointerdown", startVoiceHold)', source)
@@ -134,7 +139,9 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('id="llm-base-url-input"', html)
         self.assertIn('id="llm-model-input"', html)
         self.assertIn('id="llm-api-key-input"', html)
-        self.assertIn('id="save-llm-settings"', html)
+        self.assertNotIn('id="save-llm-settings"', html)
+        self.assertIn('id="llm-settings-panel"', html)
+        self.assertIn('setupAutoSave("llm-settings", $("llm-settings-panel"), saveLlmSettings);', source)
         self.assertIn("function renderLlmSettings()", source)
         self.assertIn("async function saveLlmSettings()", source)
         self.assertIn('state.llmApiKeySet = !!data.llm_api_key_set;', source)
@@ -238,9 +245,11 @@ globalThis.document = {
     return selector.includes("report_template") ? templateFieldEl : null;
   },
   querySelectorAll() { return []; },
+  addEventListener() {},
+  removeEventListener() {},
 };
 globalThis.setTimeout = () => 0;
-globalThis.window = {};
+globalThis.window = { addEventListener() {}, removeEventListener() {} };
 const responses = [];
 const fetchCalls = [];
 globalThis.fetch = async (path, options) => {
@@ -343,7 +352,7 @@ globalThis.fetch = async (path, options) => {
         self.assertNotIn(">Save Settings<", source)
         self.assertNotIn(">Save Manual Material<", source)
         self.assertNotIn(">Remove</button>", source)
-        self.assertIn('<button type="button" class="danger" onclick="this.closest(\'.plan-item\').remove()">移除</button>', source)
+        self.assertIn('<button type="button" class="danger" onclick="this.closest(\'.plan-item\').remove(); touchAutoSave(\'plan\')">移除</button>', source)
         self.assertGreaterEqual(source.count('onclick="deleteMaterial(${m.id})"'), 2)
         self.assertIn('method: "DELETE"', source)
         self.assertIn('window.confirm("确定删除这条资料？删除后无法恢复。")', source)
@@ -720,6 +729,120 @@ const fire = (type, event) => {
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_settings_autosave_skips_untouched_forms_and_saves_edits(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+function makeClassList() {
+  const set = new Set();
+  return {
+    add: (...names) => names.forEach((name) => set.add(name)),
+    remove: (...names) => names.forEach((name) => set.delete(name)),
+    toggle: (name, force) => {
+      const target = force === undefined ? !set.has(name) : force;
+      if (target) set.add(name); else set.delete(name);
+    },
+    contains: (name) => set.has(name),
+  };
+}
+const capacityField = { id: "queue-capacity-input", value: "5" };
+const parallelField = { id: "queue-parallelism-input", value: "2" };
+const statusEl = { textContent: "", classList: makeClassList() };
+const panel = {
+  _handlers: {},
+  addEventListener(type, handler) { (this._handlers[type] = this._handlers[type] || []).push(handler); },
+  querySelector(selector) { return selector === ".autosave-status" ? statusEl : null; },
+  querySelectorAll(selector) {
+    if (selector === "input, textarea, select") return [capacityField, parallelField];
+    return [];
+  },
+  contains: () => false,
+};
+const elements = new Map([
+  ["queue-settings-panel", panel],
+  ["queue-capacity-input", capacityField],
+  ["queue-parallelism-input", parallelField],
+]);
+globalThis.document = {
+  getElementById: (id) => elements.get(id) || null,
+  querySelectorAll: () => [],
+  querySelector: () => null,
+  addEventListener() {},
+  removeEventListener() {},
+};
+globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+globalThis.window = { addEventListener() {}, removeEventListener() {} };
+const timers = [];
+globalThis.setTimeout = (callback) => { timers.push(callback); return timers.length; };
+globalThis.clearTimeout = () => {};
+const pump = () => timers.splice(0).forEach((callback) => callback());
+const fire = (type, event) => { for (const handler of panel._handlers[type] || []) handler(event); };
+const fetchCalls = [];
+globalThis.fetch = async (path, options) => {
+  fetchCalls.push({ path, options });
+  return {
+    ok: true,
+    text: async () => JSON.stringify({ queue_capacity: JSON.parse(options.body).queue_capacity, queue_parallelism: 2 }),
+    json: async () => ({ queue_capacity: JSON.parse(options.body).queue_capacity, queue_parallelism: 2 }),
+  };
+};
+"""
+        assertions = r"""
+(async () => {
+  toast = () => {};
+  setupAutoSave("queue-settings", panel, saveQueueSettings);
+
+  // 没有任何编辑时失焦不产生请求
+  fire("focusout", {});
+  pump();
+  pump();
+  if (fetchCalls.length !== 0) {
+    throw new Error(`untouched form should not save, got ${JSON.stringify(fetchCalls)}`);
+  }
+
+  // 修改容量后防抖到点即保存（pump 即时间流逝）
+  capacityField.value = "7";
+  fire("input", {});
+  pump();
+  if (fetchCalls.length !== 1 || fetchCalls[0].path !== "/api/settings") {
+    throw new Error(`expected one settings PUT, got ${JSON.stringify(fetchCalls)}`);
+  }
+  if (JSON.parse(fetchCalls[0].options.body).queue_capacity !== 7) {
+    throw new Error(`unexpected payload: ${fetchCalls[0].options.body}`);
+  }
+
+  // 保存后再次失焦：快照一致，不重复保存
+  fire("focusout", {});
+  pump();
+  pump();
+  if (fetchCalls.length !== 1) throw new Error("clean form re-saved on blur");
+
+  // 非法输入报错且不发请求
+  capacityField.value = "abc";
+  fire("input", {});
+  pump();
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => timers.push(resolve));
+    pump();
+    await Promise.resolve();
+  }
+  if (fetchCalls.length !== 1) throw new Error("invalid number should not PUT");
+  if (!statusEl.classList.contains("is-error")) throw new Error("invalid input did not surface an error status");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+        result = subprocess.run(
+            ["node"],
+            input=f"{harness}\n{source}\n{assertions}",
+            cwd=ROOT_DIR,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_todo_inline_editor_creates_and_updates_on_auto_save(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
@@ -745,7 +868,10 @@ globalThis.document = {
     return testElements.get(id);
   },
   querySelectorAll() { return []; },
+  addEventListener() {},
+  removeEventListener() {},
 };
+globalThis.window = { addEventListener() {}, removeEventListener() {} };
 globalThis.setTimeout = (callback) => { callback(); return 0; };
 globalThis.requestAnimationFrame = (callback) => callback();
 const fetchCalls = [];
@@ -822,11 +948,13 @@ globalThis.document = {
     return testElements.get(id);
   },
   querySelectorAll() { return []; },
+  addEventListener() {},
+  removeEventListener() {},
 };
 globalThis.setTimeout = () => 0;
 globalThis.setInterval = () => 7;
 globalThis.clearInterval = () => {};
-globalThis.window = { confirm() { return false; } };
+globalThis.window = { confirm() { return false; }, addEventListener() {}, removeEventListener() {} };
 const responses = [];
 const fetchCalls = [];
 globalThis.fetch = async (path, options) => {
@@ -940,18 +1068,19 @@ globalThis.fetch = async (path, options) => {
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('id="queue-capacity-input"', html)
         self.assertIn('id="queue-parallelism-input"', html)
-        self.assertIn('id="save-queue-settings"', html)
+        self.assertNotIn('id="save-queue-settings"', html)
+        self.assertIn('id="queue-settings-panel"', html)
         self.assertIn('id="task-queue-progress"', html)
         self.assertIn("function renderQueueSettings()", source)
         self.assertIn("async function saveQueueSettings()", source)
-        self.assertIn('queue_capacity: Number($("queue-capacity-input")?.value)', source)
-        self.assertIn('queue_parallelism: Number($("queue-parallelism-input")?.value)', source)
+        self.assertIn("queue_capacity: capacity,", source)
+        self.assertIn("queue_parallelism: parallelism,", source)
+        self.assertIn('setupAutoSave("queue-settings", $("queue-settings-panel"), saveQueueSettings);', source)
         self.assertIn("state.queueCapacity = data.queue_capacity;", source)
         self.assertIn("state.queueParallelism = data.queue_parallelism;", source)
         self.assertIn("state.queueCapacity = data.queue_capacity || 5;", source)
         self.assertIn("state.queueParallelism = data.queue_parallelism || 2;", source)
         self.assertIn("renderQueueSettings();", source)
-        self.assertIn('$("save-queue-settings").onclick', source)
         self.assertIn("function renderQueueProgress(data)", source)
         self.assertIn("排队等待中…", source)
         self.assertIn("task queue is full", source)
