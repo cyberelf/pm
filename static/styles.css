@@ -801,6 +801,7 @@ body.todo-drag-in-progress { cursor: grabbing; user-select: none; -webkit-user-s
 .branch-option span { overflow-wrap: anywhere; }
 
 .manual-material-form { min-width: 0; display: grid; gap: 10px; }
+.manual-material-actions { display: flex; justify-content: flex-end; }
 .autosave-status { min-height: 18px; color: var(--muted); font-size: 12px; font-style: normal; text-align: left; white-space: nowrap; }
 span.autosave-status { text-align: left; }
 .autosave-status.is-saving { color: var(--accent); }
@@ -1181,6 +1182,7 @@ dialog::backdrop { background: rgba(17, 17, 17, 0.52); }
   .panel-actions button { flex: 1 1 130px; }
   .upload-dropzone { min-height: 190px; padding: 32px 18px; }
   .upload-actions button { width: 100%; }
+  .manual-material-actions button { width: 100%; }
   .summary-editor, .material-editor { min-width: 180px; }
   .history-report summary button { width: 100%; margin-left: 0; }
   .preview-head { padding: 16px; }

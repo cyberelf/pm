@@ -174,6 +174,10 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('Array.from($("material-file").files || [])', source)
         self.assertIn('JSON.stringify({ files: payloads })', source)
         self.assertIn("updateMaterialSummary", source)
+        # 新增手工资料走显式「添加资料」按钮，不走自动保存
+        self.assertIn('onclick="addManualMaterial()"', source)
+        self.assertIn("async function addManualMaterial()", source)
+        self.assertNotIn("manual-material-draft", source)
 
     def test_uploaded_and_manual_materials_open_shared_preview_dialog(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

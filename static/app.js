@@ -2141,9 +2141,9 @@ function renderSources(ws) {
       <div class="panel source-panel">
         <div class="panel-head"><h2>手工资料</h2><span>仅本周录入的资料可以修改 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
         <div class="manual-material-form" id="manual-material-form">
-          <input id="manual-material-title" placeholder="资料标题">
+          <input id="manual-material-title" placeholder="资料标题" onkeydown="if (event.key === 'Enter') addManualMaterial()">
           <textarea id="manual-material-content" placeholder="输入本周新增的背景、决策、会议记录或补充资料"></textarea>
-          <span class="autosave-status" aria-live="polite"></span>
+          <div class="manual-material-actions"><button class="primary" type="button" onclick="addManualMaterial()">添加资料</button></div>
         </div>
         <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map(renderManualMaterialRow).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
       </div>
@@ -2151,9 +2151,6 @@ function renderSources(ws) {
   `;
   switchSourceTab(state.sourceTab);
   setupMaterialDropzone();
-  // 新建手工资料：首次落盘创建，之后继续编辑同一条；表格刷新交给下一次 loadWorkspace
-  manualDraftMaterialId = 0;
-  setupAutoSave("manual-material-draft", $("manual-material-form"), saveManualMaterial);
   $("tab-sources").querySelectorAll("textarea[id^='material-summary-']").forEach((el) => {
     const id = Number(el.id.replace("material-summary-", ""));
     setupAutoSave(`material-summary-${id}`, el.closest("tr"), () => updateMaterialSummary(id));
@@ -2307,23 +2304,22 @@ async function updateMaterialSummary(id) {
   });
 }
 
-let manualDraftMaterialId = 0;
-
-async function saveManualMaterial() {
+async function addManualMaterial() {
   const title = $("manual-material-title")?.value.trim() || "";
   const content = $("manual-material-content")?.value || "";
   if (!title) {
-    const root = $("manual-material-form");
-    if (root && content.trim()) setAutoSaveStatus(root, "idle", "填写标题后自动保存");
+    toast("请填写资料标题");
+    $("manual-material-title")?.focus();
     return;
   }
-  const body = JSON.stringify({ source_type: "manual", title, content });
-  if (manualDraftMaterialId) {
-    await api(`/api/projects/${state.projectId}/materials/${manualDraftMaterialId}`, { method: "PUT", body });
-  } else {
-    const data = await api(`/api/projects/${state.projectId}/materials`, { method: "POST", body });
-    manualDraftMaterialId = data.id;
-  }
+  await api(`/api/projects/${state.projectId}/materials`, {
+    method: "POST",
+    body: JSON.stringify({ source_type: "manual", title, content }),
+  });
+  $("manual-material-title").value = "";
+  $("manual-material-content").value = "";
+  toast("资料已添加");
+  await loadWorkspace();
 }
 
 async function updateManualMaterial(id) {
