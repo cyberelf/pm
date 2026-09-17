@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+# 平台（服务端 + UI）版本号，独立于 PyPI 的 CLI 版本（zreport.__version__）
 APP_VERSION = "1.3.0"
 DATA_DIR = ROOT_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"

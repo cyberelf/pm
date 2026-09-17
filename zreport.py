@@ -37,6 +37,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DEFAULT_SERVER = "http://127.0.0.1:8765"
+# CLI 版本号：仅 CLI（本文件）有实际变化时递增并发 PyPI，勿随平台版本联动
 __version__ = "1.3.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
 MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".html": "text/html", ".htm": "text/html", ".pdf": "application/pdf"}
