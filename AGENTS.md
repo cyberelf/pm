@@ -27,6 +27,12 @@ This repository implements zreport (Zero Report), a local weekly project reporti
 - The internal agent receives bounded evidence inline (`build_internal_evidence_prompt`); it never reads SQLite, uploaded files, or app files directly, and git activity comes from the assembled context.
 - Generated risk forecasts stay in Markdown report content. System risk warnings must come from deterministic rules.
 
+## Versioning & Release
+
+- Two independent version tracks: the CLI/PyPI version `__version__` in `zreport.py`, and the platform version `APP_VERSION` in `reports_app/config.py` (server + UI; shown on the login page and sidebar). Never bump them together by default.
+- Release to PyPI only when the CLI actually changed (the bundled `zreport` command, its skill, or CLI docs): bump `__version__`, commit, `git tag vX.Y.Z`, push the tag — this triggers the GitHub Actions Trusted Publishing workflow, and PyPI versions can never be re-uploaded.
+- Platform-only changes (server or static UI) bump `APP_VERSION` alone and must not create a release tag or PyPI release. (v1.3.0 on PyPI is such an accidental no-op release — its CLI content is identical to 1.2.0; the next CLI change ships as 1.4.0.)
+
 ## Verification
 
 Run before handing off changes:
