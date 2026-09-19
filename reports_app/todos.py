@@ -28,7 +28,7 @@ def todo_rows(conn, user_id):
             LEFT JOIN projects ON projects.id = todos.project_id
             WHERE todos.user_id = ?
             ORDER BY CASE todos.status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END,
-                     todos.position ASC, todos.updated_at DESC, todos.id DESC
+                     todos.starred DESC, todos.position ASC, todos.updated_at DESC, todos.id DESC
             """,
             (user_id,),
         ):
@@ -105,6 +105,16 @@ def update_todo(conn, todo_id, payload, user_id):
                 row["material_id"],
             ),
         )
+
+
+def toggle_todo_star(conn, todo_id, user_id):
+    """Flip the star flag and return the new state. Starring only changes the
+    pinning sort (starred cards rise to the top of their lane), not the card's
+    position, and — like drag reorder — does not count as a content update."""
+    row = _todo(conn, todo_id, user_id)
+    starred = 0 if row["starred"] else 1
+    conn.execute("UPDATE todos SET starred = ? WHERE id = ?", (starred, todo_id))
+    return bool(starred)
 
 
 def delete_todo(conn, todo_id, user_id):

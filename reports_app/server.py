@@ -89,7 +89,7 @@ from .task_queue import (
 )
 from .timeutil import current_week_key, iso_now
 from .timeutil import get_zone, parse_iso
-from .todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, update_todo
+from .todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
 from .asr import normalize_asr_endpoint
 from .voice_todos import (
     cancel_voice_job,
@@ -801,6 +801,11 @@ class Handler(BaseHTTPRequestHandler):
                 material_id = close_todo(conn, int(parts[2]), self.body_json(), user_id)
                 conn.commit()
                 self.json({"material_id": material_id, "todos": todo_rows(conn, user_id)})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "todos"] and parts[3] == "star" and method == "POST":
+                starred = toggle_todo_star(conn, int(parts[2]), user_id)
+                conn.commit()
+                self.json({"starred": starred, "todos": todo_rows(conn, user_id)})
                 return
             if len(parts) == 3 and parts[:2] == ["api", "todos"] and method == "DELETE":
                 delete_todo(conn, int(parts[2]), user_id)

@@ -67,7 +67,7 @@ from reports_app.risks import evaluate_risks, progress_status
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 import time
-from reports_app.todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, update_todo
+from reports_app.todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
 from reports_app.voice_todos import (
     build_voice_todo_prompt,
     create_todos_from_voice,
@@ -279,6 +279,62 @@ class CoreTest(unittest.TestCase):
         # 只有内容真正变化才更新时间戳
         update_todo(self.conn, first, {"description": "real change"}, self.user_id)
         self.assertNotEqual(updated_at(first), before[first])
+
+    def test_todo_star_pins_card_to_lane_top(self):
+        first = create_todo(self.conn, {"title": "First"}, self.user_id)
+        second = create_todo(self.conn, {"title": "Second"}, self.user_id)
+        third = create_todo(self.conn, {"title": "Third"}, self.user_id)
+        self.assertEqual([row["id"] for row in todo_rows(self.conn, self.user_id)], [third, second, first])
+        # 星标卡片自动浮到所在列最上面
+        self.assertTrue(toggle_todo_star(self.conn, first, self.user_id))
+        rows = todo_rows(self.conn, self.user_id)
+        self.assertEqual([row["id"] for row in rows], [first, third, second])
+        self.assertTrue(rows[0]["starred"])
+        # 再点一次取消星标，恢复位次顺序
+        self.assertFalse(toggle_todo_star(self.conn, first, self.user_id))
+        self.assertEqual([row["id"] for row in todo_rows(self.conn, self.user_id)], [third, second, first])
+        # 星标只调排序，不算内容更新，不改动 updated_at（与拖拽同规则）
+        before = self.conn.execute("SELECT updated_at FROM todos WHERE id = ?", (first,)).fetchone()["updated_at"]
+        toggle_todo_star(self.conn, first, self.user_id)
+        after = self.conn.execute("SELECT updated_at FROM todos WHERE id = ?", (first,)).fetchone()["updated_at"]
+        self.assertEqual(before, after)
+        # 位次更靠前的未星标卡片也压不过星标：星标在所在列内始终置顶
+        update_todo(self.conn, first, {"status": "doing"}, self.user_id)
+        doing_id = create_todo(self.conn, {"title": "Doing item"}, self.user_id)
+        update_todo(self.conn, doing_id, {"status": "doing"}, self.user_id)
+        rows = todo_rows(self.conn, self.user_id)
+        self.assertEqual([row["id"] for row in rows if row["status"] == "doing"], [first, doing_id])
+
+    def test_todo_star_endpoint_toggles_flag(self):
+        todo_id = create_todo(self.conn, {"title": "First"}, self.user_id)
+        self.conn.commit()
+        server, thread = self._live_server()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            status, _ = self._raw_request(client, "POST", f"/api/todos/{todo_id}/star")
+            self.assertEqual(status, 401)
+            status, payload = self._raw_request(
+                client,
+                "POST",
+                f"/api/todos/{todo_id}/star",
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["starred"])
+            self.assertTrue(next(row for row in payload["todos"] if row["id"] == todo_id)["starred"])
+            status, payload = self._raw_request(
+                client,
+                "POST",
+                f"/api/todos/{todo_id}/star",
+                headers={"Cookie": f"reports_session={self.session_token()}"},
+            )
+            self.assertEqual(status, 200)
+            self.assertFalse(payload["starred"])
+            client.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_todo_reorder_endpoint_persists_order(self):
         first = create_todo(self.conn, {"title": "First"}, self.user_id)
