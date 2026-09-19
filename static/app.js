@@ -14,6 +14,14 @@ const FA_ICONS = {
     viewBox: "0 0 576 512",
     path: "M234.7 42.7L197 56.8c-3 1.1-5 4-5 7.2s2 6.1 5 7.2l37.7 14.1L248.8 123c1.1 3 4 5 7.2 5s6.1-2 7.2-5l14.1-37.7L315 71.2c3-1.1 5-4 5-7.2s-2-6.1-5-7.2L277.3 42.7 263.2 5c-1.1-3-4-5-7.2-5s-6.1 2-7.2 5L234.7 42.7zM46.1 395.4c-18.7 18.7-18.7 49.1 0 67.9l34.6 34.6c18.7 18.7 49.1 18.7 67.9 0L529.9 116.5c18.7-18.7 18.7-49.1 0-67.9L495.3 14.1c-18.7-18.7-49.1-18.7-67.9 0L46.1 395.4zM484.6 82.6l-105 105-23.3-23.3 105-105 23.3 23.3zM7.5 117.2C3 118.9 0 123.2 0 128s3 9.1 7.5 10.8L64 160l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L128 160l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L128 96 106.8 39.5C105.1 35 100.8 32 96 32s-9.1 3-10.8 7.5L64 96 7.5 117.2zm352 256c-4.5 1.7-7.5 6-7.5 10.8s3 9.1 7.5 10.8L416 416l21.2 56.5c1.7 4.5 6 7.5 10.8 7.5s9.1-3 10.8-7.5L480 416l56.5-21.2c4.5-1.7 7.5-6 7.5-10.8s-3-9.1-7.5-10.8L480 352l-21.2-56.5c-1.7-4.5-6-7.5-10.8-7.5s-9.1 3-10.8 7.5L416 352l-56.5 21.2z",
   },
+  star: {
+    viewBox: "0 0 576 512",
+    path: "M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.8 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 329 113.2 474.7c-2 12 3 24.2 12.9 31.3s23 8 33.8 2.3l128.3-68.5 128.3 68.5c10.8 5.7 23.9 4.9 33.8-2.3s14.9-19.3 12.9-31.3L438.5 329 542.7 225.9c8.6-8.5 11.7-21.2 7.9-32.7s-13.7-19.9-25.7-21.7L381.2 150.3 316.9 18z",
+  },
+  starOutline: {
+    viewBox: "0 0 576 512",
+    path: "M287.9 0c9.2 0 17.6 5.2 21.6 13.5l68.6 141.3 153.2 22.6c9 1.3 16.5 7.6 19.3 16.3s.5 18.1-5.9 24.5L433.6 328.4l26.2 155.6c1.5 9-2.2 18.1-9.6 23.5s-17.3 6-25.3 1.7l-137-73.2L151 509.1c-8 4.3-17.9 3.7-25.3-1.7s-11.2-14.5-9.6-23.5l26.2-155.6L31.1 218.2c-6.5-6.4-8.7-15.9-5.9-24.5s10.3-15 19.3-16.3l153.2-22.6L266.3 13.5C270.4 5.2 278.8 0 287.9 0zm0 79L235.4 184.2c-3.5 7.1-10.2 12.1-18.1 13.3l-116.3 17.2 84.9 81.9c5.9 5.7 8.6 13.9 7.1 21.9L171.4 433l103-55.1c7.1-3.8 15.6-3.8 22.6 0l103 55.1-21.8-114.5c-1.5-8 .9-16.2 7.1-21.9l84.9-81.9-116.3-17.2c-7.9-1.2-14.6-6.2-18.1-13.3L287.9 79z",
+  },
 };
 const state = {
   projects: [],
@@ -794,8 +802,12 @@ function renderTodoCard(todo) {
     ? `<button class="danger" onclick="event.stopPropagation(); deleteTodo(${todo.id})">删除</button>`
     : "";
   const editable = true;
+  const starred = !!todo.starred;
+  const starLabel = `${starred ? "取消星标" : "星标置顶"}：${escapeAttr(todo.title)}`;
+  const star = `
+      <button class="todo-card-star${starred ? " starred" : ""}" type="button" title="${starred ? "取消星标" : "星标置顶"}" aria-label="${starLabel}" aria-pressed="${starred}" onclick="event.stopPropagation(); toggleTodoStar(${todo.id})">${faIcon(starred ? "star" : "starOutline")}</button>`;
   return `
-    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" data-todo-id="${todo.id}" ondragstart="return false" ${editable ? `onclick="if (!event.target.closest('a')) beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter' && !event.target.closest('a')) beginTodoEdit(${todo.id})"` : ""}>
+    <article class="todo-card ${editable ? "todo-card-editable" : "todo-card-closed"}" data-todo-id="${todo.id}" ondragstart="return false" ${editable ? `onclick="if (!event.target.closest('a, button')) beginTodoEdit(${todo.id})" tabindex="0" onkeydown="if (event.key === 'Enter' && !event.target.closest('a, button')) beginTodoEdit(${todo.id})"` : ""}>${star}
       <h3>${escapeHtml(todo.title)}</h3>
       ${todo.description ? `<div class="todo-markdown">${todo.description_html}</div>` : ""}
       ${todo.status === "closed" ? `
@@ -897,6 +909,10 @@ async function moveTodo(id, status) {
     method: "PUT",
     body: JSON.stringify({ status }),
   }));
+}
+
+async function toggleTodoStar(id) {
+  updateTodos(await api(`/api/todos/${id}/star`, { method: "POST" }));
 }
 
 function deleteTodo(id) {

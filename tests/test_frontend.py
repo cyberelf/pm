@@ -385,8 +385,8 @@ globalThis.fetch = async (path, options) => {
         self.assertIn('function openCloseTodo(id)', source)
         self.assertIn('function renderTodoDraft()', source)
         self.assertIn('function renderTodoEditor(todo)', source)
-        self.assertIn("if (!event.target.closest('a')) beginTodoEdit(", source)
-        self.assertIn("event.key === 'Enter' && !event.target.closest('a')", source)
+        self.assertIn("if (!event.target.closest('a, button')) beginTodoEdit(", source)
+        self.assertIn("event.key === 'Enter' && !event.target.closest('a, button')", source)
         self.assertIn('function finishTodoEdit(event, id)', source)
         self.assertIn('function saveTodoEditor(rawId)', source)
         self.assertIn('todo.description_html', source)
@@ -512,6 +512,104 @@ globalThis.fetch = async (path, options) => {
         self.assertIn("body.todo-drag-in-progress {", styles)
         self.assertIn("cursor: grab;", styles)
         self.assertIn("-webkit-touch-callout: none;", styles)
+
+    def test_todo_star_control_pins_starred_cards_to_top(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        # 卡片右上有星标按钮，星标/未星标两态图标
+        self.assertIn('star: {\n    viewBox: "0 0 576 512",', source)
+        self.assertIn("starOutline: {", source)
+        self.assertIn('class="todo-card-star${starred ? " starred" : ""}"', source)
+        self.assertIn('aria-pressed="${starred}"', source)
+        self.assertIn('onclick="event.stopPropagation(); toggleTodoStar(${todo.id})"', source)
+        # 星标点击不得触发卡片编辑；按钮上按 Enter 也不得
+        self.assertIn("event.target.closest('a, button')) beginTodoEdit(", source)
+        # 星标走专用切换接口，回包整板刷新（置顶排序由服务端完成）
+        self.assertIn("async function toggleTodoStar(id)", source)
+        self.assertIn("`/api/todos/${id}/star`", source)
+        self.assertIn('{ method: "POST" }', source)
+        # 按钮绝对定位在卡片右上角，标题文字让位；拖拽幽灵卡不显示星标
+        self.assertIn(".todo-card {", styles)
+        self.assertIn("position: relative;", styles)
+        self.assertIn("position: absolute; top: 8px; right: 8px;", styles)
+        self.assertIn(".todo-card-star.starred {", styles)
+        self.assertIn(".todo-card-ghost .todo-card-star { display: none; }", styles)
+
+    def test_todo_star_toggle_posts_and_rerenders_board(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+const testElements = new Map();
+function testElement() {
+  return {
+    value: "",
+    textContent: "",
+    disabled: false,
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    setAttribute() {},
+    focus() {},
+  };
+}
+globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+globalThis.document = {
+  body: testElement(),
+  activeElement: null,
+  getElementById(id) {
+    if (!testElements.has(id)) testElements.set(id, testElement());
+    return testElements.get(id);
+  },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  removeEventListener() {},
+};
+globalThis.window = { addEventListener() {}, removeEventListener() {} };
+globalThis.setTimeout = (callback) => { callback(); return 0; };
+globalThis.requestAnimationFrame = (callback) => callback();
+const fetchCalls = [];
+let starFlag = 0;
+globalThis.fetch = async (path, options) => {
+  fetchCalls.push({ path, options });
+  const body = { starred: starFlag === 0 ? (starFlag = 1) : (starFlag = 0), todos: [{ id: 9, title: "Starred item", starred: starFlag }] };
+  return {
+    ok: true,
+    text: async () => JSON.stringify(body),
+    async json() {
+      return body;
+    },
+  };
+};
+"""
+        assertions = r"""
+(async () => {
+  let rerendered = 0;
+  renderTodoBoard = () => { rerendered += 1; };
+  toast = () => {};
+  await toggleTodoStar(9);
+  if (fetchCalls[0].path !== "/api/todos/9/star" || fetchCalls[0].options.method !== "POST") {
+    throw new Error("star toggle did not POST to /api/todos/:id/star");
+  }
+  if (state.todos[0].starred !== 1 || rerendered !== 1) {
+    throw new Error("star toggle did not adopt response and rerender the board");
+  }
+  await toggleTodoStar(9);
+  if (fetchCalls[1].path !== "/api/todos/9/star" || state.todos[0].starred !== 0) {
+    throw new Error("second star toggle did not clear the flag");
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+        result = subprocess.run(
+            ["node"],
+            input=f"{harness}\n{source}\n{assertions}",
+            cwd=ROOT_DIR,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_todo_drag_moves_cards_within_and_across_lanes(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
