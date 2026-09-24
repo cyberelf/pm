@@ -535,6 +535,21 @@ globalThis.fetch = async (path, options) => {
         self.assertIn(".todo-card-star.starred {", styles)
         self.assertIn(".todo-card-ghost .todo-card-star { display: none; }", styles)
 
+    def test_todo_closed_lane_fold_markup_and_scroll_loader_exist(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        # 已关闭列：当天完成的直接展示，更早的折叠；下拉或点击按批展开
+        self.assertIn("function renderTodoColumnItems(", source)
+        self.assertIn("function isClosedToday(todo)", source)
+        self.assertIn("timeZone: CHINA_TIMEZONE", source)
+        self.assertIn('id="todo-closed-fold-sentinel"', source)
+        self.assertIn("function revealMoreClosedTodos()", source)
+        self.assertIn("function toggleTodoClosedExpand()", source)
+        self.assertIn("setupTodoClosedFold();", source)
+        self.assertIn('class="todo-fold-bar"', source)
+        self.assertIn(".todo-fold-bar {", styles)
+        self.assertIn(".todo-fold-sentinel {", styles)
+
     def test_todo_star_toggle_posts_and_rerenders_board(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
@@ -595,6 +610,88 @@ globalThis.fetch = async (path, options) => {
   await toggleTodoStar(9);
   if (fetchCalls[1].path !== "/api/todos/9/star" || state.todos[0].starred !== 0) {
     throw new Error("second star toggle did not clear the flag");
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+        result = subprocess.run(
+            ["node"],
+            input=f"{harness}\n{source}\n{assertions}",
+            cwd=ROOT_DIR,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_todo_closed_lane_folds_older_cards_and_reveals_on_scroll(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+const testElements = new Map();
+function testElement() {
+  return {
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    scrollLeft: 0, scrollWidth: 0, clientWidth: 0, clientHeight: 0,
+    disabled: false,
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    setAttribute() {},
+    focus() {},
+  };
+}
+globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+globalThis.document = {
+  body: testElement(),
+  activeElement: null,
+  getElementById(id) {
+    if (!testElements.has(id)) testElements.set(id, testElement());
+    return testElements.get(id);
+  },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  removeEventListener() {},
+};
+globalThis.window = { addEventListener() {}, removeEventListener() {}, innerHeight: 800 };
+globalThis.setTimeout = (callback) => { callback(); return 0; };
+globalThis.requestAnimationFrame = (callback) => callback();
+"""
+        assertions = r"""
+(async () => {
+  syncTodoBoardDots = () => {};
+  const board = document.getElementById("todo-board");
+  const now = new Date();
+  const daysAgo = (n) => new Date(now.getTime() - n * 86400000).toISOString();
+  state.todos = [
+    { id: 1, title: "进行中卡片", status: "doing", starred: 0, description: "", updated_at: daysAgo(0) },
+    { id: 2, title: "今天完成的", status: "closed", starred: 0, description: "", close_reason_html: "收工", closed_at: now.toISOString(), updated_at: daysAgo(0) },
+    { id: 3, title: "旧卡片甲", status: "closed", starred: 1, description: "", close_reason_html: "早", closed_at: daysAgo(3), updated_at: daysAgo(3) },
+    { id: 4, title: "旧卡片乙", status: "closed", starred: 0, description: "", close_reason_html: "早", closed_at: daysAgo(5), updated_at: daysAgo(5) },
+    { id: 5, title: "旧卡片丙", status: "closed", starred: 0, description: "", close_reason_html: "早", closed_at: daysAgo(6), updated_at: daysAgo(6) },
+  ];
+  renderTodoBoard();
+  if (!board.innerHTML.includes("今天完成的")) throw new Error("today closed card should stay visible");
+  if (!board.innerHTML.includes("折叠了 3 条更早完成")) throw new Error("fold bar missing");
+  if (board.innerHTML.includes("旧卡片甲")) throw new Error("older closed card should be folded");
+  if (state.todoClosedRemaining !== 3) throw new Error("remaining count wrong");
+  revealMoreClosedTodos();
+  for (const title of ["旧卡片甲", "旧卡片乙", "旧卡片丙"]) {
+    if (!board.innerHTML.includes(title)) throw new Error(`reveal should show ${title}`);
+  }
+  if (state.todoClosedRemaining !== 0 || board.innerHTML.includes("todo-fold-sentinel")) {
+    throw new Error("sentinel should disappear after full reveal");
+  }
+  toggleTodoClosedExpand(); // 展开全部
+  if (!board.innerHTML.includes("收起更早完成") || !board.innerHTML.includes("旧卡片丙")) {
+    throw new Error("expand should show all older cards");
+  }
+  toggleTodoClosedExpand(); // 收起并重置分批进度
+  if (board.innerHTML.includes("旧卡片甲") || state.todoClosedRemaining !== 3 || !board.innerHTML.includes("折叠了 3 条更早完成")) {
+    throw new Error("collapse should hide older cards again");
   }
 })().catch((error) => {
   console.error(error);

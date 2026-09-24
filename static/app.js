@@ -29,6 +29,9 @@ const state = {
   workspace: null,
   todos: [],
   todoEditorId: null,
+  todoClosedReveal: 0,
+  todoClosedExpanded: false,
+  todoClosedRemaining: 0,
   pendingReportProjectId: null,
   pendingDeleteTodoId: null,
   pendingDeleteUserId: null,
@@ -477,8 +480,7 @@ function renderTodoBoard() {
       <section class="todo-column todo-column-${column.status}" data-lane="${column.status}">
         <div class="todo-column-head"><h2>${column.title}</h2><span>${items.length}</span></div>
         <div class="todo-card-list">
-          ${items.map(renderTodoCard).join("")}
-          ${column.status === "todo" ? renderTodoDraft() : (!items.length ? `<p class="todo-empty">暂无${column.title}事项</p>` : "")}
+          ${renderTodoColumnItems(column.status, column.title, items)}
         </div>
       </section>
     `;
@@ -521,6 +523,71 @@ function syncTodoBoardDots(board) {
   if (!dots) return;
   const index = Math.round(board.scrollLeft / (board.clientWidth || 1));
   dots.querySelectorAll("button").forEach((dot, i) => dot.classList.toggle("active", i === index));
+}
+
+// —— 已关闭列折叠：当天完成的保持展示，更早的默认折叠，下拉或点击按批展开 ——
+const TODO_CLOSED_BATCH = 8;
+
+function renderTodoColumnItems(status, title, items) {
+  if (status !== "closed") {
+    return `${items.map(renderTodoCard).join("")}${status === "todo" ? renderTodoDraft() : (!items.length ? `<p class="todo-empty">暂无${title}事项</p>` : "")}`;
+  }
+  if (!items.length) return `<p class="todo-empty">暂无${title}事项</p>`;
+  const todayItems = [];
+  const olderItems = [];
+  for (const todo of items) (isClosedToday(todo) ? todayItems : olderItems).push(todo);
+  const shown = state.todoClosedExpanded ? olderItems.length : Math.min(state.todoClosedReveal, olderItems.length);
+  state.todoClosedRemaining = olderItems.length - shown;
+  return `
+    ${todayItems.map(renderTodoCard).join("")}
+    ${!olderItems.length ? "" : `
+      <button class="todo-fold-bar" type="button" aria-expanded="${state.todoClosedExpanded}" onclick="toggleTodoClosedExpand()">${state.todoClosedExpanded ? "收起更早完成" : `折叠了 ${olderItems.length} 条更早完成 · 下拉或点击展开`}</button>
+      ${olderItems.slice(0, shown).map(renderTodoCard).join("")}
+      ${state.todoClosedRemaining > 0 ? `<div id="todo-closed-fold-sentinel" class="todo-fold-sentinel" aria-hidden="true"></div>` : ""}
+    `}
+  `;
+}
+
+function chinaDayKey(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: CHINA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function isClosedToday(todo) {
+  if (!todo.closed_at) return true; // 历史数据缺关闭时间，保持可见不折叠
+  return chinaDayKey(todo.closed_at) === chinaDayKey(new Date());
+}
+
+function toggleTodoClosedExpand() {
+  state.todoClosedExpanded = !state.todoClosedExpanded;
+  if (!state.todoClosedExpanded) state.todoClosedReveal = 0; // 收起后从头按批展开
+  renderTodoBoard();
+}
+
+function revealMoreClosedTodos() {
+  if (state.todoClosedExpanded || state.todoClosedRemaining <= 0) return;
+  state.todoClosedReveal += TODO_CLOSED_BATCH;
+  renderTodoBoard();
+}
+
+function setupTodoClosedFold() {
+  let pending = false;
+  window.addEventListener("scroll", () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      const sentinel = $("todo-closed-fold-sentinel");
+      if (!sentinel || state.todoClosedExpanded || state.todoClosedRemaining <= 0) return;
+      if (sentinel.getBoundingClientRect().top < window.innerHeight + 240) revealMoreClosedTodos();
+    });
+  }, { passive: true });
 }
 
 // —— 看板拖拽：卡片支持同列上下排序与跨列移动；触屏长按抬起，桌面按住即拖 ——
@@ -2908,6 +2975,7 @@ applyWorkspacePagerMode();
 attachSwipeNav(workspaceElement, { enabled: () => workspaceElement.classList.contains("pager-mode") });
 attachSwipeNav($("todo-board"));
 setupTodoBoardDrag();
+setupTodoClosedFold();
 window.addEventListener("resize", () => {
   if (!workspacePagerQuery.matches) return;
   requestAnimationFrame(() => {

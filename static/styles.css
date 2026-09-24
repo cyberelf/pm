@@ -570,6 +570,9 @@ body.todo-drag-in-progress { cursor: grabbing; user-select: none; -webkit-user-s
 .todo-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding-top: 2px; }
 .todo-card-actions button { min-height: 34px; padding: 8px 11px; font-size: 12px; }
 .todo-empty { border: 1px dashed var(--board-line-soft); border-radius: var(--radius-lg); padding: 24px 12px; color: var(--muted); font-size: 13px; text-align: center; }
+.todo-fold-bar { border: 1px dashed var(--board-closed-line); border-radius: var(--radius-lg); background: transparent; padding: 10px 12px; color: var(--muted); font-size: 12px; text-align: center; cursor: pointer; }
+.todo-fold-bar:hover { color: var(--ink); border-color: var(--board-accent-slate); }
+.todo-fold-sentinel { height: 1px; }
 .todo-board-dots { display: none; }
 .pager-dots { display: none; }
 .project-bar { display: none; }
