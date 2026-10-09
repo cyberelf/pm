@@ -45,6 +45,7 @@ const state = {
   llmProvider: "openai",
   llmBaseUrl: "",
   llmModel: "",
+  llmEmbeddingModel: "",
   llmApiKeySet: false,
   queueCapacity: 5,
   queueParallelism: 2,
@@ -353,6 +354,7 @@ async function loadState() {
   state.llmProvider = data.llm_provider || "openai";
   state.llmBaseUrl = data.llm_base_url || "";
   state.llmModel = data.llm_model || "";
+  state.llmEmbeddingModel = data.llm_embedding_model || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
   state.queueCapacity = data.queue_capacity || 5;
   state.queueParallelism = data.queue_parallelism || 2;
@@ -1427,6 +1429,8 @@ function renderLlmSettings() {
   if (baseUrl) baseUrl.value = state.llmBaseUrl || "";
   const model = $("llm-model-input");
   if (model) model.value = state.llmModel || "";
+  const embeddingModel = $("llm-embedding-model-input");
+  if (embeddingModel) embeddingModel.value = state.llmEmbeddingModel || "";
   const key = $("llm-api-key-input");
   if (key) {
     key.value = "";
@@ -1442,6 +1446,7 @@ async function saveLlmSettings() {
     llm_provider: select.value,
     llm_base_url: $("llm-base-url-input")?.value || "",
     llm_model: $("llm-model-input")?.value || "",
+    llm_embedding_model: $("llm-embedding-model-input")?.value || "",
   };
   const keyInput = $("llm-api-key-input");
   if (keyInput && keyInput.value.trim()) payload.llm_api_key = keyInput.value.trim();
@@ -1449,6 +1454,7 @@ async function saveLlmSettings() {
   state.llmProvider = data.llm_provider;
   state.llmBaseUrl = data.llm_base_url;
   state.llmModel = data.llm_model;
+  state.llmEmbeddingModel = data.llm_embedding_model || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
   // 自动保存中不能整块重绘（会打断输入），只刷新 Key 占位提示
   if (keyInput) {

@@ -178,7 +178,10 @@
                 <label>API Key
                   <input id="llm-api-key-input" type="password" autocomplete="off" placeholder="sk-...">
                 </label>
-                <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。</small>
+                <label>Embedding 模型（可选）
+                  <input id="llm-embedding-model-input" placeholder="text-embedding-3-small / bge-m3；留空则搜索仅用关键词">
+                </label>
+                <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。Embedding 模型填了才启用 CLI/接口的向量检索，调用 {API 地址}/embeddings（需 OpenAI 兼容端点，Anthropic 官方无嵌入 API）。</small>
               </div>
             </div>
             <div class="panel admin-only hidden" id="voice-settings-panel">
@@ -401,6 +404,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=58"></script>
+    <script src="/app.js?v=59"></script>
   </body>
 </html>
