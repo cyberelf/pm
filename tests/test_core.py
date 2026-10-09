@@ -4335,8 +4335,8 @@ class SearchTest(unittest.TestCase):
 
     def test_search_api_endpoint(self):
         self.enable_embeddings()
-        self.add_report(self.project_id, "2026-W40", "# 周报\n\n部署优化完成。")
-        store_manual_material(self.conn, self.project_id, {"title": "运维笔记", "content": "GPU compose 部署文档。"})
+        report_id = self.add_report(self.project_id, "2026-W40", "# 周报\n\n部署优化完成。")
+        material_id = store_manual_material(self.conn, self.project_id, {"title": "运维笔记", "content": "GPU compose 部署文档。"})
         self.conn.commit()
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         server.db_path = self.db_path
@@ -4382,6 +4382,19 @@ class SearchTest(unittest.TestCase):
             self.assertEqual(status, 400)
             status, _payload = api("/api/search?q=x", member_token)
             self.assertEqual(status, 200)
+            # id-addressed lookups return full content for the owner and 404
+            # for anyone else
+            status, payload = api(f"/api/materials/{material_id}", admin_token)
+            self.assertEqual(status, 200)
+            self.assertIn("GPU compose 部署文档", payload["content"])
+            status, _payload = api(f"/api/materials/{material_id}", member_token)
+            self.assertEqual(status, 404)
+            status, payload = api(f"/api/reports/{report_id}", admin_token)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["week_key"], "2026-W40")
+            self.assertIn("部署优化完成", payload["content_html"])
+            status, _payload = api(f"/api/reports/{report_id}", member_token)
+            self.assertEqual(status, 404)
         finally:
             server.shutdown()
             server.server_close()

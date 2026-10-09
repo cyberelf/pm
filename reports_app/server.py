@@ -848,6 +848,48 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 self.json(result)
                 return
+            if len(parts) == 3 and parts[:2] == ["api", "materials"] and parts[2].isdigit() and method == "GET":
+                # id-addressed material lookup for CLI `material show`; the
+                # project ownership join keeps per-user isolation
+                material_id = int(parts[2])
+                owner = conn.execute(
+                    """
+                    SELECT m.project_id FROM materials m JOIN projects p ON p.id = m.project_id
+                    WHERE m.id = ? AND p.user_id = ?
+                    """,
+                    (material_id, user_id),
+                ).fetchone()
+                material = material_detail(conn, owner["project_id"], material_id) if owner else None
+                if not material:
+                    self.error(HTTPStatus.NOT_FOUND, "material not found")
+                    return
+                self.json(material)
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "reports"] and parts[2].isdigit() and method == "GET":
+                # id-addressed weekly report lookup for CLI `report show`
+                report_id = int(parts[2])
+                row = conn.execute(
+                    """
+                    SELECT wr.id, wr.project_id, wr.week_key, wr.content_md, p.name AS project_name
+                    FROM weekly_reports wr JOIN projects p ON p.id = wr.project_id
+                    WHERE wr.id = ? AND p.user_id = ?
+                    """,
+                    (report_id, user_id),
+                ).fetchone()
+                if not row:
+                    self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
+                    return
+                self.json(
+                    {
+                        "id": row["id"],
+                        "project_id": row["project_id"],
+                        "project_name": row["project_name"],
+                        "week_key": row["week_key"],
+                        "content_md": row["content_md"],
+                        "content_html": render_markdown(row["content_md"]),
+                    }
+                )
+                return
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects" and parts[2].isdigit():
                 project_id = int(parts[2])
                 owned = conn.execute(
