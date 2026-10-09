@@ -390,7 +390,7 @@ def _vector_hits(conn, user_id, query, settings, source_type, project_id, limit=
         scope_params = [*scope_params, source_type]
     rows = conn.execute(
         f"""
-        SELECT sc.source_type, sc.source_id, sc.chunk_index, sc.title, sc.week_key, sc.embedding,
+        SELECT sc.source_type, sc.source_id, sc.chunk_index, sc.title, sc.week_key, sc.embedding, sc.content,
                sc.updated_at, sc.project_id, p.name AS project_name
         FROM search_chunks sc JOIN projects p ON p.id = sc.project_id
         WHERE sc.embedding IS NOT NULL AND {scope}{type_clause}
@@ -409,6 +409,7 @@ def _vector_hits(conn, user_id, query, settings, source_type, project_id, limit=
                 "project_name": row["project_name"],
                 "title": row["title"],
                 "week_key": row["week_key"],
+                "snippet": _snippet(row["content"] or "", query.split()),
                 "updated_at": row["updated_at"],
                 "score": similarity,
             }
