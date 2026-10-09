@@ -29,6 +29,7 @@ from .config import (
     LLM_API_KEY_ENV_VARS,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
+    LLM_EMBEDDING_MODEL_SETTING,
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
     QUEUE_CAPACITY_SETTING,
@@ -79,6 +80,7 @@ from .pdf_export import pdf_filename, report_pdf_bytes
 from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report
 from .task_queue import enqueue_template_generation
 from .risks import evaluate_risks, progress_status
+from .search_index import search
 from .task_queue import (
     QueueFullError,
     enqueue_report_generation,
@@ -181,6 +183,7 @@ ADMIN_ONLY_SETTING_KEYS = {
     "llm_base_url",
     "llm_model",
     "llm_api_key",
+    "llm_embedding_model",
     "queue_capacity",
     "queue_parallelism",
     "github_enabled",
@@ -255,6 +258,7 @@ def llm_state(conn):
         "llm_provider": provider,
         "llm_base_url": get_setting(conn, LLM_BASE_URL_SETTING, "") or DEFAULT_LLM_BASE_URLS[provider],
         "llm_model": get_setting(conn, LLM_MODEL_SETTING, ""),
+        "llm_embedding_model": get_setting(conn, LLM_EMBEDDING_MODEL_SETTING, ""),
         "llm_api_key_set": bool(get_setting(conn, LLM_API_KEY_SETTING, "")) or bool(os.environ.get(LLM_API_KEY_ENV_VARS[provider], "")),
     }
 
@@ -780,6 +784,8 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, LLM_BASE_URL_SETTING, validate_llm_base_url(llm_base_url) if llm_base_url else DEFAULT_LLM_BASE_URLS[llm_provider])
                 if "llm_model" in payload:
                     set_setting(conn, LLM_MODEL_SETTING, (payload.get("llm_model") or "").strip())
+                if "llm_embedding_model" in payload:
+                    set_setting(conn, LLM_EMBEDDING_MODEL_SETTING, (payload.get("llm_embedding_model") or "").strip())
                 # Empty llm_api_key means "keep the stored key" so the
                 # frontend never has to echo the secret back.
                 api_key = (payload.get("llm_api_key") or "").strip()
@@ -816,6 +822,25 @@ class Handler(BaseHTTPRequestHandler):
                 reorder_todos(conn, self.body_json(), user_id)
                 conn.commit()
                 self.json({"todos": todo_rows(conn, user_id)})
+                return
+            if path == "/api/search" and method == "GET":
+                # hybrid keyword + vector search over the caller's weekly
+                # reports and materials; indexing happens lazily in-request
+                q = (query.get("q", [""])[0] or "").strip()
+                if not q:
+                    self.error(HTTPStatus.BAD_REQUEST, "query parameter q is required")
+                    return
+                raw_limit = query.get("limit", ["10"])[0]
+                limit = max(1, min(int(raw_limit), 50)) if raw_limit.isdigit() else 10
+                type_filter = query.get("type", [""])[0]
+                if type_filter not in ("", "report", "material"):
+                    self.error(HTTPStatus.BAD_REQUEST, "type filter must be report or material")
+                    return
+                raw_project = query.get("project_id", [""])[0]
+                project_filter = int(raw_project) if raw_project.isdigit() else None
+                result = search(conn, user_id, q, limit=limit, source_type=type_filter or None, project_id=project_filter)
+                conn.commit()
+                self.json(result)
                 return
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects" and parts[2].isdigit():
                 project_id = int(parts[2])

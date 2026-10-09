@@ -126,6 +126,29 @@ CREATE TABLE IF NOT EXISTS weekly_reports (
     UNIQUE(project_id, week_key)
 );
 
+-- hybrid search index (search_index.py): chunks of weekly report markdown and
+-- extracted material text; embedding stays NULL until the lazy indexer embeds
+-- the chunk. chunk_hash covers the embedding model, so a model switch
+-- invalidates every vector at once and the next search re-embeds incrementally.
+CREATE TABLE IF NOT EXISTS search_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    chunk_hash TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    week_key TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    embedding BLOB,
+    embedding_model TEXT NOT NULL DEFAULT '',
+    embedding_dim INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source_type, source_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_search_chunks_project ON search_chunks(project_id, source_type, source_id);
+
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import ssl
+import struct
 import subprocess
 import tempfile
 import threading
@@ -64,6 +65,7 @@ from reports_app.pdf_export import build_report_pdf_html, pdf_filename
 from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, generate_report_template, strip_template_fences
 from reports_app.task_queue import QueueFullError, enqueue_template_generation, get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
+from reports_app.search_index import chunk_text, embed_texts, search
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now
 import time
@@ -4111,6 +4113,274 @@ class GitSettingsApiTest(unittest.TestCase):
                 body=json.dumps({"gitlab_url": "ftp://bad"}),
             )
             self.assertEqual(status, 400)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+
+class SearchTest(unittest.TestCase):
+    """Hybrid keyword + vector search: chunking, lazy indexing, account
+    isolation, the /api/search endpoint, and the embeddings HTTP call."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        os.environ["REPORTS_ADMIN_PASSWORD"] = "changeme"
+        init_db(self.db_path)
+        self.conn = connect(self.db_path)
+        self.admin = ensure_bootstrap_admin(self.conn)
+        self.member = self.conn.execute("SELECT * FROM users WHERE username = 'member'").fetchone()
+        if self.member is None:
+            auth.create_user(self.conn, "member", "secret1", is_admin=False)
+            self.conn.commit()
+            self.member = self.conn.execute("SELECT * FROM users WHERE username = 'member'").fetchone()
+        self.project_id = create_project(
+            self.conn,
+            {"name": "Alpha", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "internal"},
+            self.admin,
+        )
+        self.other_project_id = create_project(
+            self.conn,
+            {"name": "Beta", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "internal"},
+            self.member,
+        )
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+        os.environ["REPORTS_FAKE_EMBEDDINGS"] = "1"
+
+    def tearDown(self):
+        self.conn.close()
+        os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        os.environ.pop("REPORTS_FAKE_EMBEDDINGS", None)
+        os.environ.pop("REPORTS_ADMIN_PASSWORD", None)
+        self.tmp.cleanup()
+
+    def add_report(self, project_id, week_key, content):
+        now = iso_now()
+        cur = self.conn.execute(
+            "INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)"
+            " VALUES (?, ?, ?, NULL, ?, ?)",
+            (project_id, week_key, content, now, now),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def enable_embeddings(self, model="test-embed"):
+        set_setting(self.conn, "llm_embedding_model", model)
+        self.conn.commit()
+
+    def test_chunk_text_boundaries(self):
+        self.assertEqual(chunk_text(""), [])
+        self.assertEqual(chunk_text("   \n  "), [])
+        self.assertEqual(len(chunk_text("短文本")), 1)
+        paragraph = "这是一段足够长的文字。" * 120
+        chunks = chunk_text(paragraph, size=200, overlap=50)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertTrue(chunk.strip())
+            self.assertLessEqual(len(chunk), 200)
+        # consecutive windows overlap so context is not cut mid-sentence
+        self.assertTrue(chunks[0][150:200] or chunks[1][:50])
+
+    def test_keyword_search_without_embedding_setting(self):
+        self.add_report(self.project_id, "2026-W40", "# 周报\n\n完成了部署优化，灰度发布顺利。")
+        store_manual_material(self.conn, self.project_id, {"title": "运维笔记", "content": "GPU compose 部署文档，包含显存调优。"})
+        result = search(self.conn, self.admin["id"], "部署")
+        self.assertEqual(result["mode"], "keyword")
+        self.assertFalse(result["embedding_configured"])
+        self.assertGreaterEqual(len(result["hits"]), 2)
+        titles = " | ".join(hit["title"] for hit in result["hits"])
+        self.assertIn("周报", titles)
+        self.assertIn("运维笔记", titles)
+        for hit in result["hits"]:
+            self.assertIn(hit["type"], ("report", "material"))
+            self.assertEqual(hit["project_id"], self.project_id)
+
+    def test_vector_search_with_fake_embeddings_and_model_switch_invalidation(self):
+        self.enable_embeddings()
+        material_id = store_manual_material(self.conn, self.project_id, {"title": "运维笔记", "content": "GPU compose 部署文档。"})
+        self.add_report(self.project_id, "2026-W40", "# 周报\n\n完成了部署优化。")
+        result = search(self.conn, self.admin["id"], "部署")
+        self.assertEqual(result["mode"], "hybrid")
+        self.assertTrue(result["embedding_configured"])
+        embedded = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM search_chunks WHERE embedding IS NOT NULL AND embedding_model = 'test-embed'"
+        ).fetchone()["n"]
+        self.assertGreaterEqual(embedded, 2)
+
+        # rewriting the material re-chunks it: hash-mismatched rows disappear
+        update_manual_material(self.conn, self.project_id, material_id, {"content": "完全不同的内容，讲的是 k8s 网络排障。", "title": "运维笔记"})
+        search(self.conn, self.admin["id"], "部署")
+        leftover = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM search_chunks WHERE source_type = 'material' AND source_id = ? AND content LIKE '%GPU%'",
+            (material_id,),
+        ).fetchone()["n"]
+        self.assertEqual(leftover, 0)
+
+    def test_deleted_sources_leave_no_orphan_chunks(self):
+        material_id = store_manual_material(self.conn, self.project_id, {"title": "临时", "content": "会被删除的内容。"})
+        search(self.conn, self.admin["id"], "删除")
+        delete_material(self.conn, self.project_id, material_id)
+        search(self.conn, self.admin["id"], "删除")
+        orphans = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM search_chunks WHERE source_type = 'material' AND source_id = ?", (material_id,)
+        ).fetchone()["n"]
+        self.assertEqual(orphans, 0)
+
+    def test_search_isolated_per_user(self):
+        self.add_report(self.project_id, "2026-W40", "# 周报\n\nAlpha 项目的机密进展：芯片流片。")
+        self.add_report(self.other_project_id, "2026-W40", "# 周报\n\nBeta 项目的进展：固件联调。")
+        admin_hits = search(self.conn, self.admin["id"], "进展")["hits"]
+        member_hits = search(self.conn, self.member["id"], "进展")["hits"]
+        self.assertTrue(admin_hits)
+        self.assertTrue(member_hits)
+        self.assertTrue(all(hit["project_id"] == self.project_id for hit in admin_hits))
+        self.assertTrue(all(hit["project_id"] == self.other_project_id for hit in member_hits))
+
+    def test_embed_texts_against_openai_compatible_endpoint(self):
+        os.environ.pop("REPORTS_FAKE_EMBEDDINGS", None)
+        seen = []
+
+        class MockEmbeddingsHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length))
+                seen.append({"path": self.path, "auth": self.headers.get("Authorization"), "model": body.get("model"), "input": body.get("input")})
+                vectors = [[0.1 * (index + 1)] * 4 for index, _ in enumerate(body["input"])]
+                payload = json.dumps({"data": [{"index": index, "embedding": vector} for index, vector in enumerate(vectors)]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, fmt, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), MockEmbeddingsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            settings = {
+                "provider": "openai",
+                "base_url": f"http://127.0.0.1:{server.server_port}/v1",
+                "api_key": "sk-test",
+                "embedding_model": "test-embed",
+            }
+            blobs = embed_texts(["第一段", "second"], settings)
+            self.assertEqual(len(blobs), 2)
+            first = struct.unpack("<4f", blobs[0])
+            self.assertTrue(all(abs(value - 0.1) < 1e-6 for value in first), first)
+            self.assertEqual(seen[0]["path"], "/v1/embeddings")
+            self.assertEqual(seen[0]["auth"], "Bearer sk-test")
+            self.assertEqual(seen[0]["model"], "test-embed")
+            self.assertEqual(seen[0]["input"], ["第一段", "second"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_embedding_failure_degrades_to_keyword_results(self):
+        os.environ.pop("REPORTS_FAKE_EMBEDDINGS", None)
+        self.enable_embeddings()
+        set_setting(self.conn, "llm_base_url", "http://127.0.0.1:1/v1")
+        self.conn.commit()
+        self.add_report(self.project_id, "2026-W40", "# 周报\n\n部署优化的记录。")
+        result = search(self.conn, self.admin["id"], "部署")
+        self.assertEqual(result["mode"], "keyword")
+        self.assertTrue(result["hits"])
+        self.assertTrue(result["index"]["embedding_error"])
+
+    def test_settings_round_trip_and_admin_gate(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def token_for(username, password):
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", "/api/auth/login", body=json.dumps({"username": username, "password": password}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            cookie = response.getheader("Set-Cookie") or ""
+            client.close()
+            return cookie.split("reports_session=")[1].split(";")[0]
+
+        def api(method, path, token, body=None):
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            headers = {"Content-Type": "application/json", "Cookie": f"reports_session={token}"}
+            client.request(method, path, body=body, headers=headers)
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            return response.status, payload
+
+        try:
+            admin_token = token_for("darren", "changeme")
+            member_token = token_for("member", "secret1")
+            status, payload = api("PUT", "/api/settings", member_token, body=json.dumps({"llm_embedding_model": "nope"}))
+            self.assertEqual(status, 403)
+            status, payload = api("PUT", "/api/settings", admin_token, body=json.dumps({"llm_embedding_model": " bge-m3 "}))
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["llm_embedding_model"], "bge-m3")
+            # settings_state is flattened into /api/state's payload
+            status, payload = api("GET", "/api/state", admin_token)
+            self.assertEqual(payload["llm_embedding_model"], "bge-m3")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_search_api_endpoint(self):
+        self.enable_embeddings()
+        self.add_report(self.project_id, "2026-W40", "# 周报\n\n部署优化完成。")
+        store_manual_material(self.conn, self.project_id, {"title": "运维笔记", "content": "GPU compose 部署文档。"})
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def token_for(username, password):
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            client.request("POST", "/api/auth/login", body=json.dumps({"username": username, "password": password}), headers={"Content-Type": "application/json"})
+            response = client.getresponse()
+            response.read()
+            cookie = response.getheader("Set-Cookie") or ""
+            client.close()
+            return cookie.split("reports_session=")[1].split(";")[0]
+
+        def api(path, token):
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+            client.request("GET", path, headers={"Cookie": f"reports_session={token}"})
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            return response.status, payload
+
+        try:
+            admin_token = token_for("darren", "changeme")
+            member_token = token_for("member", "secret1")
+            status, payload = api("/api/search?q=%E9%83%A8%E7%BD%B2&limit=5", admin_token)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["mode"], "hybrid")
+            self.assertLessEqual(len(payload["hits"]), 5)
+            self.assertTrue(all(hit["type"] in ("report", "material") for hit in payload["hits"]))
+            status, payload = api("/api/search?q=%E9%83%A8%E7%BD%B2&type=material", admin_token)
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["hits"])
+            self.assertTrue(all(hit["type"] == "material" for hit in payload["hits"]))
+            # a foreign project id is in-scope filtered, not an error
+            status, payload = api(f"/api/search?q=%E9%83%A8%E7%BD%B2&project_id={self.other_project_id}", admin_token)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["hits"], [])
+            status, payload = api("/api/search", admin_token)
+            self.assertEqual(status, 400)
+            status, payload = api("/api/search?q=x&type=todo", admin_token)
+            self.assertEqual(status, 400)
+            status, _payload = api("/api/search?q=x", member_token)
+            self.assertEqual(status, 200)
         finally:
             server.shutdown()
             server.server_close()
