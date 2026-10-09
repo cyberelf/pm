@@ -53,8 +53,10 @@ LLM_PROVIDER_SETTING = "llm_provider"
 LLM_BASE_URL_SETTING = "llm_base_url"
 LLM_API_KEY_SETTING = "llm_api_key"
 LLM_MODEL_SETTING = "llm_model"
-# OpenAI 兼容 /embeddings 端点用的嵌入模型；留空则 search 只做关键字检索
+# OpenAI 兼容 /embeddings 端点用的嵌入模型；留空则 search 只做关键字检索。
+# 嵌入地址默认复用 llm_base_url；LLM 走远程、嵌入走本地（如 LM Studio）时单独设置。
 LLM_EMBEDDING_MODEL_SETTING = "llm_embedding_model"
+LLM_EMBEDDING_BASE_URL_SETTING = "llm_embedding_base_url"
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_BASE_URLS = {
     "openai": "https://api.openai.com/v1",

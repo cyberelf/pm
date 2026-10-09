@@ -30,7 +30,7 @@ import threading
 import urllib.error
 import urllib.request
 
-from .config import LLM_EMBEDDING_MODEL_SETTING
+from .config import LLM_EMBEDDING_BASE_URL_SETTING, LLM_EMBEDDING_MODEL_SETTING
 from .db import get_setting
 from .internal_agent import resolve_llm_settings
 from .timeutil import iso_now
@@ -89,16 +89,20 @@ def chunk_text(text, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
 def resolve_embedding_settings(conn):
     """Embedding endpoint settings, or None when the vector half is disabled.
 
-    Reuses the internal agent's LLM endpoint settings; only the model name is
-    separate (llm_embedding_model). The endpoint is called OpenAI-style
-    regardless of llm_provider — Anthropic's own API has no embeddings, so an
-    Anthropic base URL simply fails at call time and search stays keyword-only.
+    Reuses the internal agent's LLM credentials; the endpoint address defaults
+    to llm_base_url and can be overridden with llm_embedding_base_url (e.g. a
+    local LM Studio while chat goes through a remote gateway). The endpoint is
+    called OpenAI-style regardless of llm_provider — Anthropic's own API has no
+    embeddings, so an Anthropic-shaped base URL fails at call time and search
+    stays keyword-only.
     """
     model = (get_setting(conn, LLM_EMBEDDING_MODEL_SETTING, "") or "").strip()
     if not model:
         return None
     settings = resolve_llm_settings(conn)
+    base_url = (get_setting(conn, LLM_EMBEDDING_BASE_URL_SETTING, "") or "").strip()
     settings["embedding_model"] = model
+    settings["embedding_base_url"] = base_url or settings["base_url"]
     return settings
 
 
@@ -113,7 +117,7 @@ def embed_texts(texts, settings, timeout=EMBED_HTTP_TIMEOUT):
 
     Returns little-endian float32 blobs, one per input, in input order.
     """
-    url = settings["base_url"].rstrip("/") + "/embeddings"
+    url = (settings.get("embedding_base_url") or settings["base_url"]).rstrip("/") + "/embeddings"
     vectors = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start:start + EMBED_BATCH_SIZE]

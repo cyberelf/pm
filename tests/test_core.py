@@ -4321,9 +4321,10 @@ class SearchTest(unittest.TestCase):
             member_token = token_for("member", "secret1")
             status, payload = api("PUT", "/api/settings", member_token, body=json.dumps({"llm_embedding_model": "nope"}))
             self.assertEqual(status, 403)
-            status, payload = api("PUT", "/api/settings", admin_token, body=json.dumps({"llm_embedding_model": " bge-m3 "}))
+            status, payload = api("PUT", "/api/settings", admin_token, body=json.dumps({"llm_embedding_model": " bge-m3 ", "llm_embedding_base_url": "http://127.0.0.1:1234/v1/"}))
             self.assertEqual(status, 200)
             self.assertEqual(payload["llm_embedding_model"], "bge-m3")
+            self.assertEqual(payload["llm_embedding_base_url"], "http://127.0.0.1:1234/v1")
             # settings_state is flattened into /api/state's payload
             status, payload = api("GET", "/api/state", admin_token)
             self.assertEqual(payload["llm_embedding_model"], "bge-m3")

@@ -46,6 +46,7 @@ const state = {
   llmBaseUrl: "",
   llmModel: "",
   llmEmbeddingModel: "",
+  llmEmbeddingBaseUrl: "",
   llmApiKeySet: false,
   queueCapacity: 5,
   queueParallelism: 2,
@@ -355,6 +356,7 @@ async function loadState() {
   state.llmBaseUrl = data.llm_base_url || "";
   state.llmModel = data.llm_model || "";
   state.llmEmbeddingModel = data.llm_embedding_model || "";
+  state.llmEmbeddingBaseUrl = data.llm_embedding_base_url || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
   state.queueCapacity = data.queue_capacity || 5;
   state.queueParallelism = data.queue_parallelism || 2;
@@ -1431,6 +1433,8 @@ function renderLlmSettings() {
   if (model) model.value = state.llmModel || "";
   const embeddingModel = $("llm-embedding-model-input");
   if (embeddingModel) embeddingModel.value = state.llmEmbeddingModel || "";
+  const embeddingBaseUrl = $("llm-embedding-base-url-input");
+  if (embeddingBaseUrl) embeddingBaseUrl.value = state.llmEmbeddingBaseUrl || "";
   const key = $("llm-api-key-input");
   if (key) {
     key.value = "";
@@ -1447,6 +1451,7 @@ async function saveLlmSettings() {
     llm_base_url: $("llm-base-url-input")?.value || "",
     llm_model: $("llm-model-input")?.value || "",
     llm_embedding_model: $("llm-embedding-model-input")?.value || "",
+    llm_embedding_base_url: $("llm-embedding-base-url-input")?.value || "",
   };
   const keyInput = $("llm-api-key-input");
   if (keyInput && keyInput.value.trim()) payload.llm_api_key = keyInput.value.trim();

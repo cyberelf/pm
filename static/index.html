@@ -181,7 +181,10 @@
                 <label>Embedding 模型（可选）
                   <input id="llm-embedding-model-input" placeholder="text-embedding-3-small / bge-m3；留空则搜索仅用关键词">
                 </label>
-                <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。Embedding 模型填了才启用 CLI/接口的向量检索，调用 {API 地址}/embeddings（需 OpenAI 兼容端点，Anthropic 官方无嵌入 API）。</small>
+                <label>Embedding API 地址（可选）
+                  <input id="llm-embedding-base-url-input" placeholder="http://127.0.0.1:1234/v1；留空复用上面的 API 地址">
+                </label>
+                <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。Embedding 模型填了才启用 CLI/接口的向量检索，调用 Embedding API 地址（留空时为 API 地址）下的 /embeddings，需 OpenAI 兼容端点（Anthropic 官方无嵌入 API）——LLM 走远程网关、嵌入走本地服务时，把 Embedding API 地址单独指向本地。</small>
               </div>
             </div>
             <div class="panel admin-only hidden" id="voice-settings-panel">
@@ -404,6 +407,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=59"></script>
+    <script src="/app.js?v=60"></script>
   </body>
 </html>

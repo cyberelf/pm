@@ -29,6 +29,7 @@ from .config import (
     LLM_API_KEY_ENV_VARS,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
+    LLM_EMBEDDING_BASE_URL_SETTING,
     LLM_EMBEDDING_MODEL_SETTING,
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
@@ -184,6 +185,7 @@ ADMIN_ONLY_SETTING_KEYS = {
     "llm_model",
     "llm_api_key",
     "llm_embedding_model",
+    "llm_embedding_base_url",
     "queue_capacity",
     "queue_parallelism",
     "github_enabled",
@@ -259,6 +261,7 @@ def llm_state(conn):
         "llm_base_url": get_setting(conn, LLM_BASE_URL_SETTING, "") or DEFAULT_LLM_BASE_URLS[provider],
         "llm_model": get_setting(conn, LLM_MODEL_SETTING, ""),
         "llm_embedding_model": get_setting(conn, LLM_EMBEDDING_MODEL_SETTING, ""),
+        "llm_embedding_base_url": get_setting(conn, LLM_EMBEDDING_BASE_URL_SETTING, ""),
         "llm_api_key_set": bool(get_setting(conn, LLM_API_KEY_SETTING, "")) or bool(os.environ.get(LLM_API_KEY_ENV_VARS[provider], "")),
     }
 
@@ -786,6 +789,9 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, LLM_MODEL_SETTING, (payload.get("llm_model") or "").strip())
                 if "llm_embedding_model" in payload:
                     set_setting(conn, LLM_EMBEDDING_MODEL_SETTING, (payload.get("llm_embedding_model") or "").strip())
+                if "llm_embedding_base_url" in payload:
+                    llm_embedding_base_url = (payload.get("llm_embedding_base_url") or "").strip()
+                    set_setting(conn, LLM_EMBEDDING_BASE_URL_SETTING, validate_llm_base_url(llm_embedding_base_url) if llm_embedding_base_url else "")
                 # Empty llm_api_key means "keep the stored key" so the
                 # frontend never has to echo the secret back.
                 api_key = (payload.get("llm_api_key") or "").strip()
