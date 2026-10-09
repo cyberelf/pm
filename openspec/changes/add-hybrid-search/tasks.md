@@ -14,9 +14,10 @@
 
 - [x] 3.1 Add `zreport search QUERY [-p] [-n] [--type] [--json]` with 120s timeout and table/JSON output
 - [x] 3.2 Update SKILL.md (repo copy + embedded SKILL_MD), README-cli.md commands, bump `__version__` to 1.4.0
+- [x] 3.3 Show hit ID in the search table and add `material show <ID>` / `report show <ID>` / `todo show <ID>` (server id-addressed routes GET /api/materials/{id} and GET /api/reports/{id} with per-user isolation); bump `__version__` to 1.5.0
 
 ## 4. Tests and verification
 
 - [x] 4.1 Unit tests: chunk boundaries, index invalidation, orphan cleanup, per-user isolation, embeddings HTTP call against a mock endpoint, embed-failure degradation, settings admin gate, /api/search endpoint behaviors
-- [x] 4.2 CLI end-to-end test in tests/test_cli.py (table, --json, --type, unknown project, keyword-only note)
+- [x] 4.2 CLI end-to-end test in tests/test_cli.py (table, --json, --type, unknown project, keyword-only note, show-by-id happy paths and foreign/missing ids)
 - [x] 4.3 `python3 -m unittest` green; verify /api/search against the running service with curl

@@ -43,3 +43,14 @@ The CLI SHALL provide `zreport search QUERY` with optional project scope (`-p`),
 #### Scenario: Search from the terminal
 - **WHEN** a signed-in CLI user runs `zreport search "部署" -n 5`
 - **THEN** the CLI prints a ranked table of hits and, when the vector half is disabled, a note explaining that an embedding model enables hybrid search
+
+### Requirement: Hits are addressable and viewable in full
+Search hits SHALL carry a unique per-type id (`source_id`), and the CLI SHALL provide `material show <ID>`, `report show <ID>`, and `todo show <ID>` that return the full content of the referenced item; the id-addressed server lookups SHALL enforce per-account isolation.
+
+#### Scenario: Open a search hit in full
+- **WHEN** a user runs `zreport material show <ID>` or `zreport report show <ID>` with an id from a search hit
+- **THEN** the CLI prints the item's complete extracted text or rendered report content with its project and metadata
+
+#### Scenario: Another account's id
+- **WHEN** a user addresses an item owned by a different account by id
+- **THEN** the lookup responds 404 instead of returning the content
