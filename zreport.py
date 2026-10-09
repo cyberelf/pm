@@ -41,7 +41,7 @@ from urllib.parse import urlencode, urlparse
 
 DEFAULT_SERVER = "http://127.0.0.1:8765"
 # CLI 版本号：仅 CLI（本文件）有实际变化时递增并发 PyPI，勿随平台版本联动
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
 MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".html": "text/html", ".htm": "text/html", ".pdf": "application/pdf"}
 TODO_STATUSES = ("todo", "doing")
@@ -82,19 +82,26 @@ command only — do not call the server's HTTP API directly.
 
 - `zreport search "<query>"` — hybrid keyword + vector search over weekly
   reports and materials, top 10 hits by default.
+- Each hit row shows a TYPE and an ID; `--json` returns the raw hit objects
+  (`type` + `source_id`).
 - `-p <project>` scopes to one project; `-n <N>` changes the number of
-  results; `--type report|material` picks one source; `--json` prints the
-  raw hit objects.
+  results; `--type report|material` picks one source.
 - The vector half requires the server admin to set an embedding model in
   全局设置 (llm_embedding_model); without it the command still works,
   keyword-only. The first search after new content may be slower while the
   server indexes chunks.
 
-Limitation: the CLI can surface material excerpts through `zreport search`,
-but there is still no subcommand to list materials or read one in full.
-If the task truly needs
-them, tell the user to open an issue at https://github.com/cyberelf/pm/issues
-instead of working around the CLI.
+## Read a hit in full (read-only)
+
+- `zreport material show <ID>` — a material's extracted text, summary, and
+  metadata (ID from the search table or `--json` source_id).
+- `zreport report show <ID>` — a generated weekly report rendered as text.
+- `zreport todo show <ID>` — a TODO's status, description, and close reason
+  (closed TODOs need `todo list --all` first to confirm the ID exists).
+
+If the task truly needs something beyond these commands, tell the user to
+open an issue at https://github.com/cyberelf/pm/issues instead of working
+around the CLI.
 
 ## Organize the summary
 
@@ -499,6 +506,7 @@ def cmd_search(args, config, config_path):
             (
                 rank,
                 hit.get("type") or "",
+                hit.get("source_id") if hit.get("source_id") is not None else "-",
                 hit.get("project_name") or "-",
                 clip_text(hit.get("title") or "", 40),
                 hit.get("week_key") or "-",
@@ -507,13 +515,77 @@ def cmd_search(args, config, config_path):
             )
             for rank, hit in enumerate(hits, start=1)
         ]
-        print_table(["#", "TYPE", "PROJECT", "TITLE", "WEEK", "SNIPPET", "SCORE"], rows)
+        print_table(["#", "TYPE", "ID", "PROJECT", "TITLE", "WEEK", "SNIPPET", "SCORE"], rows)
     if not result.get("embedding_configured"):
         print("note: vector search is disabled — set an embedding model (llm_embedding_model) in 全局设置 for hybrid search", file=sys.stderr)
     else:
         error = (result.get("index") or {}).get("embedding_error")
         if error:
             print(f"note: vector search failed this time: {error}", file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------- show by id
+
+
+def _print_kv(pairs):
+    for key, value in pairs:
+        if value not in (None, ""):
+            print(f"{key}: {value}")
+
+
+def cmd_material_show(args, config, config_path):
+    require_login(config)
+    material = api_request(config, "GET", f"/api/materials/{args.id}")
+    _print_kv(
+        [
+            ("Material", f"#{material.get('id')} {material.get('filename', '')}".strip()),
+            ("Project", material.get("project_name")),
+            ("Status", material.get("extraction_status")),
+            ("Summary", (material.get("summary") or "").strip()),
+            ("Created", (material.get("created_at") or "")[:16].replace("T", " ")),
+        ]
+    )
+    content = (material.get("content") or "").strip()
+    print("\n" + (content if content else "(no extracted text)"))
+    return 0
+
+
+def cmd_report_show(args, config, config_path):
+    require_login(config)
+    report = api_request(config, "GET", f"/api/reports/{args.id}")
+    _print_kv(
+        [
+            ("Report", f"#{report.get('id')}"),
+            ("Project", report.get("project_name")),
+            ("Week", report.get("week_key")),
+        ]
+    )
+    print()
+    print(html_to_text(report.get("content_html") or ""))
+    return 0
+
+
+def cmd_todo_show(args, config, config_path):
+    require_login(config)
+    todos = api_request(config, "GET", "/api/todos").get("todos") or []
+    todo = next((item for item in todos if item["id"] == args.id), None)
+    if not todo:
+        raise CliError(f"TODO #{args.id} not found (closed TODOs need `todo list --all`)")
+    _print_kv(
+        [
+            ("TODO", f"#{todo['id']} {todo.get('title', '')}".strip()),
+            ("Status", todo.get("status")),
+            ("Project", todo.get("project_name") or "-"),
+            ("Created", (todo.get("created_at") or "")[:16].replace("T", " ")),
+        ]
+    )
+    description = (todo.get("description") or "").strip()
+    if description:
+        print(f"\n{description}")
+    close_reason = (todo.get("close_reason") or "").strip()
+    if close_reason:
+        print(f"\nClose reason: {close_reason}")
     return 0
 
 
@@ -656,6 +728,22 @@ def build_parser():
     search.add_argument("--type", choices=("report", "material"), help="limit to weekly reports or materials")
     search.add_argument("--json", action="store_true", help="print the raw JSON response")
     search.set_defaults(func=cmd_search)
+
+    material = sub.add_parser("material", help="material operations")
+    material_sub = material.add_subparsers(dest="material_command", required=True)
+    material_show = material_sub.add_parser("show", help="show a material's full content by ID (from `search`)")
+    material_show.add_argument("id", type=int, help="material ID (the ID column of `search`)")
+    material_show.set_defaults(func=cmd_material_show)
+
+    report = sub.add_parser("report", help="weekly report operations")
+    report_sub = report.add_subparsers(dest="report_command", required=True)
+    report_show = report_sub.add_parser("show", help="show a weekly report by ID (from `search`)")
+    report_show.add_argument("id", type=int, help="weekly report ID (the ID column of `search`)")
+    report_show.set_defaults(func=cmd_report_show)
+
+    todo_show = todo_sub.add_parser("show", help="show a TODO's details by ID")
+    todo_show.add_argument("id", type=int, help="TODO ID")
+    todo_show.set_defaults(func=cmd_todo_show)
 
     skill = sub.add_parser("skill", help="manage the agent skill for coding agents")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)

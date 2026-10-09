@@ -280,6 +280,37 @@ class CliTest(unittest.TestCase):
         self.assertIn("运维笔记", output)
         self.assertIn("vector search is disabled", output)
 
+        # hits carry a unique ID and the show commands return full content
+        code, output = self.run_cli("search", "部署", "--json")
+        hits = json.loads(output)["hits"]
+        self.assertTrue(all("source_id" in hit for hit in hits))
+        material_hit = next(hit for hit in hits if hit["type"] == "material")
+        report_hit = next(hit for hit in hits if hit["type"] == "report")
+
+        code, output = self.run_cli("material", "show", str(material_hit["source_id"]))
+        self.assertEqual(code, 0)
+        self.assertIn("运维笔记", output)
+        self.assertIn("GPU compose 部署文档", output)
+
+        code, output = self.run_cli("report", "show", str(report_hit["source_id"]))
+        self.assertEqual(code, 0)
+        self.assertIn("部署优化", output)
+
+        code, output = self.run_cli("todo", "add", "跟进搜索反馈", "-d", "确认 show 命令可用")
+        self.assertEqual(code, 0)
+        todo_id = self.conn.execute("SELECT id FROM todos ORDER BY id DESC LIMIT 1").fetchone()["id"]
+        code, output = self.run_cli("todo", "show", str(todo_id))
+        self.assertEqual(code, 0)
+        self.assertIn("跟进搜索反馈", output)
+        self.assertIn("确认 show 命令可用", output)
+
+        code, _ = self.run_cli("material", "show", "99999")
+        self.assertEqual(code, 1)
+        code, _ = self.run_cli("report", "show", "99999")
+        self.assertEqual(code, 1)
+        code, _ = self.run_cli("todo", "show", "99999")
+        self.assertEqual(code, 1)
+
     def test_skill_md_matches_packaged_source(self):
         source = Path(__file__).resolve().parents[1] / "skills" / "zreport" / "SKILL.md"
         self.assertEqual(zreport.SKILL_MD, source.read_text(encoding="utf-8"))

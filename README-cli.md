@@ -38,8 +38,14 @@ zreport project list                   list projects
 zreport search "query" [-p project] [-n N] [--type report|material] [--json]
                                        hybrid keyword + vector search over
                                        weekly reports and materials (top 10
-                                       by default; the vector half needs an
+                                       by default; each hit shows a TYPE and
+                                       an ID; the vector half needs an
                                        llm_embedding_model in 全局设置)
+zreport material show <ID>             show a material's full extracted text
+                                       (ID from `search`)
+zreport report show <ID>               show a weekly report as text (ID from
+                                       `search`)
+zreport todo show <ID>                 show a TODO's details
 zreport project materials add -p <project> --text "..." [--title "..."]
                                        submit a text material
 echo "..." | zreport project materials add -p <project> --text -

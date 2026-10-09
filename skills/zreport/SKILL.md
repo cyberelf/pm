@@ -31,19 +31,26 @@ command only — do not call the server's HTTP API directly.
 
 - `zreport search "<query>"` — hybrid keyword + vector search over weekly
   reports and materials, top 10 hits by default.
+- Each hit row shows a TYPE and an ID; `--json` returns the raw hit objects
+  (`type` + `source_id`).
 - `-p <project>` scopes to one project; `-n <N>` changes the number of
-  results; `--type report|material` picks one source; `--json` prints the
-  raw hit objects.
+  results; `--type report|material` picks one source.
 - The vector half requires the server admin to set an embedding model in
   全局设置 (llm_embedding_model); without it the command still works,
   keyword-only. The first search after new content may be slower while the
   server indexes chunks.
 
-Limitation: the CLI can surface material excerpts through `zreport search`,
-but there is still no subcommand to list materials or read one in full.
-If the task truly needs
-them, tell the user to open an issue at https://github.com/cyberelf/pm/issues
-instead of working around the CLI.
+## Read a hit in full (read-only)
+
+- `zreport material show <ID>` — a material's extracted text, summary, and
+  metadata (ID from the search table or `--json` source_id).
+- `zreport report show <ID>` — a generated weekly report rendered as text.
+- `zreport todo show <ID>` — a TODO's status, description, and close reason
+  (closed TODOs need `todo list --all` first to confirm the ID exists).
+
+If the task truly needs something beyond these commands, tell the user to
+open an issue at https://github.com/cyberelf/pm/issues instead of working
+around the CLI.
 
 ## Organize the summary
 
