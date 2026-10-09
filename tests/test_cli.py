@@ -19,7 +19,8 @@ from unittest import mock
 
 import zreport
 from reports_app import auth
-from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db
+from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db, set_setting
+from reports_app.materials import store_manual_material
 from reports_app.server import Handler
 from reports_app.timeutil import current_week_key, iso_now
 
@@ -229,6 +230,55 @@ class CliTest(unittest.TestCase):
         code, output = self.run_cli("project", "weekly", "show", "-p", "演示项目", "1999-W01")
         self.assertEqual(code, 1)
         self.assertIn("weekly report not found", output)
+
+    def test_cli_search_reports_and_materials(self):
+        config = {"server": self.url, "token": auth.create_session(self.conn, self.user["id"]), "user": self.user["username"]}
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        self.conn.commit()
+        self.conn.execute(
+            "INSERT INTO weekly_reports (project_id, week_key, content_md, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (self.project_id, "2026-W40", "# 周报\n\n完成了部署优化，灰度发布顺利。", iso_now(), iso_now()),
+        )
+        store_manual_material(self.conn, self.project_id, {"title": "运维笔记", "content": "GPU compose 部署文档，包含显存调优。"})
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_EMBEDDINGS"] = "1"
+        set_setting(self.conn, "llm_embedding_model", "test-embed")
+        self.conn.commit()
+        try:
+            code, output = self.run_cli("search", "部署", "-n", "5")
+            self.assertEqual(code, 0)
+            self.assertIn("周报 演示项目 2026-W40", output)
+            self.assertIn("运维笔记", output)
+            self.assertIn("部署优化", output)
+
+            code, output = self.run_cli("search", "部署", "--json")
+            self.assertEqual(code, 0)
+            payload = json.loads(output)
+            self.assertTrue(payload["embedding_configured"])
+            self.assertTrue(payload["hits"])
+            self.assertTrue(all(hit["project_id"] == self.project_id for hit in payload["hits"]))
+
+            code, output = self.run_cli("search", "部署", "--type", "material")
+            self.assertEqual(code, 0)
+            self.assertIn("运维笔记", output)
+            self.assertNotIn("2026-W40", output)
+
+            code, output = self.run_cli("search", "部署", "-p", "演示项目")
+            self.assertEqual(code, 0)
+
+            code, output = self.run_cli("search", "部署", "-p", "不存在")
+            self.assertEqual(code, 1)
+        finally:
+            os.environ.pop("REPORTS_FAKE_EMBEDDINGS", None)
+            set_setting(self.conn, "llm_embedding_model", "")
+            self.conn.commit()
+
+        # without an embedding model the command still works, keyword-only,
+        # and says so on stderr
+        code, output = self.run_cli("search", "部署")
+        self.assertEqual(code, 0)
+        self.assertIn("运维笔记", output)
+        self.assertIn("vector search is disabled", output)
 
     def test_skill_md_matches_packaged_source(self):
         source = Path(__file__).resolve().parents[1] / "skills" / "zreport" / "SKILL.md"

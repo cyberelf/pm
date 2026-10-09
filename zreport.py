@@ -15,6 +15,8 @@ reports from the terminal:
     python3 zreport.py todo add "write deploy docs" -d "include the GPU compose guide"
     python3 zreport.py todo status 3 doing
     python3 zreport.py todo done 3 --project my-project --reason "merged"
+    python3 zreport.py search "部署优化" -n 5
+    python3 zreport.py search "GPU compose" --type material --json
 
 The token is stored in <config>/zreport/cli.json (0600). Self-signed
 TLS: log in with --insecure once and the choice is remembered.
@@ -24,6 +26,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -34,11 +37,11 @@ import webbrowser
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 DEFAULT_SERVER = "http://127.0.0.1:8765"
 # CLI 版本号：仅 CLI（本文件）有实际变化时递增并发 PyPI，勿随平台版本联动
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
 MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".html": "text/html", ".htm": "text/html", ".pdf": "application/pdf"}
 TODO_STATUSES = ("todo", "doing")
@@ -75,8 +78,21 @@ command only — do not call the server's HTTP API directly.
 - `zreport project weekly show -p <project> [week_key]` — report body rendered
   as text (default week: the current one)
 
-Limitation: the CLI cannot read material bodies yet (uploads are summarized
-server-side, and no subcommand lists materials). If the task truly needs
+## Search across reports and materials (read-only)
+
+- `zreport search "<query>"` — hybrid keyword + vector search over weekly
+  reports and materials, top 10 hits by default.
+- `-p <project>` scopes to one project; `-n <N>` changes the number of
+  results; `--type report|material` picks one source; `--json` prints the
+  raw hit objects.
+- The vector half requires the server admin to set an embedding model in
+  全局设置 (llm_embedding_model); without it the command still works,
+  keyword-only. The first search after new content may be slower while the
+  server indexes chunks.
+
+Limitation: the CLI can surface material excerpts through `zreport search`,
+but there is still no subcommand to list materials or read one in full.
+If the task truly needs
 them, tell the user to open an issue at https://github.com/cyberelf/pm/issues
 instead of working around the CLI.
 
@@ -446,6 +462,61 @@ def cmd_weekly_show(args, config, config_path):
     return 0
 
 
+# ---------------------------------------------------------------- search
+
+
+def clip_text(text, width=64):
+    """Clip to a display width, counting East-Asian characters as 2 columns."""
+    out, used = "", 0
+    for char in text:
+        w = 2 if unicodedata.east_asian_width(char) in ("F", "W") else 1
+        if used + w > width:
+            return out + "…"
+        out += char
+        used += w
+    return out
+
+
+def cmd_search(args, config, config_path):
+    require_login(config)
+    params = {"q": args.query, "limit": str(max(1, args.top))}
+    if args.type:
+        params["type"] = args.type
+    if args.project:
+        project = resolve_project(config, args.project)
+        params["project_id"] = str(project["id"])
+    # the first search after new content may index chunks server-side, so
+    # allow far more than the default 30s here
+    result = api_request(config, "GET", f"/api/search?{urlencode(params)}", timeout=120)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    hits = result.get("hits") or []
+    if not hits:
+        print("No matches.")
+    else:
+        rows = [
+            (
+                rank,
+                hit.get("type") or "",
+                hit.get("project_name") or "-",
+                clip_text(hit.get("title") or "", 40),
+                hit.get("week_key") or "-",
+                clip_text(re.sub(r"\s+", " ", hit.get("snippet") or "").strip()),
+                f"{hit.get('score') or 0:.4f}",
+            )
+            for rank, hit in enumerate(hits, start=1)
+        ]
+        print_table(["#", "TYPE", "PROJECT", "TITLE", "WEEK", "SNIPPET", "SCORE"], rows)
+    if not result.get("embedding_configured"):
+        print("note: vector search is disabled — set an embedding model (llm_embedding_model) in 全局设置 for hybrid search", file=sys.stderr)
+    else:
+        error = (result.get("index") or {}).get("embedding_error")
+        if error:
+            print(f"note: vector search failed this time: {error}", file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------- todos
 
 
@@ -577,6 +648,14 @@ def build_parser():
     todo_done.add_argument("-p", "--project", required=True, help="project to archive into (ID or name)")
     todo_done.add_argument("-r", "--reason", default="done", help="closing reason (default: done)")
     todo_done.set_defaults(func=cmd_todo_done)
+
+    search = sub.add_parser("search", help="hybrid keyword + vector search over weekly reports and materials")
+    search.add_argument("query", help="search text (Chinese or English)")
+    search.add_argument("-p", "--project", help="limit to one project (ID or name)")
+    search.add_argument("-n", "--top", type=int, default=10, help="max results (default 10)")
+    search.add_argument("--type", choices=("report", "material"), help="limit to weekly reports or materials")
+    search.add_argument("--json", action="store_true", help="print the raw JSON response")
+    search.set_defaults(func=cmd_search)
 
     skill = sub.add_parser("skill", help="manage the agent skill for coding agents")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)

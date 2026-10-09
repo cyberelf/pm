@@ -27,8 +27,21 @@ command only — do not call the server's HTTP API directly.
 - `zreport project weekly show -p <project> [week_key]` — report body rendered
   as text (default week: the current one)
 
-Limitation: the CLI cannot read material bodies yet (uploads are summarized
-server-side, and no subcommand lists materials). If the task truly needs
+## Search across reports and materials (read-only)
+
+- `zreport search "<query>"` — hybrid keyword + vector search over weekly
+  reports and materials, top 10 hits by default.
+- `-p <project>` scopes to one project; `-n <N>` changes the number of
+  results; `--type report|material` picks one source; `--json` prints the
+  raw hit objects.
+- The vector half requires the server admin to set an embedding model in
+  全局设置 (llm_embedding_model); without it the command still works,
+  keyword-only. The first search after new content may be slower while the
+  server indexes chunks.
+
+Limitation: the CLI can surface material excerpts through `zreport search`,
+but there is still no subcommand to list materials or read one in full.
+If the task truly needs
 them, tell the user to open an issue at https://github.com/cyberelf/pm/issues
 instead of working around the CLI.
 

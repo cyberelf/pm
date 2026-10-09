@@ -34,14 +34,23 @@ their CLI sessions too.
 ## Commands
 
 ```
-zreport projects                       list projects
-zreport todos [--all]                  list TODOs (--all includes closed ones)
-zreport materials add <project> --text "..." [--title "..."]
+zreport project list                   list projects
+zreport search "query" [-p project] [-n N] [--type report|material] [--json]
+                                       hybrid keyword + vector search over
+                                       weekly reports and materials (top 10
+                                       by default; the vector half needs an
+                                       llm_embedding_model in 全局设置)
+zreport project materials add -p <project> --text "..." [--title "..."]
                                        submit a text material
-echo "..." | zreport materials add <project> --text -
+echo "..." | zreport project materials add -p <project> --text -
                                        submit text material from stdin
-zreport materials add <project> --file a.md b.pdf
+zreport project materials add -p <project> --file a.md b.pdf
                                        upload attachments (.md .markdown .txt .html .htm .pdf)
+zreport project weekly list -p <project>
+                                       list generated weekly reports
+zreport project weekly show -p <project> [week_key]
+                                       show a weekly report as text
+zreport todo list [--all]              list TODOs (--all includes closed ones)
 zreport todo add "Title" -d "Details"  create a TODO
 zreport todo status <ID> doing|todo    change a TODO's status
 zreport todo done <ID> -p <project> -r "closing note"
