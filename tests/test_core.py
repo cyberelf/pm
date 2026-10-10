@@ -22,6 +22,7 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 from reports_app.config import (
+    LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
     APP_VERSION,
     DEFAULT_ASR_LANGUAGE,
     DEFAULT_LLM_BASE_URLS,
@@ -3346,23 +3347,36 @@ class InternalAgentTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def test_build_chat_model_does_not_cap_output_tokens(self):
+    def test_build_chat_model_output_token_budgets(self):
         try:
             import langchain_core  # noqa: F401
             import langchain_openai  # noqa: F401
+            import langchain_anthropic  # noqa: F401
         except ImportError:
             self.skipTest("langchain is not installed")
         from langchain_core.messages import HumanMessage
 
-        settings = {
+        openai_settings = {
             "provider": "openai",
             "base_url": "http://127.0.0.1:1234/v1",
             "api_key": "k",
             "model": "test-model",
         }
-        model = build_chat_model(settings, timeout=30, temperature=0)
+        model = build_chat_model(openai_settings, timeout=30, temperature=0)
         payload = model._get_request_payload([HumanMessage(content="hi")], stop=None)
         self.assertNotIn("max_tokens", payload)
+
+        anthropic_settings = {
+            "provider": "anthropic",
+            "base_url": "https://gateway.internal/anthropic",
+            "api_key": "k",
+            "model": "glm-5.3",
+        }
+        with mock.patch("langchain_anthropic.ChatAnthropic") as chat_cls:
+            build_chat_model(anthropic_settings, timeout=30, temperature=0)
+        kwargs = chat_cls.call_args[1]
+        self.assertEqual(kwargs["max_tokens"], LLM_ANTHROPIC_MAX_OUTPUT_TOKENS)
+        self.assertGreater(kwargs["max_tokens"], 1024)
 
     def test_llm_provider_settings_api_round_trip(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

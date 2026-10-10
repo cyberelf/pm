@@ -14,6 +14,7 @@ import os
 from .config import (
     DEFAULT_LLM_BASE_URLS,
     DEFAULT_LLM_PROVIDER,
+    LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
     LLM_API_KEY_ENV_VARS,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
@@ -83,6 +84,9 @@ def build_chat_model(settings, timeout, temperature=None):
     if settings["provider"] == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
+        # The Messages API mandates max_tokens; raise langchain's 1024
+        # default so thinking models keep budget for the visible answer.
+        kwargs["max_tokens"] = LLM_ANTHROPIC_MAX_OUTPUT_TOKENS
         return ChatAnthropic(**kwargs)
     raise ValidationError("unsupported LLM provider; use openai or anthropic")
 
