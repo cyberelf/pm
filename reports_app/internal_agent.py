@@ -19,8 +19,6 @@ from .config import (
     LLM_BASE_URL_SETTING,
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
-    LLM_REPORT_MAX_TOKENS,
-    LLM_VOICE_MAX_TOKENS,
     SUPPORTED_LLM_PROVIDERS,
 )
 from .db import connect, get_setting
@@ -67,13 +65,14 @@ def validate_llm_settings(settings):
     return settings
 
 
-def build_chat_model(settings, timeout, max_tokens, temperature=None):
+def build_chat_model(settings, timeout, temperature=None):
+    # No max_tokens cap: reasoning models spend part of a capped budget on
+    # hidden thinking blocks and can come back with an empty visible answer.
     kwargs = {
         "model": settings["model"],
         "api_key": settings["api_key"],
         "base_url": settings["base_url"],
         "timeout": timeout,
-        "max_tokens": max_tokens,
     }
     if temperature is not None:
         kwargs["temperature"] = temperature
@@ -101,11 +100,11 @@ def response_text(response):
     return "\n".join(parts).strip()
 
 
-def internal_chat(prompt, settings, timeout=120, max_tokens=4096, temperature=None):
+def internal_chat(prompt, settings, timeout=120, temperature=None):
     """Run one chat completion through the configured provider and return
     the response text."""
     validate_llm_settings(settings)
-    model = build_chat_model(settings, timeout=timeout, max_tokens=max_tokens, temperature=temperature)
+    model = build_chat_model(settings, timeout=timeout, temperature=temperature)
     from langchain_core.messages import HumanMessage
 
     try:
@@ -121,7 +120,7 @@ def internal_voice_todo_items(transcript, timeout=120):
 
     prompt = build_voice_todo_prompt(transcript)
     settings = resolve_llm_settings()
-    raw = internal_chat(prompt, settings, timeout=timeout, max_tokens=LLM_VOICE_MAX_TOKENS, temperature=0)
+    raw = internal_chat(prompt, settings, timeout=timeout, temperature=0)
     return parse_voice_todo_output(raw)
 
 
@@ -134,7 +133,7 @@ def generate_internal_report(context, timeout=300):
 
     settings = resolve_llm_settings()
     prompt = build_internal_evidence_prompt(context)
-    output = internal_chat(prompt, settings, timeout=timeout, max_tokens=LLM_REPORT_MAX_TOKENS)
+    output = internal_chat(prompt, settings, timeout=timeout)
     if not output.strip():
         raise RuntimeError("internal agent returned an empty report")
     return output

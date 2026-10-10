@@ -492,7 +492,7 @@ def generate_report_template(conn, project_id, requirements, timeout=300, job_id
         from .internal_agent import internal_chat, resolve_llm_settings
 
         try:
-            raw = internal_chat(prompt, resolve_llm_settings(conn), timeout=timeout, max_tokens=4096, temperature=0)
+            raw = internal_chat(prompt, resolve_llm_settings(conn), timeout=timeout, temperature=0)
         except RuntimeError as exc:
             return _fail(f"模板生成失败：{exc}")
         template = strip_template_fences(raw)

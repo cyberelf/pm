@@ -33,7 +33,9 @@ from reports_app.config import (
     load_env_file,
 )
 from reports_app.internal_agent import (
+    build_chat_model,
     generate_internal_report,
+    internal_chat,
     internal_voice_todo_items,
     resolve_llm_settings,
     validate_llm_settings,
@@ -1577,7 +1579,7 @@ class CoreTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": ""}):
             with mock.patch("reports_app.internal_agent.internal_chat", return_value="```markdown\n# Styled Template\n```") as chat:
                 generate_report_template(self.conn, self.project_id, "", timeout=5, job_id=job_id)
-            self.assertEqual(chat.call_args.kwargs["max_tokens"], 4096)
+            self.assertNotIn("max_tokens", chat.call_args.kwargs)
             self.assertEqual(chat.call_args.kwargs["temperature"], 0)
         row = self.conn.execute(
             "SELECT status, output_md FROM generation_jobs WHERE id = ?", (job_id,)
@@ -3343,6 +3345,24 @@ class InternalAgentTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_build_chat_model_does_not_cap_output_tokens(self):
+        try:
+            import langchain_core  # noqa: F401
+            import langchain_openai  # noqa: F401
+        except ImportError:
+            self.skipTest("langchain is not installed")
+        from langchain_core.messages import HumanMessage
+
+        settings = {
+            "provider": "openai",
+            "base_url": "http://127.0.0.1:1234/v1",
+            "api_key": "k",
+            "model": "test-model",
+        }
+        model = build_chat_model(settings, timeout=30, temperature=0)
+        payload = model._get_request_payload([HumanMessage(content="hi")], stop=None)
+        self.assertNotIn("max_tokens", payload)
 
     def test_llm_provider_settings_api_round_trip(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
