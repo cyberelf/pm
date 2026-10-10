@@ -34,7 +34,7 @@ from reports_app.config import (
     load_env_file,
 )
 from reports_app.internal_agent import (
-    build_chat_model,
+    build_client,
     generate_internal_report,
     internal_chat,
     internal_voice_todo_items,
@@ -3286,10 +3286,9 @@ class InternalAgentTest(unittest.TestCase):
 
     def test_internal_agent_end_to_end_with_local_openai_compatible_server(self):
         try:
-            import langchain_core  # noqa: F401
-            import langchain_openai  # noqa: F401
+            import openai  # noqa: F401
         except ImportError:
-            self.skipTest("langchain is not installed")
+            self.skipTest("openai SDK is not installed")
 
         seen_requests = []
 
@@ -3347,14 +3346,13 @@ class InternalAgentTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def test_build_chat_model_output_token_budgets(self):
+    def test_internal_chat_request_shapes_per_provider(self):
         try:
-            import langchain_core  # noqa: F401
-            import langchain_openai  # noqa: F401
-            import langchain_anthropic  # noqa: F401
+            import anthropic  # noqa: F401
+            import openai  # noqa: F401
         except ImportError:
-            self.skipTest("langchain is not installed")
-        from langchain_core.messages import HumanMessage
+            self.skipTest("openai/anthropic SDKs are not installed")
+        from types import SimpleNamespace
 
         openai_settings = {
             "provider": "openai",
@@ -3362,9 +3360,18 @@ class InternalAgentTest(unittest.TestCase):
             "api_key": "k",
             "model": "test-model",
         }
-        model = build_chat_model(openai_settings, timeout=30, temperature=0)
-        payload = model._get_request_payload([HumanMessage(content="hi")], stop=None)
-        self.assertNotIn("max_tokens", payload)
+        client = mock.Mock()
+        client.chat.completions.create.return_value = mock.Mock(
+            choices=[mock.Mock(message=mock.Mock(content=" hi "))]
+        )
+        with mock.patch("openai.OpenAI", return_value=client) as openai_cls:
+            self.assertEqual(internal_chat("hi", openai_settings, timeout=30, temperature=0), "hi")
+        openai_cls.assert_called_once_with(api_key="k", base_url="http://127.0.0.1:1234/v1", timeout=30)
+        kwargs = client.chat.completions.create.call_args[1]
+        self.assertNotIn("max_tokens", kwargs)
+        self.assertEqual(kwargs["model"], "test-model")
+        self.assertEqual(kwargs["temperature"], 0)
+        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "hi"}])
 
         anthropic_settings = {
             "provider": "anthropic",
@@ -3372,11 +3379,21 @@ class InternalAgentTest(unittest.TestCase):
             "api_key": "k",
             "model": "glm-5.3",
         }
-        with mock.patch("langchain_anthropic.ChatAnthropic") as chat_cls:
-            build_chat_model(anthropic_settings, timeout=30, temperature=0)
-        kwargs = chat_cls.call_args[1]
+        client = mock.Mock()
+        client.messages.create.return_value = mock.Mock(
+            content=[
+                SimpleNamespace(type="thinking", thinking="reasoning"),
+                SimpleNamespace(type="text", text="report "),
+                SimpleNamespace(type="text", text="body"),
+            ]
+        )
+        with mock.patch("anthropic.Anthropic", return_value=client) as anthropic_cls:
+            self.assertEqual(internal_chat("hi", anthropic_settings, timeout=30), "report body")
+        anthropic_cls.assert_called_once_with(api_key="k", base_url="https://gateway.internal/anthropic", timeout=30)
+        kwargs = client.messages.create.call_args[1]
         self.assertEqual(kwargs["max_tokens"], LLM_ANTHROPIC_MAX_OUTPUT_TOKENS)
-        self.assertGreater(kwargs["max_tokens"], 1024)
+        self.assertNotIn("temperature", kwargs)
+        self.assertEqual(kwargs["messages"], [{"role": "user", "content": "hi"}])
 
     def test_llm_provider_settings_api_round_trip(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

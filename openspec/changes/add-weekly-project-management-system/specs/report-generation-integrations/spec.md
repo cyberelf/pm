@@ -30,7 +30,7 @@ The system SHALL support an in-process internal agent as a weekly report generat
 
 #### Scenario: Invoke internal agent
 - **WHEN** a project is configured to use the internal agent and a report job starts
-- **THEN** the system invokes the configured LLM provider through its langchain chat model binding with a bounded evidence prompt assembled from the report context
+- **THEN** the system invokes the configured LLM provider through the official OpenAI/Anthropic SDK binding with a bounded evidence prompt assembled from the report context
 
 #### Scenario: Fail when the internal agent produces no report
 - **WHEN** the internal agent LLM call fails or returns empty output

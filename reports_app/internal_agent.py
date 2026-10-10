@@ -1,12 +1,12 @@
-"""In-process internal agent: LLM calls through langchain-bound providers.
+"""In-process internal agent: LLM calls through the official OpenAI and
+Anthropic SDKs.
 
 The internal agent replaces the Codex/Claude CLI handoff with direct chat
 invocations. Which provider (openai or anthropic) serves the calls, its
 endpoint, API key, and model come from app settings (with the provider's
-standard API-key environment variable as fallback). langchain's provider
-integration classes perform the actual binding so both providers share
-one call surface. langchain imports stay lazy so the rest of the app
-works without the optional dependency installed.
+standard API-key environment variable as fallback). Both SDK imports stay
+lazy so the rest of the app works without the optional dependencies
+installed.
 """
 
 import os
@@ -66,56 +66,48 @@ def validate_llm_settings(settings):
     return settings
 
 
-def build_chat_model(settings, timeout, temperature=None):
-    # No max_tokens cap: reasoning models spend part of a capped budget on
-    # hidden thinking blocks and can come back with an empty visible answer.
-    kwargs = {
-        "model": settings["model"],
-        "api_key": settings["api_key"],
-        "base_url": settings["base_url"],
-        "timeout": timeout,
-    }
-    if temperature is not None:
-        kwargs["temperature"] = temperature
+def build_client(settings, timeout):
+    """Build the provider SDK client for one chat-completion surface."""
     if settings["provider"] == "openai":
-        from langchain_openai import ChatOpenAI
+        from openai import OpenAI
 
-        return ChatOpenAI(**kwargs)
+        return OpenAI(api_key=settings["api_key"], base_url=settings["base_url"], timeout=timeout)
     if settings["provider"] == "anthropic":
-        from langchain_anthropic import ChatAnthropic
+        from anthropic import Anthropic
 
-        # The Messages API mandates max_tokens; raise langchain's 1024
-        # default so thinking models keep budget for the visible answer.
-        kwargs["max_tokens"] = LLM_ANTHROPIC_MAX_OUTPUT_TOKENS
-        return ChatAnthropic(**kwargs)
+        return Anthropic(api_key=settings["api_key"], base_url=settings["base_url"], timeout=timeout)
     raise ValidationError("unsupported LLM provider; use openai or anthropic")
-
-
-def response_text(response):
-    content = getattr(response, "content", "")
-    if isinstance(content, str):
-        return content.strip()
-    parts = []
-    for block in content or []:
-        if isinstance(block, dict) and block.get("type") == "text":
-            parts.append(str(block.get("text") or ""))
-        elif isinstance(block, str):
-            parts.append(block)
-    return "\n".join(parts).strip()
 
 
 def internal_chat(prompt, settings, timeout=120, temperature=None):
     """Run one chat completion through the configured provider and return
     the response text."""
     validate_llm_settings(settings)
-    model = build_chat_model(settings, timeout=timeout, temperature=temperature)
-    from langchain_core.messages import HumanMessage
-
+    client = build_client(settings, timeout=timeout)
     try:
-        response = model.invoke([HumanMessage(content=prompt)])
+        if settings["provider"] == "openai":
+            # No max_tokens cap: reasoning models spend part of a capped
+            # budget on hidden thinking blocks and can come back empty.
+            kwargs = {"model": settings["model"], "messages": [{"role": "user", "content": prompt}]}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            response = client.chat.completions.create(**kwargs)
+            return (response.choices[0].message.content or "").strip()
+        kwargs = {
+            "model": settings["model"],
+            # The Messages API mandates max_tokens; keep it far above the
+            # report so thinking models retain budget for the visible answer.
+            "max_tokens": LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = client.messages.create(**kwargs)
+        return "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        ).strip()
     except Exception as exc:
         raise RuntimeError(f"internal agent LLM call failed: {exc}") from exc
-    return response_text(response)
 
 
 def internal_voice_todo_items(transcript, timeout=120):

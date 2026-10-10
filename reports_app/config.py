@@ -66,9 +66,10 @@ LLM_API_KEY_ENV_VARS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
 }
-# The Anthropic Messages API requires max_tokens and langchain-anthropic
-# otherwise defaults to a tiny 1024, which reasoning models burn on hidden
-# thinking and come back empty. Override it with the practical output ceiling.
+# The Anthropic Messages API requires max_tokens (there is no unlimited
+# option), and reasoning models burn budget on hidden thinking blocks.
+# Keep the request at the practical output ceiling so the visible answer
+# never starves.
 LLM_ANTHROPIC_MAX_OUTPUT_TOKENS = 32768
 QUEUE_CAPACITY_SETTING = "queue_capacity"
 QUEUE_PARALLELISM_SETTING = "queue_parallelism"
