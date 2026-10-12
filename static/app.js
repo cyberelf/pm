@@ -2501,8 +2501,8 @@ function renderReport(ws) {
   $("tab-report").innerHTML = `
     <div class="panel">
       <div class="panel-head">
-        <div class="panel-title"><h2>当前周报</h2><span>最近一次成功生成的 Markdown</span></div>
-        <div class="panel-actions">${ws.report ? `<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
+        <div class="panel-title"><h2>当前周报</h2>${ws.report && ws.report.edited_at ? '<span class="status edited">已手工调整</span>' : ""}<span>最近一次成功生成的 Markdown</span></div>
+        <div class="panel-actions">${ws.report ? `<button onclick="openReportEditor()">编辑</button><button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
       </div>
       ${jobNotice}
       ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>当前项目周还没有生成周报。</p>"}
@@ -2550,6 +2550,54 @@ async function onHistoryReportToggle(details) {
 
 function exportReportPdf(weekKey) {
   window.location.href = `/api/projects/${state.projectId}/reports/${encodeURIComponent(weekKey)}/pdf`;
+}
+
+function openReportEditor() {
+  const ws = state.workspace;
+  if (!ws || !ws.report) return;
+  $("report-edit-context").textContent = `${ws.report.week_key} · 更新于 ${formatChinaTime(ws.report.updated_at)}`;
+  $("report-edit-content").value = ws.report.content_md || "";
+  const error = $("report-edit-error");
+  error.textContent = "";
+  error.classList.add("hidden");
+  $("report-edit-dialog").showModal();
+}
+
+async function submitReportEdit(event) {
+  event.preventDefault();
+  const ws = state.workspace;
+  if (!ws || !ws.report) return;
+  const content = $("report-edit-content").value;
+  const error = $("report-edit-error");
+  error.textContent = "";
+  error.classList.add("hidden");
+  if (!content.trim()) {
+    error.textContent = "周报内容不能为空。";
+    error.classList.remove("hidden");
+    return;
+  }
+  const submit = $("report-edit-submit");
+  submit.disabled = true;
+  try {
+    const data = await api(`/api/projects/${state.projectId}/reports/${encodeURIComponent(ws.report.week_key)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content_md: content }),
+    });
+    Object.assign(ws.report, {
+      content_md: content,
+      content_html: data.content_html,
+      updated_at: data.updated_at,
+      edited_at: data.edited_at,
+    });
+    $("report-edit-dialog").close();
+    toast("周报已保存");
+    render();
+  } catch (exc) {
+    error.textContent = exc.message || "保存失败，请重试。";
+    error.classList.remove("hidden");
+  } finally {
+    submit.disabled = false;
+  }
 }
 
 const reportJobs = new Map();
@@ -2638,6 +2686,9 @@ function confirmProjectGeneration(projectId) {
   const project = state.projects.find((item) => item.id === projectId);
   if (!project) return;
   state.pendingReportProjectId = projectId;
+  const edited = project.report_edited
+    || (projectId === state.projectId && state.workspace && state.workspace.report && !!state.workspace.report.edited_at);
+  $("report-confirm-edit-warning").classList.toggle("hidden", !edited);
   $("report-confirm-message").textContent = `项目「${project.name}」将生成或覆盖当前项目周的可见周报。`;
   $("report-confirm-dialog").showModal();
 }
@@ -3105,6 +3156,8 @@ $("report-confirm-form").onsubmit = async (event) => {
 $("report-confirm-dialog").oncancel = () => {
   state.pendingReportProjectId = null;
 };
+$("cancel-report-edit").onclick = () => $("report-edit-dialog").close();
+$("report-edit-form").onsubmit = submitReportEdit;
 $("cancel-close-todo").onclick = () => $("close-todo-dialog").close();
 $("cancel-todo-delete").onclick = () => {
   state.pendingDeleteTodoId = null;

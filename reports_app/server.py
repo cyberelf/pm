@@ -657,6 +657,11 @@ class Handler(BaseHTTPRequestHandler):
                 ):
                     project = dict(row)
                     project["progress_status"] = progress_status(conn, project["id"])
+                    edited = conn.execute(
+                        "SELECT edited_at FROM weekly_reports WHERE project_id = ? AND week_key = ?",
+                        (project["id"], current_week_key(project["timezone"])),
+                    ).fetchone()
+                    project["report_edited"] = bool(edited and edited["edited_at"])
                     projects.append(project)
                 self.json(
                     {
@@ -918,6 +923,14 @@ class Handler(BaseHTTPRequestHandler):
                         self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
                         return
                     self.json(archived)
+                    return
+                if len(parts) == 5 and parts[3] == "reports" and method == "PUT":
+                    updated = save_report_edit(conn, project_id, parts[4], self.body_json())
+                    if not updated:
+                        self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
+                        return
+                    conn.commit()
+                    self.json(updated)
                     return
                 if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
                     self.report_pdf(conn, project_id, parts[4])
@@ -1185,6 +1198,31 @@ def report_archive(conn, project_id, week_key):
     raw = item.pop("supplement_json") or ""
     item["supplement"] = json.loads(raw) if raw else None
     return item
+
+
+def save_report_edit(conn, project_id, week_key, payload):
+    """Apply a manual edit to the current project week's report. Historical
+    weeks stay read-only and editing never creates a report row. Returns the
+    updated payload for the API response, or None when no report row exists."""
+    project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project or week_key != current_week_key(project["timezone"]):
+        raise ValidationError("only the current project week report can be edited")
+    content_md = (payload or {}).get("content_md")
+    if not isinstance(content_md, str) or not content_md.strip():
+        raise ValidationError("report content is required")
+    now = iso_now()
+    cur = conn.execute(
+        "UPDATE weekly_reports SET content_md = ?, edited_at = ?, updated_at = ? WHERE project_id = ? AND week_key = ?",
+        (content_md, now, now, project_id, week_key),
+    )
+    if cur.rowcount != 1:
+        return None
+    return {
+        "week_key": week_key,
+        "content_html": render_markdown(content_md),
+        "updated_at": now,
+        "edited_at": now,
+    }
 
 
 def source_diagnostics(conn, project_id, week_key):

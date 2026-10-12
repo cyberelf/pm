@@ -598,6 +598,7 @@ body.todo-drag-in-progress { cursor: grabbing; user-select: none; -webkit-user-s
 .todo-description-input { min-height: 128px; padding: 9px; font-family: var(--mono-font); font-size: 12px; }
 .todo-autosave-hint { color: var(--muted); font-size: 11px; }
 .dialog-context { border-radius: var(--radius-md); background: var(--surface-soft); padding: 10px 12px; color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.dialog-edit-warning { border-radius: var(--radius-md); background: var(--warning-soft); color: var(--warning-ink); padding: 8px 10px; font-size: 13px; }
 .tab-panel { min-width: 0; display: grid; gap: 24px; }
 .hidden { display: none !important; }
 .visually-hidden {
@@ -882,6 +883,7 @@ span.autosave-status { text-align: left; }
 .status.disabled { background: var(--surface-strong); color: var(--muted); }
 .status.skipped { background: var(--surface-strong); color: var(--muted); }
 .status.queued { background: var(--warning-soft); color: var(--warning-ink); }
+.status.edited { background: var(--warning-soft); color: var(--warning-ink); }
 .status.running { background: var(--accent-soft); color: var(--accent-strong); }
 .task-queue-progress { position: fixed; left: 18px; bottom: 18px; z-index: 60; max-width: min(320px, calc(100vw - 36px)); border-radius: var(--radius-md); background: var(--surface-dark); color: var(--on-dark); padding: 9px 12px; font-size: 13px; line-height: 1.5; box-shadow: var(--shadow-elevated); }
 .task-queue-progress small { display: block; margin-bottom: 2px; color: var(--on-dark-soft); font-size: 11px; }

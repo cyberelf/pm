@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=56" />
+    <link rel="stylesheet" href="/styles.css?v=57" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -351,10 +351,26 @@
           <h2>生成本周周报？</h2>
           <p id="report-confirm-message"></p>
           <span>系统将收集本周新增资料和 GitHub / GitLab commits，并调用项目配置的本地 CLI。</span>
+          <span id="report-confirm-edit-warning" class="dialog-edit-warning hidden">当前周报包含手工修改，重新生成会覆盖这些修改。</span>
         </div>
         <div class="modal-actions message-actions">
           <button id="cancel-report-generation" type="button">取消</button>
           <button class="primary" value="default">确认生成</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="report-edit-dialog">
+      <form method="dialog" id="report-edit-form" class="modal-form">
+        <h2>编辑当前周报</h2>
+        <p id="report-edit-context" class="dialog-context"></p>
+        <label>Markdown 内容
+          <textarea id="report-edit-content" rows="16" spellcheck="false"></textarea>
+        </label>
+        <p id="report-edit-error" class="login-error hidden"></p>
+        <div class="modal-actions">
+          <button id="cancel-report-edit" type="button" value="cancel">取消</button>
+          <button id="report-edit-submit" class="primary" value="default">保存</button>
         </div>
       </form>
     </dialog>
@@ -407,6 +423,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=60"></script>
+    <script src="/app.js?v=61"></script>
   </body>
 </html>

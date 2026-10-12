@@ -2774,6 +2774,246 @@ class CoreTest(unittest.TestCase):
         self.assertNotIn("content_html", data["report_history"][1], "archived bodies must load on demand")
         self.assertNotIn("content_md", data["report_history"][1])
 
+    def seed_current_week_report(self, content_md="# Current Report"):
+        week_key = current_week_key("Asia/Shanghai")
+        self.conn.execute(
+            """
+            INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
+            VALUES (?, ?, ?, 1, '2026-06-29T00:00:00+00:00', '2026-06-29T00:00:00+00:00')
+            """,
+            (self.project_id, week_key, content_md),
+        )
+        self.conn.commit()
+        return week_key
+
+    def test_report_edit_endpoint_round_trip(self):
+        week_key = self.seed_current_week_report()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/{self.project_id}/reports/{week_key}",
+                body=json.dumps({"content_md": "# Edited\n\n手工调整正文"}),
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["week_key"], week_key)
+            self.assertIn("<h1>Edited</h1>", payload["content_html"])
+            self.assertTrue(payload["edited_at"])
+            self.assertEqual(payload["updated_at"], payload["edited_at"])
+
+            data = workspace(self.conn, self.project_id)
+            self.assertEqual(data["report"]["content_md"], "# Edited\n\n手工调整正文")
+            self.assertIn("<h1>Edited</h1>", data["report"]["content_html"])
+            self.assertTrue(data["report"]["edited_at"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "GET", f"/api/projects/{self.project_id}/reports/{week_key}")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 200)
+            self.assertIn("<h1>Edited</h1>", payload["content_html"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_report_edit_rejects_invalid_input(self):
+        week_key = self.seed_current_week_report()
+        self.conn.execute(
+            """
+            INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)
+            VALUES (?, '2026-W25', '# Old Report', 1, '2026-06-21T00:00:00+00:00', '2026-06-21T00:00:00+00:00')
+            """,
+            (self.project_id,),
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/{self.project_id}/reports/{week_key}",
+                body=json.dumps({"content_md": "   "}),
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 400)
+            self.assertIn("content", payload["error"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/{self.project_id}/reports/1999-W01",
+                body=json.dumps({"content_md": "# Edited"}),
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 400)
+            self.assertIn("current", payload["error"])
+
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/{self.project_id}/reports/2026-W25",
+                body=json.dumps({"content_md": "# Edited"}),
+            )
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 400)
+            stored = self.conn.execute(
+                "SELECT content_md FROM weekly_reports WHERE project_id = ? AND week_key = '2026-W25'",
+                (self.project_id,),
+            ).fetchone()
+            self.assertEqual(stored["content_md"], "# Old Report")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_report_edit_not_found_cases(self):
+        week_key = self.seed_current_week_report()
+        other_id = auth.create_user(self.conn, "erin", "secret1", is_admin=False)
+        other_project_id = create_project(
+            self.conn,
+            {"name": "Erin Project", "start_date": "2026-06-27", "timezone": "Asia/Shanghai"},
+            {"id": other_id, "username": "erin"},
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            # own project whose current week has no report row yet
+            own_empty_project_id = create_project(
+                self.conn,
+                {"name": "No Report Yet", "start_date": "2026-06-27", "timezone": "Asia/Shanghai"},
+                self.user,
+            )
+            self.conn.commit()
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/{own_empty_project_id}/reports/{current_week_key('Asia/Shanghai')}",
+                body=json.dumps({"content_md": "# Edited"}),
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 404)
+            self.assertEqual(payload["error"], "weekly report not found")
+
+            # another user's project is invisible (404, not 403)
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/{other_project_id}/reports/{week_key}",
+                body=json.dumps({"content_md": "# Edited"}),
+            )
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            self.assertEqual(response.status, 404)
+            self.assertEqual(payload["error"], "project not found")
+
+            # unknown project id
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(
+                client,
+                "PUT",
+                f"/api/projects/999999/reports/{week_key}",
+                body=json.dumps({"content_md": "# Edited"}),
+            )
+            response = client.getresponse()
+            response.read()
+            client.close()
+            self.assertEqual(response.status, 404)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_regeneration_resets_edited_at(self):
+        generate_report(self.conn, self.project_id, "manual", force=True)
+        week_key = current_week_key("Asia/Shanghai")
+        self.conn.execute(
+            "UPDATE weekly_reports SET edited_at = ? WHERE project_id = ? AND week_key = ?",
+            (iso_now(), self.project_id, week_key),
+        )
+        self.conn.commit()
+        generate_report(self.conn, self.project_id, "manual", force=True)
+        row = self.conn.execute(
+            "SELECT edited_at, content_md FROM weekly_reports WHERE project_id = ? AND week_key = ?",
+            (self.project_id, week_key),
+        ).fetchone()
+        self.assertEqual(row["edited_at"], "")
+        self.assertTrue(row["content_md"].strip())
+        count = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM weekly_reports WHERE project_id = ?", (self.project_id,)
+        ).fetchone()["n"]
+        self.assertEqual(count, 1)
+
+    def test_state_flags_report_edited(self):
+        week_key = self.seed_current_week_report()
+        self.conn.execute(
+            "UPDATE weekly_reports SET edited_at = ? WHERE project_id = ? AND week_key = ?",
+            (iso_now(), self.project_id, week_key),
+        )
+        self.conn.commit()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "GET", "/api/state")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            project = next(item for item in payload["projects"] if item["id"] == self.project_id)
+            self.assertTrue(project["report_edited"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        generate_report(self.conn, self.project_id, "manual", force=True)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            self.api_request(client, "GET", "/api/state")
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            client.close()
+            project = next(item for item in payload["projects"] if item["id"] == self.project_id)
+            self.assertFalse(project["report_edited"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_scheduled_duplicate_skip_but_manual_forces(self):
         save_weekly_update(self.conn, self.project_id, {"completed": "A"})
         generate_report(self.conn, self.project_id, "manual", force=True)

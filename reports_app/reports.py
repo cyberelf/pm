@@ -230,7 +230,7 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE weekly_reports SET content_md = ?, supplement_json = ?, latest_job_id = ?, updated_at = ? WHERE id = ?",
+                "UPDATE weekly_reports SET content_md = ?, supplement_json = ?, latest_job_id = ?, edited_at = '', updated_at = ? WHERE id = ?",
                 (output_md, supplement_json, job_id, completed, existing["id"]),
             )
         else:

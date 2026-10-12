@@ -132,3 +132,22 @@ The system SHALL store weekly reports in Markdown format by default and render t
 #### Scenario: Export weekly report as PDF
 - **WHEN** a user chooses to export a current or historical weekly report as PDF
 - **THEN** the system generates or reuses a cached PDF for that report and returns it as a downloadable file
+
+### Requirement: Manual edit of the current weekly report
+The system SHALL allow the workspace user to edit the Markdown body of the current project week's generated report in place, while historical weekly reports stay read-only.
+
+#### Scenario: Save a manual report edit
+- **WHEN** the workspace user saves an edited Markdown body for the current project week's report
+- **THEN** the system stores the edited content, marks the report as manually edited, and renders the edited content in the workspace
+
+#### Scenario: Regeneration overwrites manual edits
+- **WHEN** the current project week's report is regenerated after a manual edit
+- **THEN** the system replaces the report content with the generated Markdown and clears the manual-edit mark
+
+#### Scenario: Confirm regeneration warns about manual edits
+- **WHEN** the workspace user confirms generation for a project whose current week report is marked as manually edited
+- **THEN** the confirmation dialog states that regeneration will overwrite the manual changes
+
+#### Scenario: Editing is restricted to the current week
+- **WHEN** an edit request targets any week other than the project's current week
+- **THEN** the system rejects the request and keeps the historical report unchanged

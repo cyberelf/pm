@@ -133,3 +133,9 @@
 - [x] 12.1 Route AI template design through the shared task queue with duplicate and capacity guards instead of a synchronous request
 - [x] 12.2 Save the generated template to the project automatically on task success and record failures on the task
 - [x] 12.3 Surface template task progress through the queue snapshot with completion and failure toasts
+
+## 13. Manual current-week report edit
+
+- [ ] 13.1 Track manual edits with `weekly_reports.edited_at` (schema + migration) and clear it when regeneration overwrites the row
+- [ ] 13.2 Accept manual Markdown edits for the current week only via PUT /api/projects/{id}/reports/{week_key}, and flag edited projects in /api/state
+- [ ] 13.3 Add the 编辑 dialog and 已手工调整 badge to the report panel, and warn in the generate confirmation when the current week report is manually edited

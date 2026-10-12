@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS weekly_reports (
     latest_job_id INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    edited_at TEXT NOT NULL DEFAULT '',
     UNIQUE(project_id, week_key)
 );
 
@@ -312,6 +313,8 @@ def migrate_schema(conn):
     report_columns = {row["name"] for row in conn.execute("PRAGMA table_info(weekly_reports)")}
     if "supplement_json" not in report_columns:
         conn.execute("ALTER TABLE weekly_reports ADD COLUMN supplement_json TEXT NOT NULL DEFAULT ''")
+    if "edited_at" not in report_columns:
+        conn.execute("ALTER TABLE weekly_reports ADD COLUMN edited_at TEXT NOT NULL DEFAULT ''")
     conn.execute(
         """
         DELETE FROM github_repos
