@@ -535,20 +535,20 @@ globalThis.fetch = async (path, options) => {
         self.assertIn(".todo-card-star.starred {", styles)
         self.assertIn(".todo-card-ghost .todo-card-star { display: none; }", styles)
 
-    def test_todo_closed_lane_fold_markup_and_scroll_loader_exist(self):
+    def test_todo_closed_lane_fold_markup_exists(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
-        # 已关闭列：当天完成的直接展示，更早的折叠；下拉或点击按批展开
+        # 已关闭列：当天完成的直接展示，更早的默认折叠；折叠条固定列尾，点击展开/收起
         self.assertIn("function renderTodoColumnItems(", source)
         self.assertIn("function isClosedToday(todo)", source)
         self.assertIn("timeZone: CHINA_TIMEZONE", source)
-        self.assertIn('id="todo-closed-fold-sentinel"', source)
-        self.assertIn("function revealMoreClosedTodos()", source)
+        self.assertNotIn("todo-closed-fold-sentinel", source)
+        self.assertNotIn("revealMoreClosedTodos", source)
+        self.assertNotIn("setupTodoClosedFold", source)
         self.assertIn("function toggleTodoClosedExpand()", source)
-        self.assertIn("setupTodoClosedFold();", source)
         self.assertIn('class="todo-fold-bar"', source)
         self.assertIn(".todo-fold-bar {", styles)
-        self.assertIn(".todo-fold-sentinel {", styles)
+        self.assertNotIn(".todo-fold-sentinel {", styles)
 
     def test_todo_star_toggle_posts_and_rerenders_board(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
@@ -626,7 +626,7 @@ globalThis.fetch = async (path, options) => {
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
-    def test_todo_closed_lane_folds_older_cards_and_reveals_on_scroll(self):
+    def test_todo_closed_lane_folds_older_cards_and_toggles_on_click(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         source = source.split('\n$("new-project").onclick', 1)[0]
         harness = r"""
@@ -677,20 +677,22 @@ globalThis.requestAnimationFrame = (callback) => callback();
   if (!board.innerHTML.includes("今天完成的")) throw new Error("today closed card should stay visible");
   if (!board.innerHTML.includes("折叠了 3 条更早完成")) throw new Error("fold bar missing");
   if (board.innerHTML.includes("旧卡片甲")) throw new Error("older closed card should be folded");
-  if (state.todoClosedRemaining !== 3) throw new Error("remaining count wrong");
-  revealMoreClosedTodos();
-  for (const title of ["旧卡片甲", "旧卡片乙", "旧卡片丙"]) {
-    if (!board.innerHTML.includes(title)) throw new Error(`reveal should show ${title}`);
+  // 折叠条之后不能再有卡片（位于列尾）
+  const barIndex = board.innerHTML.indexOf('class="todo-fold-bar"');
+  if (barIndex < 0) throw new Error("fold bar missing from markup");
+  if (board.innerHTML.slice(barIndex).includes("data-todo-id")) {
+    throw new Error("fold bar must sit at the bottom of the closed lane");
   }
-  if (state.todoClosedRemaining !== 0 || board.innerHTML.includes("todo-fold-sentinel")) {
-    throw new Error("sentinel should disappear after full reveal");
-  }
-  toggleTodoClosedExpand(); // 展开全部
+  toggleTodoClosedExpand(); // 点击展开全部更早完成
   if (!board.innerHTML.includes("收起更早完成") || !board.innerHTML.includes("旧卡片丙")) {
     throw new Error("expand should show all older cards");
   }
-  toggleTodoClosedExpand(); // 收起并重置分批进度
-  if (board.innerHTML.includes("旧卡片甲") || state.todoClosedRemaining !== 3 || !board.innerHTML.includes("折叠了 3 条更早完成")) {
+  const expandedBarIndex = board.innerHTML.indexOf('class="todo-fold-bar"');
+  if (board.innerHTML.slice(expandedBarIndex).includes("data-todo-id")) {
+    throw new Error("fold bar must stay at the bottom after expanding");
+  }
+  toggleTodoClosedExpand(); // 再点收起，更早完成的重新隐藏
+  if (board.innerHTML.includes("旧卡片甲") || !board.innerHTML.includes("折叠了 3 条更早完成")) {
     throw new Error("collapse should hide older cards again");
   }
 })().catch((error) => {
