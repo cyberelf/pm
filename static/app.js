@@ -1977,16 +1977,24 @@ function renderRepoFetchFlags(r) {
     .filter(([key]) => r.git_mode !== "gitlab" || key !== "fetch_org_projects")
     .map(([key, label, title]) => `
       <label class="repo-fetch-flag" title="${title}">
-        <input type="checkbox" aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} onchange="toggleRepoFetch(${r.id}, '${key}', this.checked)">
+        <input type="checkbox" aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} onchange="toggleRepoFetch(${r.id}, '${key}', this)">
         <span>${label}</span>
       </label>
     `).join("");
 }
 
-async function toggleRepoFetch(id, key, checked) {
+async function toggleRepoFetch(id, key, input) {
+  const checked = input.checked;
   const payload = {};
   payload[key] = checked ? 1 : 0;
-  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  try {
+    await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  } catch (error) {
+    // 保存失败时回滚勾选框与本地状态，避免界面显示服务端不存在的开关值
+    input.checked = !checked;
+    toast(error.message || "保存失败，请重试");
+    return;
+  }
   const repo = (state.workspace.repos || []).find((item) => item.id === id);
   if (repo) repo[key] = checked ? 1 : 0;
   toast(checked ? "已开启：本周报告将读取该项" : "已关闭：本周报告不再读取该项");
