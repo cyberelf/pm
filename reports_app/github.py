@@ -290,25 +290,25 @@ def add_commit(commits_by_sha, item, branch):
     }
 
 
-def _recent_between(path, since, until, token, timeout, exclude_prs=False):
-    """List entries of a sorted=updated desc endpoint inside [since, until).
+def paged_recent_items(path, since, until, request_page, unreachable_message, api_error_message, exclude_prs=False):
+    """List entries of a `sort/order_by=updated desc` endpoint inside
+    [since, until). Shared by the GitHub and GitLab window readers.
 
     Stops paging as soon as entries fall below `since` (desc sort guarantees
     the rest are older) or MAX_WEEK_ITEMS matches were collected, so busy
-    repositories cost at most one full page.
+    repositories cost at most one full page. `request_page(url)` returns the
+    same (payload, status_code, error) contract as github._request.
     """
     items = []
     for page in range(1, MAX_PAGES + 1):
         separator = "&" if "?" in path else "?"
-        payload, status_code, error = _request(
-            f"{path}{separator}per_page={PAGE_SIZE}&page={page}", token, timeout
-        )
+        payload, status_code, error = request_page(f"{path}{separator}per_page={PAGE_SIZE}&page={page}")
         if status_code is None:
-            return None, f"GitHub API unreachable: {error}"
+            return None, unreachable_message(error)
         if status_code != 200:
-            return None, _api_error(status_code, error)
+            return None, api_error_message(status_code, error)
         if not isinstance(payload, list):
-            return None, "unexpected GitHub API response shape"
+            return None, "unexpected API response shape"
         reached_old = False
         for item in payload:
             if not isinstance(item, dict):
@@ -329,6 +329,18 @@ def _recent_between(path, since, until, token, timeout, exclude_prs=False):
         if reached_old or len(payload) < PAGE_SIZE:
             break
     return items, None
+
+
+def _recent_between(path, since, until, token, timeout, exclude_prs=False):
+    return paged_recent_items(
+        path,
+        since,
+        until,
+        request_page=lambda url: _request(url, token, timeout),
+        unreachable_message=lambda error: f"GitHub API unreachable: {error}",
+        api_error_message=_api_error,
+        exclude_prs=exclude_prs,
+    )
 
 
 def _compact_pull(item):
@@ -415,46 +427,47 @@ def list_milestones(repo, token="", timeout=30):
         return {"status": "error", "status_message": _api_error(status_code, error), "milestones": []}
     items = [item for item in payload or [] if isinstance(item, dict)]
     items.sort(key=lambda item: item.get("due_on") or "9999")
+    milestones = [_compact_milestone(item) for item in items[:MAX_WEEK_ITEMS]]
     return {
         "status": "ok",
-        "status_message": f"{len(items)} milestones",
-        "milestones": [_compact_milestone(item) for item in items[:MAX_WEEK_ITEMS]],
+        "status_message": f"{len(milestones)} milestones",
+        "milestones": milestones,
     }
 
 
-ORG_PROJECTS_QUERY = """
-query($login: String!) {
-  organization(login: $login) {
-    projectsV2(first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+ORG_PROJECTS_QUERY = f"""
+query($login: String!) {{
+  organization(login: $login) {{
+    projectsV2(first: {MAX_ORG_PROJECTS}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{
       totalCount
-      nodes {
+      nodes {{
         number
         title
         closed
         url
-        items(first: 10) {
+        items(first: {MAX_PROJECT_ITEMS}) {{
           totalCount
-          nodes {
+          nodes {{
             type
-            content {
-              ... on Issue { number title state url }
-              ... on PullRequest { number title state isDraft url }
-              ... on DraftIssue { title }
-            }
-            fieldValues(first: 8) {
-              nodes {
-                ... on ProjectV2ItemFieldSingleSelectValue {
+            content {{
+              ... on Issue {{ number title state url }}
+              ... on PullRequest {{ number title state isDraft url }}
+              ... on DraftIssue {{ title }}
+            }}
+            fieldValues(first: 8) {{
+              nodes {{
+                ... on ProjectV2ItemFieldSingleSelectValue {{
                   name
-                  field { ... on ProjectV2SingleSelectField { name } }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
+                  field {{ ... on ProjectV2SingleSelectField {{ name }} }}
+                }}
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}
 """
 
 
@@ -516,10 +529,11 @@ def _compact_project_item(node):
 
 
 def fetch_org_projects(org, token="", timeout=30):
-    """Bounded read of an organization's Projects (v2): the 10 most recently
-    updated boards, each with its first 10 items. Board-level read needs a
-    token with `read:project` (classic) or an org-approved fine-grained
-    token; errors are reported per org and never abort the report."""
+    """Bounded read of an organization's Projects (v2): the MAX_ORG_PROJECTS
+    most recently updated boards, each with its first MAX_PROJECT_ITEMS
+    items. Board-level read needs a token with `read:project` (classic) or an
+    org-approved fine-grained token; errors are reported per org and never
+    abort the report."""
     org = (org or "").strip()
     payload, status_code, error = _graphql(ORG_PROJECTS_QUERY, {"login": org}, token, timeout)
     if status_code is None:
@@ -549,7 +563,7 @@ def fetch_org_projects(org, token="", timeout=30):
                     _compact_project_item(item)
                     for item in (items_node.get("nodes") or [])
                     if isinstance(item, dict)
-                ][:MAX_PROJECT_ITEMS],
+                ],
             }
         )
     return {

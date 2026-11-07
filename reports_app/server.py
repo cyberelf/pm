@@ -65,7 +65,6 @@ from .config import (
 from .git_sources import (
     check_repo,
     fetch_org_projects,
-    fetch_repo_extras,
     git_auth_for_user,
     list_branches,
     load_github_tokens,
@@ -86,7 +85,7 @@ from .materials import (
     update_material_summary,
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
-from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report
+from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report, repo_extras_context
 from .task_queue import enqueue_template_generation
 from .risks import evaluate_risks, progress_status
 from .search_index import search
@@ -1620,17 +1619,10 @@ def repo_activity_detail(conn, project_id, repo_id, auth_info=None):
         raise ValidationError("repository not found")
     project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
     week_start, week_end = week_bounds(project["timezone"])
-    flags = {key: 1 if row[key] else 0 for key in FETCH_FLAG_KEYS}
-    payload = fetch_repo_extras(
-        row["repo"],
-        week_start,
-        week_end,
-        flags,
-        git_mode=row["git_mode"],
-        auth_info=auth_info,
-    )
-    payload["notes"] = row["notes"]
-    payload["fetch_flags"] = flags
+    # the extras recipe (flags → fetch → notes attachment) is shared with
+    # report context assembly so both surfaces stay in sync
+    payload = repo_extras_context(row, week_start, week_end, auth_info)
+    payload["fetch_flags"] = {key: 1 if row[key] else 0 for key in FETCH_FLAG_KEYS}
     payload["week_start"] = week_start.isoformat()
     payload["week_end"] = week_end.isoformat()
     if row["git_mode"] == "github" and row["fetch_org_projects"]:

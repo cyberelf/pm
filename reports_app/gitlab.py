@@ -14,8 +14,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 
 from .config import DEFAULT_GITLAB_SERVER, TRACK_ALL_BRANCHES
-from .github import MAX_WEEK_ITEMS, _commit_result, normalize_branches
-from .timeutil import parse_iso
+from .github import MAX_WEEK_ITEMS, _commit_result, normalize_branches, paged_recent_items
 from .validation import ValidationError, validate_gitlab_server
 
 API_PREFIX = "api/v4"
@@ -270,41 +269,15 @@ def normalize_date(value):
 
 def _recent_between(server, path, since, until, token, timeout, skip_verify=False):
     """List entries of an order_by=updated_at&sort=desc endpoint inside
-    [since, until). Same early-stop bounds as github._recent_between."""
-    items = []
-    for page in range(1, MAX_PAGES + 1):
-        separator = "&" if "?" in path else "?"
-        payload, status_code, error = _request(
-            server,
-            f"{path}{separator}per_page={PAGE_SIZE}&page={page}",
-            token,
-            timeout,
-            skip_verify=skip_verify,
-        )
-        if status_code is None:
-            return None, _unreachable_message(error)
-        if status_code != 200:
-            return None, _api_error(status_code, error)
-        if not isinstance(payload, list):
-            return None, "unexpected GitLab API response shape"
-        reached_old = False
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            updated = parse_iso(item.get("updated_at"))
-            if updated is None:
-                continue
-            if until is not None and updated >= until:
-                continue
-            if since is not None and updated < since:
-                reached_old = True
-                break
-            items.append(item)
-            if len(items) >= MAX_WEEK_ITEMS:
-                return items, None
-        if reached_old or len(payload) < PAGE_SIZE:
-            break
-    return items, None
+    [since, until); the paging/window/bound loop is shared with GitHub."""
+    return paged_recent_items(
+        path,
+        since,
+        until,
+        request_page=lambda url: _request(server, url, token, timeout, skip_verify=skip_verify),
+        unreachable_message=_unreachable_message,
+        api_error_message=_api_error,
+    )
 
 
 def _author_name(item):
@@ -385,20 +358,25 @@ def _compact_milestone(item):
 
 
 def list_milestones(repo, server="", token="", timeout=30, skip_verify=False):
-    """Project milestones plus ancestor group milestones, soonest due first."""
-    items, error = _paginate(
+    """Project milestones plus ancestor group milestones, soonest due first.
+    A single bounded page (like the GitHub reader) keeps the per-repo cost
+    at one round trip."""
+    payload, status_code, error = _request(
         server,
-        f"projects/{project_path(repo)}/milestones?state=all&include_ancestors=true",
+        f"projects/{project_path(repo)}/milestones?state=all&include_ancestors=true&per_page={PAGE_SIZE}",
         token,
         timeout,
         skip_verify=skip_verify,
     )
-    if error:
-        return {"status": "error", "status_message": error, "milestones": []}
-    items = [item for item in items if isinstance(item, dict)]
+    if status_code is None:
+        return {"status": "error", "status_message": _unreachable_message(error), "milestones": []}
+    if status_code != 200:
+        return {"status": "error", "status_message": _api_error(status_code, error), "milestones": []}
+    items = [item for item in payload or [] if isinstance(item, dict)]
     items.sort(key=lambda item: item.get("due_date") or "9999")
+    milestones = [_compact_milestone(item) for item in items[:MAX_WEEK_ITEMS]]
     return {
         "status": "ok",
-        "status_message": f"{len(items)} milestones",
-        "milestones": [_compact_milestone(item) for item in items[:MAX_WEEK_ITEMS]],
+        "status_message": f"{len(milestones)} milestones",
+        "milestones": milestones,
     }

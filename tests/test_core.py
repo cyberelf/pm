@@ -2184,7 +2184,10 @@ class CoreTest(unittest.TestCase):
         evidence = compact_evidence(context)
         self.assertIn("git_extras_this_week", evidence)
         self.assertIn("git_org_projects", evidence)
-        self.assertIn("pulls=1", input_summary(context))
+        summary = input_summary(context)
+        self.assertIn("pulls=1", summary)
+        # the metric counts boards, not deduplicated organizations
+        self.assertIn("org_boards=0", summary)
         prompt = build_internal_evidence_prompt(context)
         self.assertIn("git_extras_this_week", prompt)
         self.assertIn("git_org_projects", prompt)
@@ -2202,8 +2205,7 @@ class CoreTest(unittest.TestCase):
             "milestones": [],
         }
         org_result = [{"org": "owner", "status": "ok", "status_message": "", "projects": []}]
-        with mock.patch("reports_app.server.fetch_repo_extras") as extras:
-            extras.return_value = extras_result
+        with mock.patch("reports_app.server.repo_extras_context", return_value=extras_result) as extras:
             with mock.patch("reports_app.server.fetch_org_projects") as org:
                 org.return_value = org_result
                 payload = repo_activity_detail(self.conn, self.project_id, self.conn.execute("SELECT id FROM github_repos").fetchone()["id"], auth_info={})
