@@ -139,3 +139,10 @@
 - [ ] 13.1 Track manual edits with `weekly_reports.edited_at` (schema + migration) and clear it when regeneration overwrites the row
 - [ ] 13.2 Accept manual Markdown edits for the current week only via PUT /api/projects/{id}/reports/{week_key}, and flag edited projects in /api/state
 - [ ] 13.3 Add the 编辑 dialog and 已手工调整 badge to the report panel, and warn in the generate confirmation when the current week report is manually edited
+
+## 14. Optional Git activity fetch switches
+
+- [x] 14.1 Add per-repo fetch switches (PR/MR, issues, milestones) to `github_repos` with an on-demand `GET /api/projects/{id}/repos/{rid}/activity` read bounded to the current project week
+- [x] 14.2 Implement GitHub REST pull/issue/milestone readers and a bounded GraphQL read of organization Projects (v2) board items; GitLab merge-request/issue/milestone readers including ancestor group milestones
+- [x] 14.3 Deduplicate organization project reads per organization when several repos of the same org enable the switch, and feed extras plus org boards into report evidence only when switched on
+- [x] 14.4 Add the 抓取项 checkbox column to the repo table (组织Project shown for GitHub only) with save-on-toggle behavior and regression tests
