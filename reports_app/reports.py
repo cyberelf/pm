@@ -46,6 +46,9 @@ def assemble_context(conn, project_id, week_key=None):
         """,
         (project_id,),
     ).fetchall()
+    # one credential snapshot for commits, extras, and org projects so the
+    # three sections never diverge mid-assembly
+    auth_info = git_auth_for_user(conn, project["user_id"])
     previous = conn.execute(
         "SELECT content_md, updated_at FROM weekly_reports WHERE project_id = ? AND week_key = ?",
         (project_id, week_key),
@@ -103,18 +106,18 @@ def assemble_context(conn, project_id, week_key=None):
         ],
         "github_activity": [repo_activity_context(row) for row in repos],
         "git_commits_this_week": [
-            repo_commit_context(row, week_start, week_end, git_auth_for_user(conn, project["user_id"]))
+            repo_commit_context(row, week_start, week_end, auth_info)
             for row in repos
             if row["status"] == "connected"
         ],
         "git_extras_this_week": [
-            repo_extras_context(row, week_start, week_end, git_auth_for_user(conn, project["user_id"]))
+            repo_extras_context(row, week_start, week_end, auth_info)
             for row in repos
             if row["status"] == "connected" and repo_fetch_switches_on(row)
         ],
         "git_org_projects": fetch_org_projects(
             [row for row in repos if row["status"] == "connected"],
-            git_auth_for_user(conn, project["user_id"]),
+            auth_info,
         ),
         "previous_current_week_report": dict(previous) if previous else None,
         "system_prompt": get_effective_prompt(project),
@@ -129,6 +132,7 @@ def input_summary(context):
     extras = context.get("git_extras_this_week", [])
     pulls = sum(len(repo.get("pull_requests") or []) for repo in extras)
     issues = sum(len(repo.get("issues") or []) for repo in extras)
+    org_boards = sum(len(entry.get("projects") or []) for entry in context.get("git_org_projects", []))
     profile = context.get("project_profile") or {}
     plan = context.get("plan") or {}
     has_profile = bool(profile.get("description"))
@@ -141,7 +145,7 @@ def input_summary(context):
         f"commits={commits}; "
         f"pulls={pulls}; "
         f"issues={issues}; "
-        f"org_projects={len(context.get('git_org_projects', []))}; "
+        f"org_boards={org_boards}; "
         f"repos={len(context['github_activity'])}"
     )
 
