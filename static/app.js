@@ -1822,14 +1822,14 @@ function renderSettings(ws) {
     </section>
     <section id="settings-sub-git" class="source-view hidden" role="tabpanel">
       <div class="panel">
-        <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，本周 commits 会进入生成上下文</span></div>
+        <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，commits 每周进入生成上下文；抓取项决定本周 PR/MR、Issue、里程碑、组织 Project 是否一并读取</span></div>
         <div class="row">
           <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
           <input id="repo-input" placeholder="owner/repo">
           <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
           <button type="button" onclick="addRepo()">添加仓库</button>
         </div>
-        <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='5'>暂无仓库。</td></tr>"}</tbody></table>
+        <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>抓取项</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='6'>暂无仓库。</td></tr>"}</tbody></table>
       </div>
     </section>
     <section id="settings-sub-diagnostics" class="source-view hidden" role="tabpanel">
@@ -1956,12 +1956,40 @@ function renderRepoRow(r) {
       <td data-label="仓库"><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}</td>
       <td data-label="跟踪分支">${renderBranchPicker(r)}</td>
       <td data-label="补充说明"><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
+      <td data-label="抓取项"><div class="repo-fetch-flags">${renderRepoFetchFlags(r)}</div></td>
       <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
       <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
     </tr>
   `;
+}
+
+const REPO_FETCH_FLAGS = [
+  ["fetch_pull_requests", "PR", "抓取本周更新的 Pull Request / Merge Request"],
+  ["fetch_issues", "Issue", "抓取本周更新的 Issue"],
+  ["fetch_milestones", "里程碑", "抓取仓库里程碑及到期状态"],
+  ["fetch_org_projects", "组织Project", "读取 GitHub 组织 Projects 看板（同组织多个仓库只读取一次）"],
+];
+
+function renderRepoFetchFlags(r) {
+  return REPO_FETCH_FLAGS
+    .filter(([key]) => r.git_mode !== "gitlab" || key !== "fetch_org_projects")
+    .map(([key, label, title]) => `
+      <label class="repo-fetch-flag" title="${title}">
+        <input type="checkbox" aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} onchange="toggleRepoFetch(${r.id}, '${key}', this.checked)">
+        <span>${label}</span>
+      </label>
+    `).join("");
+}
+
+async function toggleRepoFetch(id, key, checked) {
+  const payload = {};
+  payload[key] = checked ? 1 : 0;
+  await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+  const repo = (state.workspace.repos || []).find((item) => item.id === id);
+  if (repo) repo[key] = checked ? 1 : 0;
+  toast(checked ? "已开启：本周报告将读取该项" : "已关闭：本周报告不再读取该项");
 }
 
 function renderBranchPicker(repo) {
