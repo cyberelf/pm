@@ -15,7 +15,7 @@ from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pypdf import PdfWriter
@@ -47,9 +47,13 @@ from reports_app.db import create_project, ensure_bootstrap_admin, init_db, conn
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
 from reports_app.gitlab import list_branches as gitlab_list_branches
+from reports_app.gitlab import list_issues as gitlab_list_issues
+from reports_app.gitlab import list_milestones as gitlab_list_milestones
+from reports_app.gitlab import list_merge_requests as gitlab_list_merge_requests
 from reports_app.gitlab import weekly_commits as gitlab_weekly_commits
 from reports_app.github import check_repo as github_check_repo, token_kind
-from reports_app.github import list_branches, weekly_commits
+from reports_app.github import fetch_org_projects as github_fetch_org_projects
+from reports_app.github import list_branches, list_issues, list_milestones, list_pull_requests, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
     build_summary_prompt,
@@ -65,12 +69,12 @@ from reports_app.materials import (
     update_material_summary,
 )
 from reports_app.pdf_export import build_report_pdf_html, pdf_filename
-from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, generate_report_template, strip_template_fences
+from reports_app.reports import FAKE_SUGGESTED_TEMPLATE, assemble_context, get_effective_prompt, build_internal_evidence_prompt, build_template_suggestion_prompt, collect_template_sources, compact_evidence, compact_previous_report, fail_stale_generation_jobs, generate_report, changed_since_last_success, fake_provider_enabled, input_summary, invoke_provider, latest_report_markdown, generate_report_template, strip_template_fences
 from reports_app.task_queue import QueueFullError, enqueue_template_generation, get_task_queue, queue_capacity, queue_parallelism
 from reports_app.risks import evaluate_risks, progress_status
 from reports_app.search_index import chunk_text, embed_texts, search
-from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
-from reports_app.timeutil import current_week_key, iso_now
+from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, repo_activity_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
+from reports_app.timeutil import current_week_key, iso_now, week_bounds
 import time
 from reports_app.todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
 from reports_app.voice_todos import (
@@ -1956,6 +1960,277 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(manual["excerpt"], "manual context")
         self.assertEqual(context["git_commits_this_week"][0]["commits"][0]["message"], "ship")
         self.assertEqual(context["github_activity"][0]["tracked_branches"], ["main", "release"])
+
+    def _connected_repo(self, repo, **flags):
+        self.conn.execute(
+            f"""
+            INSERT INTO github_repos
+            (project_id, repo, git_mode, tracked_branches_json, status, status_message, activity_summary,
+             fetch_pull_requests, fetch_issues, fetch_milestones, fetch_org_projects, created_at, updated_at)
+            VALUES (?, ?, 'github', '["main"]', 'connected', 'ok', '', ?, ?, ?, ?, '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
+            """,
+            (self.project_id, repo, flags.get("fetch_pull_requests", 0), flags.get("fetch_issues", 0), flags.get("fetch_milestones", 0), flags.get("fetch_org_projects", 0)),
+        )
+
+    @staticmethod
+    def _connected_result():
+        return {
+            "status": "connected",
+            "status_message": "ok",
+            "activity_summary": "summary",
+            "last_activity_at": "2026-06-27T00:00:00Z",
+            "default_branch": "main",
+        }
+
+    def test_repo_fetch_flags_persist_update_and_readd_keeps_values(self):
+        with mock.patch("reports_app.server.check_repo") as mocked:
+            mocked.return_value = self._connected_result()
+            repo_id = add_repo(
+                self.conn,
+                self.project_id,
+                {"repo": "owner/flags", "fetch_pull_requests": True, "fetch_issues": 1},
+            )
+        row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
+        self.assertEqual(
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
+            (1, 1, 0, 0),
+        )
+        update_repo_notes(self.conn, self.project_id, repo_id, {"fetch_milestones": True, "fetch_org_projects": True})
+        row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
+        self.assertEqual(
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
+            (1, 1, 1, 1),
+        )
+        update_repo_notes(self.conn, self.project_id, repo_id, {"fetch_issues": False})
+        row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
+        self.assertEqual(
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
+            (1, 0, 1, 1),
+        )
+        with mock.patch("reports_app.server.check_repo") as mocked:
+            mocked.return_value = self._connected_result()
+            add_repo(self.conn, self.project_id, {"repo": "owner/flags", "fetch_pull_requests": False})
+        row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
+        self.assertEqual(
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
+            (0, 0, 1, 1),
+        )
+        payload = workspace(self.conn, self.project_id)
+        flags = {key: item[key] for key in ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_org_projects") for item in payload["repos"] if item["id"] == repo_id}
+        self.assertEqual(flags, {"fetch_pull_requests": 0, "fetch_issues": 0, "fetch_milestones": 1, "fetch_org_projects": 1})
+
+    def test_github_extras_fetch_filters_window_and_compacts(self):
+        week_start, week_end = week_bounds("Asia/Shanghai")
+        inside = (week_start + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        future = (week_end + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        old = "2020-01-01T00:00:00Z"
+
+        def fake_request(path, token, timeout):
+            if path.startswith("/repos/owner/repo/pulls"):
+                return [
+                    {"number": 3, "title": "future", "state": "open", "draft": False, "merged_at": None, "user": {"login": "u3"}, "updated_at": future, "html_url": "u3"},
+                    {"number": 2, "title": "in week ", "state": "closed", "draft": False, "merged_at": "2026-06-28T00:00:00Z", "user": {"login": "u2"}, "updated_at": inside, "html_url": "https://github.com/owner/repo/pull/2"},
+                    {"number": 1, "title": "old", "state": "merged", "draft": False, "merged_at": old, "user": {"login": "u1"}, "updated_at": old, "html_url": "u1"},
+                ], 200, None
+            if path.startswith("/repos/owner/repo/issues"):
+                return [
+                    {"number": 9, "title": "pr in disguise", "state": "open", "updated_at": inside, "pull_request": {"url": "x"}, "user": {"login": "u"}, "html_url": "u9"},
+                    {"number": 4, "title": "real issue", "state": "open", "updated_at": inside, "user": {"login": "u"}, "html_url": "https://github.com/owner/repo/issues/4"},
+                ], 200, None
+            raise AssertionError(f"unexpected path {path}")
+
+        with mock.patch("reports_app.github._request", side_effect=fake_request):
+            pulls = list_pull_requests("owner/repo", week_start, week_end)
+            issues = list_issues("owner/repo", week_start, week_end)
+        self.assertEqual(pulls["status"], "ok")
+        self.assertEqual([item["number"] for item in pulls["pull_requests"]], [2])
+        self.assertEqual(pulls["pull_requests"][0]["title"], "in week")
+        self.assertTrue(pulls["pull_requests"][0]["merged"])
+        self.assertEqual(pulls["pull_requests"][0]["url"], "https://github.com/owner/repo/pull/2")
+        self.assertEqual([item["number"] for item in issues["issues"]], [4])
+
+    def test_github_milestones_sort_due_first_and_compact(self):
+        payload = [
+            {"number": 2, "title": "later", "state": "open", "due_on": "2026-12-31T00:00:00Z", "open_issues": 3, "closed_issues": 1, "updated_at": "2026-06-01T00:00:00Z", "html_url": "m2"},
+            {"number": 1, "title": "sooner", "state": "open", "due_on": "2026-07-31T00:00:00Z", "open_issues": 0, "closed_issues": 2, "updated_at": "2026-06-01T00:00:00Z", "html_url": "m1"},
+            {"number": 3, "title": "no due", "state": "open", "due_on": None, "open_issues": 1, "closed_issues": 0, "updated_at": "2026-06-01T00:00:00Z", "html_url": "m3"},
+        ]
+        with mock.patch("reports_app.github._request", return_value=(payload, 200, None)):
+            result = list_milestones("owner/repo")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual([item["number"] for item in result["milestones"]], [1, 2, 3])
+        self.assertEqual(result["milestones"][2]["due_on"], "")
+
+    def test_github_org_projects_read_is_bounded_and_tolerant(self):
+        payload = {
+            "data": {
+                "organization": {
+                    "projectsV2": {
+                        "totalCount": 2,
+                        "nodes": [
+                            {
+                                "number": 7,
+                                "title": " Roadmap ",
+                                "closed": False,
+                                "url": "https://github.com/orgs/owner/projects/7",
+                                "items": {
+                                    "totalCount": 12,
+                                    "nodes": [
+                                        {
+                                            "type": "ISSUE",
+                                            "content": {"number": 4, "title": "ship login", "state": "OPEN", "url": "i4"},
+                                            "fieldValues": {"nodes": [{"name": "In Progress", "field": {"name": "Status"}}]},
+                                        },
+                                        {"type": "DRAFT_ISSUE", "content": {"title": "draft card"}, "fieldValues": {"nodes": []}},
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+        with mock.patch("reports_app.github._graphql", return_value=(payload, 200, None)) as graphql:
+            result = github_fetch_org_projects("owner")
+        graphql.assert_called_once()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["projects"][0]["title"], "Roadmap")
+        self.assertEqual(result["projects"][0]["item_count"], 12)
+        first_item = result["projects"][0]["items"][0]
+        self.assertEqual(first_item["status"], "In Progress")
+        self.assertEqual(first_item["state"], "open")
+        self.assertEqual(result["projects"][0]["items"][1], {"type": "draft_issue", "title": "draft card", "state": "", "number": None, "url": ""})
+        with mock.patch("reports_app.github._graphql", return_value=({"errors": [{"message": "Project caching is not yet available"}]}, 200, None)):
+            failed = github_fetch_org_projects("owner")
+        self.assertEqual(failed["status"], "error")
+        self.assertIn("Project caching", failed["status_message"])
+        self.assertEqual(failed["projects"], [])
+
+    def test_gitlab_extras_fetch_compacts(self):
+        week_start, week_end = week_bounds("Asia/Shanghai")
+        inside = (week_start + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        old = "2020-01-01T00:00:00.000Z"
+
+        def fake_request(server, path, token, timeout, skip_verify=False):
+            if path.startswith("projects/group%2Fproj/merge_requests"):
+                return [
+                    {"iid": 2, "title": "in week", "state": "merged", "draft": False, "author": {"username": "u"}, "updated_at": inside, "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/2"},
+                    {"iid": 1, "title": "old", "state": "closed", "draft": False, "author": {"username": "u"}, "updated_at": old, "web_url": "mr1"},
+                ], 200, None
+            if path.startswith("projects/group%2Fproj/issues"):
+                return [
+                    {"iid": 5, "title": "bug", "state": "opened", "author": {"username": "u"}, "updated_at": inside, "web_url": "i5"},
+                ], 200, None
+            raise AssertionError(f"unexpected path {path}")
+
+        with mock.patch("reports_app.gitlab._request", side_effect=fake_request):
+            mrs = gitlab_list_merge_requests("group/proj", week_start, week_end, server="https://gitlab.example.com")
+            issues = gitlab_list_issues("group/proj", week_start, week_end, server="https://gitlab.example.com")
+        self.assertEqual([item["number"] for item in mrs["pull_requests"]], [2])
+        self.assertTrue(mrs["pull_requests"][0]["merged"])
+        self.assertEqual(mrs["pull_requests"][0]["author"], "u")
+        self.assertEqual([item["number"] for item in issues["issues"]], [5])
+
+    def test_gitlab_milestones_include_ancestors_and_sort(self):
+        payload = [
+            {"iid": 1, "title": "group milestone", "state": "active", "due_date": "2026-08-15", "updated_at": "2026-06-01T00:00:00Z", "web_url": "g1"},
+            {"iid": 2, "title": "no due", "state": "closed", "due_date": None, "updated_at": "2026-06-01T00:00:00Z", "web_url": "m2"},
+        ]
+
+        def fake_request(server, path, token, timeout, skip_verify=False):
+            self.assertIn("include_ancestors=true", path)
+            return payload, 200, None
+
+        with mock.patch("reports_app.gitlab._request", side_effect=fake_request):
+            result = gitlab_list_milestones("group/proj", server="https://gitlab.example.com")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual([item["number"] for item in result["milestones"]], [1, 2])
+        self.assertEqual(result["milestones"][1]["due_on"], "")
+
+    def test_org_projects_dedupe_one_read_per_org(self):
+        self._connected_repo("owner/a", fetch_org_projects=1)
+        self._connected_repo("owner/b", fetch_org_projects=1)
+        self._connected_repo("other/c", fetch_org_projects=1)
+        with mock.patch("reports_app.reports.weekly_commits") as commits:
+            commits.return_value = {"repo": "x", "status": "ok", "status_message": "", "commits": []}
+            with mock.patch("reports_app.git_sources.github_fetch_org_projects") as org_fetch:
+                org_fetch.side_effect = lambda org, token="", timeout=30: {"org": org, "status": "ok", "status_message": "", "projects": [{"title": f"Board-{org}"}]}
+                context, _hash = assemble_context(self.conn, self.project_id)
+        # owner/a and owner/b share one deduplicated read; other/c reads once on its own
+        self.assertEqual([call.args[0] for call in org_fetch.call_args_list], ["owner", "other"])
+        self.assertEqual([entry["org"] for entry in context["git_org_projects"]], ["owner", "other"])
+        self.assertEqual(context["git_org_projects"][0]["projects"][0]["title"], "Board-owner")
+        self.assertEqual(context["git_extras_this_week"], [])
+
+    def test_extras_enter_context_evidence_and_summary_when_switched_on(self):
+        self._connected_repo("owner/ex", fetch_pull_requests=1)
+        extras_result = {
+            "repo": "owner/ex",
+            "git_mode": "github",
+            "status": "ok",
+            "status_message": "",
+            "pull_requests": [{"number": 2, "title": "t", "state": "closed", "draft": False, "merged": True, "author": "u", "updated_at": "x", "url": "u"}],
+            "issues": [],
+            "milestones": [],
+        }
+        with mock.patch("reports_app.reports.weekly_commits") as commits:
+            commits.return_value = {"repo": "owner/ex", "status": "ok", "status_message": "", "commits": []}
+            with mock.patch("reports_app.reports.fetch_repo_extras") as extras:
+                extras.return_value = extras_result
+                context, _hash = assemble_context(self.conn, self.project_id)
+        extras.assert_called_once()
+        self.assertEqual(extras.call_args.args[3], {"fetch_pull_requests": 1, "fetch_issues": 0, "fetch_milestones": 0})
+        self.assertEqual(context["git_extras_this_week"][0]["pull_requests"][0]["title"], "t")
+        evidence = compact_evidence(context)
+        self.assertIn("git_extras_this_week", evidence)
+        self.assertIn("git_org_projects", evidence)
+        self.assertIn("pulls=1", input_summary(context))
+        prompt = build_internal_evidence_prompt(context)
+        self.assertIn("git_extras_this_week", prompt)
+        self.assertIn("git_org_projects", prompt)
+
+    def test_repo_activity_endpoint_returns_fetch_switch_data(self):
+        self._connected_repo("owner/act", fetch_pull_requests=1, fetch_org_projects=1)
+        self.conn.commit()
+        extras_result = {
+            "repo": "owner/act",
+            "git_mode": "github",
+            "status": "ok",
+            "status_message": "",
+            "pull_requests": [],
+            "issues": [],
+            "milestones": [],
+        }
+        org_result = [{"org": "owner", "status": "ok", "status_message": "", "projects": []}]
+        with mock.patch("reports_app.server.fetch_repo_extras") as extras:
+            extras.return_value = extras_result
+            with mock.patch("reports_app.server.fetch_org_projects") as org:
+                org.return_value = org_result
+                payload = repo_activity_detail(self.conn, self.project_id, self.conn.execute("SELECT id FROM github_repos").fetchone()["id"], auth_info={})
+                self.assertEqual(payload["fetch_flags"]["fetch_pull_requests"], 1)
+                self.assertTrue(payload["week_start"] and payload["week_end"])
+                self.assertEqual(payload["org_projects"], org_result)
+                extras.assert_called_once()
+                org.assert_called_once()
+
+                server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                server.db_path = self.db_path
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    client = HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+                    self.api_request(client, "GET", f"/api/projects/{self.project_id}/repos/{self.conn.execute('SELECT id FROM github_repos').fetchone()['id']}/activity")
+                    response = client.getresponse()
+                    data = json.loads(response.read())
+                    client.close()
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(data["repo"], "owner/act")
+                    self.assertEqual(data["fetch_flags"]["fetch_org_projects"], 1)
+                    self.assertEqual(data["org_projects"], org_result)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
 
     def test_previous_report_compaction_does_not_inline_body(self):
         compacted = compact_previous_report({"updated_at": "t", "content_md": "sentinel body"})

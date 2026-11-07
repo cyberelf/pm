@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 
 from .config import DEFAULT_GITLAB_SERVER, TRACK_ALL_BRANCHES
-from .github import _commit_result, normalize_branches
+from .github import MAX_WEEK_ITEMS, _commit_result, normalize_branches
+from .timeutil import parse_iso
 from .validation import ValidationError, validate_gitlab_server
 
 API_PREFIX = "api/v4"
@@ -265,3 +266,139 @@ def normalize_date(value):
         return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     except ValueError:
         return str(value or "")
+
+
+def _recent_between(server, path, since, until, token, timeout, skip_verify=False):
+    """List entries of an order_by=updated_at&sort=desc endpoint inside
+    [since, until). Same early-stop bounds as github._recent_between."""
+    items = []
+    for page in range(1, MAX_PAGES + 1):
+        separator = "&" if "?" in path else "?"
+        payload, status_code, error = _request(
+            server,
+            f"{path}{separator}per_page={PAGE_SIZE}&page={page}",
+            token,
+            timeout,
+            skip_verify=skip_verify,
+        )
+        if status_code is None:
+            return None, _unreachable_message(error)
+        if status_code != 200:
+            return None, _api_error(status_code, error)
+        if not isinstance(payload, list):
+            return None, "unexpected GitLab API response shape"
+        reached_old = False
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            updated = parse_iso(item.get("updated_at"))
+            if updated is None:
+                continue
+            if until is not None and updated >= until:
+                continue
+            if since is not None and updated < since:
+                reached_old = True
+                break
+            items.append(item)
+            if len(items) >= MAX_WEEK_ITEMS:
+                return items, None
+        if reached_old or len(payload) < PAGE_SIZE:
+            break
+    return items, None
+
+
+def _author_name(item):
+    return (item.get("author") or {}).get("username") or ""
+
+
+def list_merge_requests(repo, since, until, server="", token="", timeout=30, skip_verify=False):
+    items, error = _recent_between(
+        server,
+        f"projects/{project_path(repo)}/merge_requests?scope=all&state=all&order_by=updated_at&sort=desc",
+        since,
+        until,
+        token,
+        timeout,
+        skip_verify=skip_verify,
+    )
+    if error:
+        return {"status": "error", "status_message": error, "pull_requests": []}
+    pull_requests = [
+        {
+            "number": item.get("iid"),
+            "title": (item.get("title") or "").strip(),
+            "state": item.get("state") or "",
+            "draft": bool(item.get("draft")),
+            "merged": item.get("state") == "merged",
+            "author": _author_name(item),
+            "updated_at": item.get("updated_at"),
+            "url": item.get("web_url") or "",
+        }
+        for item in items
+    ]
+    return {
+        "status": "ok",
+        "status_message": f"{len(pull_requests)} merge requests updated in current project week",
+        "pull_requests": pull_requests,
+    }
+
+
+def list_issues(repo, since, until, server="", token="", timeout=30, skip_verify=False):
+    items, error = _recent_between(
+        server,
+        f"projects/{project_path(repo)}/issues?scope=all&state=all&order_by=updated_at&sort=desc",
+        since,
+        until,
+        token,
+        timeout,
+        skip_verify=skip_verify,
+    )
+    if error:
+        return {"status": "error", "status_message": error, "issues": []}
+    issues = [
+        {
+            "number": item.get("iid"),
+            "title": (item.get("title") or "").strip(),
+            "state": item.get("state") or "",
+            "author": _author_name(item),
+            "updated_at": item.get("updated_at"),
+            "url": item.get("web_url") or "",
+        }
+        for item in items
+    ]
+    return {
+        "status": "ok",
+        "status_message": f"{len(issues)} issues updated in current project week",
+        "issues": issues,
+    }
+
+
+def _compact_milestone(item):
+    return {
+        "number": item.get("iid"),
+        "title": (item.get("title") or "").strip(),
+        "state": item.get("state") or "",
+        "due_on": item.get("due_date") or "",
+        "updated_at": item.get("updated_at"),
+        "url": item.get("web_url") or "",
+    }
+
+
+def list_milestones(repo, server="", token="", timeout=30, skip_verify=False):
+    """Project milestones plus ancestor group milestones, soonest due first."""
+    items, error = _paginate(
+        server,
+        f"projects/{project_path(repo)}/milestones?state=all&include_ancestors=true",
+        token,
+        timeout,
+        skip_verify=skip_verify,
+    )
+    if error:
+        return {"status": "error", "status_message": error, "milestones": []}
+    items = [item for item in items if isinstance(item, dict)]
+    items.sort(key=lambda item: item.get("due_date") or "9999")
+    return {
+        "status": "ok",
+        "status_message": f"{len(items)} milestones",
+        "milestones": [_compact_milestone(item) for item in items[:MAX_WEEK_ITEMS]],
+    }

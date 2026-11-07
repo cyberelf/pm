@@ -1,4 +1,5 @@
-"""GitHub REST API access for repository status, branches, and commits.
+"""GitHub REST/GraphQL API access for repository status, branches, commits,
+pull requests, issues, milestones, and organization projects.
 
 Requests go to api.github.com directly. A per-user personal access token is
 used when configured; without one only public data is reachable and the
@@ -12,11 +13,17 @@ import urllib.request
 from urllib.parse import quote, urlencode
 
 from .config import TRACK_ALL_BRANCHES
+from .timeutil import parse_iso
 
 API_BASE = "https://api.github.com"
 PAGE_SIZE = 100
 MAX_PAGES = 5
 USER_AGENT = "zreport"
+# bounds for the optional PR/issue/milestone fetch so report evidence stays
+# small even on very busy repositories
+MAX_WEEK_ITEMS = 20
+MAX_ORG_PROJECTS = 10
+MAX_PROJECT_ITEMS = 10
 
 
 def _request(path, token, timeout):
@@ -280,4 +287,274 @@ def add_commit(commits_by_sha, item, branch):
         "date": author.get("date") or "",
         "url": item.get("html_url") or "",
         "branches": [branch],
+    }
+
+
+def _recent_between(path, since, until, token, timeout, exclude_prs=False):
+    """List entries of a sorted=updated desc endpoint inside [since, until).
+
+    Stops paging as soon as entries fall below `since` (desc sort guarantees
+    the rest are older) or MAX_WEEK_ITEMS matches were collected, so busy
+    repositories cost at most one full page.
+    """
+    items = []
+    for page in range(1, MAX_PAGES + 1):
+        separator = "&" if "?" in path else "?"
+        payload, status_code, error = _request(
+            f"{path}{separator}per_page={PAGE_SIZE}&page={page}", token, timeout
+        )
+        if status_code is None:
+            return None, f"GitHub API unreachable: {error}"
+        if status_code != 200:
+            return None, _api_error(status_code, error)
+        if not isinstance(payload, list):
+            return None, "unexpected GitHub API response shape"
+        reached_old = False
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if exclude_prs and "pull_request" in item:
+                continue
+            updated = parse_iso(item.get("updated_at"))
+            if updated is None:
+                continue
+            if until is not None and updated >= until:
+                continue
+            if since is not None and updated < since:
+                reached_old = True
+                break
+            items.append(item)
+            if len(items) >= MAX_WEEK_ITEMS:
+                return items, None
+        if reached_old or len(payload) < PAGE_SIZE:
+            break
+    return items, None
+
+
+def _compact_pull(item):
+    return {
+        "number": item.get("number"),
+        "title": (item.get("title") or "").strip(),
+        "state": item.get("state") or "",
+        "draft": bool(item.get("draft")),
+        "merged": bool(item.get("merged_at")),
+        "author": (item.get("user") or {}).get("login") or "",
+        "updated_at": item.get("updated_at"),
+        "url": item.get("html_url") or "",
+    }
+
+
+def _compact_issue(item):
+    return {
+        "number": item.get("number"),
+        "title": (item.get("title") or "").strip(),
+        "state": item.get("state") or "",
+        "author": (item.get("user") or {}).get("login") or "",
+        "updated_at": item.get("updated_at"),
+        "url": item.get("html_url") or "",
+    }
+
+
+def list_pull_requests(repo, since, until, token="", timeout=30):
+    items, error = _recent_between(
+        f"/repos/{quote(repo, safe='/')}/pulls?state=all&sort=updated&direction=desc",
+        since,
+        until,
+        token,
+        timeout,
+    )
+    if error:
+        return {"status": "error", "status_message": error, "pull_requests": []}
+    return {
+        "status": "ok",
+        "status_message": f"{len(items)} pull requests updated in current project week",
+        "pull_requests": [_compact_pull(item) for item in items],
+    }
+
+
+def list_issues(repo, since, until, token="", timeout=30):
+    items, error = _recent_between(
+        f"/repos/{quote(repo, safe='/')}/issues?state=all&sort=updated&direction=desc",
+        since,
+        until,
+        token,
+        timeout,
+        exclude_prs=True,
+    )
+    if error:
+        return {"status": "error", "status_message": error, "issues": []}
+    return {
+        "status": "ok",
+        "status_message": f"{len(items)} issues updated in current project week",
+        "issues": [_compact_issue(item) for item in items],
+    }
+
+
+def _compact_milestone(item):
+    return {
+        "number": item.get("number"),
+        "title": (item.get("title") or "").strip(),
+        "state": item.get("state") or "",
+        "due_on": item.get("due_on") or "",
+        "open_issues": item.get("open_issues"),
+        "closed_issues": item.get("closed_issues"),
+        "updated_at": item.get("updated_at"),
+        "url": item.get("html_url") or "",
+    }
+
+
+def list_milestones(repo, token="", timeout=30):
+    payload, status_code, error = _request(
+        f"/repos/{quote(repo, safe='/')}/milestones?state=all&sort=due_on&direction=asc&per_page={PAGE_SIZE}",
+        token,
+        timeout,
+    )
+    if status_code is None:
+        return {"status": "error", "status_message": f"GitHub API unreachable: {error}", "milestones": []}
+    if status_code != 200:
+        return {"status": "error", "status_message": _api_error(status_code, error), "milestones": []}
+    items = [item for item in payload or [] if isinstance(item, dict)]
+    items.sort(key=lambda item: item.get("due_on") or "9999")
+    return {
+        "status": "ok",
+        "status_message": f"{len(items)} milestones",
+        "milestones": [_compact_milestone(item) for item in items[:MAX_WEEK_ITEMS]],
+    }
+
+
+ORG_PROJECTS_QUERY = """
+query($login: String!) {
+  organization(login: $login) {
+    projectsV2(first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        number
+        title
+        closed
+        url
+        items(first: 10) {
+          totalCount
+          nodes {
+            type
+            content {
+              ... on Issue { number title state url }
+              ... on PullRequest { number title state isDraft url }
+              ... on DraftIssue { title }
+            }
+            fieldValues(first: 8) {
+              nodes {
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field { ... on ProjectV2SingleSelectField { name } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _graphql(query, variables, token, timeout):
+    """One POST against the GitHub GraphQL API with the same result contract
+    as _request: (payload, status_code, error)."""
+    request = urllib.request.Request(
+        f"{API_BASE}/graphql",
+        data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+        try:
+            return json.loads(raw or "null"), 200, None
+        except ValueError as exc:
+            return None, 200, f"failed to parse response: {exc}"
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:
+            body = ""
+        return None, exc.code, body or str(exc)
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _project_item_status(node):
+    for value in (node.get("fieldValues") or {}).get("nodes") or []:
+        if not isinstance(value, dict):
+            continue
+        field_name = ((value.get("field") or {}).get("name") or "").lower()
+        if field_name == "status" and value.get("name"):
+            return value["name"]
+    return ""
+
+
+def _compact_project_item(node):
+    content = node.get("content") or {}
+    entry = {
+        "type": (node.get("type") or "").lower() or "item",
+        "title": (content.get("title") or "").strip(),
+        "state": (content.get("state") or "").lower(),
+        "number": content.get("number"),
+        "url": content.get("url") or "",
+    }
+    status = _project_item_status(node)
+    if status:
+        entry["status"] = status
+    return entry
+
+
+def fetch_org_projects(org, token="", timeout=30):
+    """Bounded read of an organization's Projects (v2): the 10 most recently
+    updated boards, each with its first 10 items. Board-level read needs a
+    token with `read:project` (classic) or an org-approved fine-grained
+    token; errors are reported per org and never abort the report."""
+    org = (org or "").strip()
+    payload, status_code, error = _graphql(ORG_PROJECTS_QUERY, {"login": org}, token, timeout)
+    if status_code is None:
+        return {"org": org, "status": "error", "status_message": f"GitHub API unreachable: {error}", "projects": []}
+    if status_code != 200:
+        return {"org": org, "status": "error", "status_message": _api_error(status_code, error), "projects": []}
+    if not isinstance(payload, dict):
+        return {"org": org, "status": "error", "status_message": "unexpected GitHub GraphQL response shape", "projects": []}
+    errors = payload.get("errors")
+    if errors:
+        message = "; ".join(str(item.get("message")) for item in errors if isinstance(item, dict))
+        return {"org": org, "status": "error", "status_message": f"GitHub GraphQL error: {message[:300]}", "projects": []}
+    connection = ((payload.get("data") or {}).get("organization") or {}).get("projectsV2") or {}
+    projects = []
+    for node in connection.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        items_node = node.get("items") or {}
+        projects.append(
+            {
+                "number": node.get("number"),
+                "title": (node.get("title") or "").strip(),
+                "closed": bool(node.get("closed")),
+                "url": node.get("url") or "",
+                "item_count": items_node.get("totalCount"),
+                "items": [
+                    _compact_project_item(item)
+                    for item in (items_node.get("nodes") or [])
+                    if isinstance(item, dict)
+                ][:MAX_PROJECT_ITEMS],
+            }
+        )
+    return {
+        "org": org,
+        "status": "ok",
+        "status_message": f"{len(projects)} of {connection.get('totalCount', len(projects))} organization projects",
+        "projects": projects,
     }

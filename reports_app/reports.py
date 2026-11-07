@@ -5,7 +5,7 @@ import re
 
 from .config import DEFAULT_REPORT_TEMPLATE, DEFAULT_SYSTEM_PROMPT
 from .db import connect
-from .git_sources import git_auth_for_user, weekly_commits
+from .git_sources import fetch_org_projects, fetch_repo_extras, git_auth_for_user, weekly_commits
 from .risks import evaluate_risks
 from .timeutil import current_week_key, iso_now, parse_iso, week_bounds, week_key_for
 from .validation import ValidationError
@@ -40,7 +40,8 @@ def assemble_context(conn, project_id, week_key=None):
     repos = conn.execute(
         """
         SELECT repo, git_mode, notes, tracked_branches_json, status, status_message,
-               last_checked_at, last_activity_at, activity_summary
+               last_checked_at, last_activity_at, activity_summary,
+               fetch_pull_requests, fetch_issues, fetch_milestones, fetch_org_projects
         FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id
         """,
         (project_id,),
@@ -106,6 +107,15 @@ def assemble_context(conn, project_id, week_key=None):
             for row in repos
             if row["status"] == "connected"
         ],
+        "git_extras_this_week": [
+            repo_extras_context(row, week_start, week_end, git_auth_for_user(conn, project["user_id"]))
+            for row in repos
+            if row["status"] == "connected" and repo_fetch_switches_on(row)
+        ],
+        "git_org_projects": fetch_org_projects(
+            [row for row in repos if row["status"] == "connected"],
+            git_auth_for_user(conn, project["user_id"]),
+        ),
         "previous_current_week_report": dict(previous) if previous else None,
         "system_prompt": get_effective_prompt(project),
         "report_template": get_effective_template(project),
@@ -116,6 +126,9 @@ def assemble_context(conn, project_id, week_key=None):
 
 def input_summary(context):
     commits = sum(len(repo.get("commits", [])) for repo in context.get("git_commits_this_week", []))
+    extras = context.get("git_extras_this_week", [])
+    pulls = sum(len(repo.get("pull_requests") or []) for repo in extras)
+    issues = sum(len(repo.get("issues") or []) for repo in extras)
     profile = context.get("project_profile") or {}
     plan = context.get("plan") or {}
     has_profile = bool(profile.get("description"))
@@ -126,8 +139,30 @@ def input_summary(context):
         f"plan={'yes' if has_plan else 'no'}; "
         f"new_materials={len(context.get('new_materials_this_week', []))}; "
         f"commits={commits}; "
+        f"pulls={pulls}; "
+        f"issues={issues}; "
+        f"org_projects={len(context.get('git_org_projects', []))}; "
         f"repos={len(context['github_activity'])}"
     )
+
+
+def repo_fetch_switches_on(repo_row):
+    return bool(
+        repo_row["fetch_pull_requests"] or repo_row["fetch_issues"] or repo_row["fetch_milestones"]
+    )
+
+
+def repo_extras_context(repo_row, week_start, week_end, auth_info):
+    flags = {
+        "fetch_pull_requests": repo_row["fetch_pull_requests"],
+        "fetch_issues": repo_row["fetch_issues"],
+        "fetch_milestones": repo_row["fetch_milestones"],
+    }
+    result = fetch_repo_extras(
+        repo_row["repo"], week_start, week_end, flags, git_mode=repo_row["git_mode"], auth_info=auth_info
+    )
+    result["notes"] = repo_row["notes"]
+    return result
 
 
 def repo_commit_context(repo_row, week_start, week_end, auth_info):
@@ -301,6 +336,8 @@ def build_internal_evidence_prompt(context):
         "Evaluate this week's progress against the plan and the weekly supplement. "
         "Use repository notes to interpret what each repo means in this project. "
         "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
+        "If git_extras_this_week contains pull request / merge request, issue, or milestone entries, use them as secondary evidence for collaboration activity, open blockers, and upcoming deadlines; an empty or missing section means the repo owner chose not to fetch it, so never invent entries. "
+        "If git_org_projects is present, use its board items to describe project-level progress and statuses. "
         "For every connected repository, include a short per-repo section. "
         "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "
         "If there are no new materials, say so explicitly. "
@@ -325,6 +362,8 @@ def compact_evidence(context):
         ],
         "github_activity": context.get("github_activity"),
         "git_commits_this_week": context.get("git_commits_this_week"),
+        "git_extras_this_week": context.get("git_extras_this_week", []),
+        "git_org_projects": context.get("git_org_projects", []),
         "historical_report_weeks": historical_report_weeks(context),
         "previous_current_week_report": compact_previous_report(context.get("previous_current_week_report")),
     }

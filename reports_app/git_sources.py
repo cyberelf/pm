@@ -9,6 +9,7 @@ work without a request context.
 import json
 
 from .config import (
+    GIT_MODE_GITHUB,
     GIT_MODE_GITLAB,
     GITHUB_ENABLED_SETTING,
     GITHUB_TOKEN_SETTING,
@@ -21,9 +22,16 @@ from .config import (
 from .db import get_setting, get_user_setting
 from .gitlab import check_repo as gitlab_check_repo
 from .gitlab import list_branches as gitlab_list_branches
+from .gitlab import list_issues as gitlab_list_issues
+from .gitlab import list_milestones as gitlab_list_milestones
+from .gitlab import list_merge_requests as gitlab_list_merge_requests
 from .gitlab import weekly_commits as gitlab_weekly_commits
 from .github import check_repo as github_check_repo
+from .github import fetch_org_projects as github_fetch_org_projects
 from .github import list_branches as github_list_branches
+from .github import list_issues as github_list_issues
+from .github import list_milestones as github_list_milestones
+from .github import list_pull_requests as github_list_pull_requests
 from .github import weekly_commits as github_weekly_commits
 from .timeutil import iso_now
 
@@ -186,6 +194,73 @@ def weekly_commits(repo, since, until, branches=None, git_mode="github", auth_in
     return github_weekly_commits(
         repo, since, until, branches, token=github_token_for(info, repo), timeout=timeout
     )
+
+
+def fetch_repo_extras(repo, since, until, flags, git_mode="github", auth_info=None, timeout=30):
+    """Optional PR/MR, issue, and milestone reads for one repo, honoring the
+    per-repo switches. Each section is independent and degrades to an error
+    entry instead of failing the caller; disabled integrations return no
+    sections at all."""
+    info = auth_info or {}
+    extras = {
+        "repo": repo,
+        "git_mode": git_mode,
+        "status": "ok",
+        "status_message": "",
+        "pull_requests": [],
+        "issues": [],
+        "milestones": [],
+    }
+    if git_mode == GIT_MODE_GITLAB:
+        if not info.get("gitlab_enabled", True):
+            extras["status"] = "disabled"
+            extras["status_message"] = "GitLab 集成已在全局设置中停用，merge request / issue / 里程碑不可用"
+            return extras
+        kwargs = {
+            "server": _gitlab_server(info),
+            "token": info.get("gitlab_token", ""),
+            "timeout": timeout,
+            "skip_verify": bool(info.get("gitlab_skip_verify")),
+        }
+        if flags.get("fetch_pull_requests"):
+            extras["pull_requests"] = gitlab_list_merge_requests(repo, since, until, **kwargs)
+        if flags.get("fetch_issues"):
+            extras["issues"] = gitlab_list_issues(repo, since, until, **kwargs)
+        if flags.get("fetch_milestones"):
+            extras["milestones"] = gitlab_list_milestones(repo, **kwargs)
+        return extras
+    if not info.get("github_enabled", True):
+        extras["status"] = "disabled"
+        extras["status_message"] = "GitHub 集成已在全局设置中停用，PR / issue / 里程碑不可用"
+        return extras
+    token = github_token_for(info, repo)
+    if flags.get("fetch_pull_requests"):
+        extras["pull_requests"] = github_list_pull_requests(repo, since, until, token=token, timeout=timeout)
+    if flags.get("fetch_issues"):
+        extras["issues"] = github_list_issues(repo, since, until, token=token, timeout=timeout)
+    if flags.get("fetch_milestones"):
+        extras["milestones"] = github_list_milestones(repo, token=token, timeout=timeout)
+    return extras
+
+
+def fetch_org_projects(repos, auth_info, timeout=30):
+    """Organization Projects (v2) reads for GitHub repos with the org switch
+    on. Several repos of the same organization share one deduplicated read
+    and one result entry, so a project watching a whole org never duplicates
+    board data."""
+    info = auth_info or {}
+    orgs = []
+    for repo in repos:
+        if repo["git_mode"] != GIT_MODE_GITHUB or not repo["fetch_org_projects"]:
+            continue
+        org = (repo["repo"] or "").split("/", 1)[0].strip().lower()
+        if org and org not in orgs:
+            orgs.append(org)
+    results = []
+    for org in orgs:
+        token = github_token_for(info, f"{org}/org-scope")
+        results.append(github_fetch_org_projects(org, token=token, timeout=timeout))
+    return results
 
 
 def refresh_repo(conn, repo_id):
