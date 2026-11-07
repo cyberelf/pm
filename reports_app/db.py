@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS github_repos (
     fetch_pull_requests INTEGER NOT NULL DEFAULT 0,
     fetch_issues INTEGER NOT NULL DEFAULT 0,
     fetch_milestones INTEGER NOT NULL DEFAULT 0,
+    fetch_repo_projects INTEGER NOT NULL DEFAULT 0,
     fetch_org_projects INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     status_message TEXT NOT NULL DEFAULT '',
@@ -312,8 +313,9 @@ def migrate_schema(conn):
     if "gitlab_server" not in columns:
         conn.execute("ALTER TABLE github_repos ADD COLUMN gitlab_server TEXT NOT NULL DEFAULT ''")
     # per-repo fetch switches for PR/MR, issues, milestones, and (GitHub only)
-    # organization projects; default off so existing repos keep their behavior
-    for flag in ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_org_projects"):
+    # repository / organization projects; default off so existing repos keep
+    # their behavior
+    for flag in ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_repo_projects", "fetch_org_projects"):
         if flag not in columns:
             conn.execute(f"ALTER TABLE github_repos ADD COLUMN {flag} INTEGER NOT NULL DEFAULT 0")
     job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(generation_jobs)")}

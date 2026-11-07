@@ -28,6 +28,7 @@ from .gitlab import list_merge_requests as gitlab_list_merge_requests
 from .gitlab import weekly_commits as gitlab_weekly_commits
 from .github import check_repo as github_check_repo
 from .github import fetch_org_projects as github_fetch_org_projects
+from .github import fetch_repo_projects as github_fetch_repo_projects
 from .github import list_branches as github_list_branches
 from .github import list_issues as github_list_issues
 from .github import list_milestones as github_list_milestones
@@ -210,6 +211,7 @@ def fetch_repo_extras(repo, since, until, flags, git_mode="github", auth_info=No
         "pull_requests": [],
         "issues": [],
         "milestones": [],
+        "projects": [],
     }
     if git_mode == GIT_MODE_GITLAB:
         if not info.get("gitlab_enabled", True):
@@ -228,6 +230,7 @@ def fetch_repo_extras(repo, since, until, flags, git_mode="github", auth_info=No
             extras["issues"] = gitlab_list_issues(repo, since, until, **kwargs)
         if flags.get("fetch_milestones"):
             extras["milestones"] = gitlab_list_milestones(repo, **kwargs)
+        # GitLab 没有 GitHub 式的 Projects 看板，fetch_repo_projects 在此不适用
         return extras
     if not info.get("github_enabled", True):
         extras["status"] = "disabled"
@@ -240,6 +243,8 @@ def fetch_repo_extras(repo, since, until, flags, git_mode="github", auth_info=No
         extras["issues"] = github_list_issues(repo, since, until, token=token, timeout=timeout)
     if flags.get("fetch_milestones"):
         extras["milestones"] = github_list_milestones(repo, token=token, timeout=timeout)
+    if flags.get("fetch_repo_projects"):
+        extras["projects"] = github_fetch_repo_projects(repo, token=token, timeout=timeout)
     return extras
 
 

@@ -1410,7 +1410,7 @@ def update_settings(conn, project_id, payload):
         )
 
 
-FETCH_FLAG_KEYS = ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_org_projects")
+FETCH_FLAG_KEYS = ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_repo_projects", "fetch_org_projects")
 
 
 def repo_fetch_flags(payload, row=None):
@@ -1467,9 +1467,9 @@ def add_repo(conn, project_id, payload, auth_info=None):
         """
         INSERT INTO github_repos
         (project_id, repo, git_mode, gitlab_server, enabled, notes, tracked_branches_json,
-         fetch_pull_requests, fetch_issues, fetch_milestones, fetch_org_projects,
+         fetch_pull_requests, fetch_issues, fetch_milestones, fetch_repo_projects, fetch_org_projects,
          status, status_message, last_checked_at, last_activity_at, activity_summary, created_at, updated_at)
-        VALUES (?, ?, ?, '', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, '', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
@@ -1480,6 +1480,7 @@ def add_repo(conn, project_id, payload, auth_info=None):
             flags["fetch_pull_requests"],
             flags["fetch_issues"],
             flags["fetch_milestones"],
+            flags["fetch_repo_projects"],
             flags["fetch_org_projects"],
             result["status"],
             result["status_message"],
@@ -1495,21 +1496,25 @@ def add_repo(conn, project_id, payload, auth_info=None):
 
 def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
     row = conn.execute(
-        f"""
-        SELECT repo, notes, tracked_branches_json, enabled, git_mode, {', '.join(FETCH_FLAG_KEYS)}
-        FROM github_repos WHERE id = ? AND project_id = ?
-        """,
+        "SELECT * FROM github_repos WHERE id = ? AND project_id = ?",
         (repo_id, project_id),
     ).fetchone()
     if not row:
         raise ValidationError("repository not found")
     now = iso_now()
-    notes = payload.get("notes") if "notes" in payload else (row["notes"] or "")
-    branches = validate_branches(payload.get("branches") or [])
-    if not branches:
-        branches = json.loads(row["tracked_branches_json"] or '["main"]')
-    enabled = row["enabled"] if "enabled" not in payload else (1 if payload.get("enabled") else 0)
-    flags = repo_fetch_flags(payload, row)
+    # 只写 payload 里出现的列：整行重写会把并发请求（如快速连点的抓取
+    # 开关）刚写入的其他列用本次请求开头读到的旧行值覆盖回去（lost update）
+    updates = {"updated_at": now}
+    if "notes" in payload:
+        updates["notes"] = payload.get("notes") or ""
+    requested_branches = validate_branches(payload.get("branches") or [])
+    if requested_branches:
+        updates["tracked_branches_json"] = json.dumps(requested_branches)
+    if "enabled" in payload:
+        updates["enabled"] = 1 if payload.get("enabled") else 0
+    for key in FETCH_FLAG_KEYS:
+        if key in payload:
+            updates[key] = 1 if payload.get(key) else 0
     git_mode = validate_git_mode(payload.get("git_mode")) if "git_mode" in payload else row["git_mode"]
     target_changed = git_mode != row["git_mode"]
     if target_changed:
@@ -1519,58 +1524,25 @@ def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
         ).fetchone()
         if conflict:
             raise ValidationError("a repository entry with this git mode already exists")
-    result = check_repo(row["repo"], git_mode, auth_info=auth_info) if target_changed else None
-    if result:
+        updates["git_mode"] = git_mode
+        result = check_repo(row["repo"], git_mode, auth_info=auth_info)
+        updates.update(
+            {
+                "status": result["status"],
+                "status_message": result["status_message"],
+                "activity_summary": result["activity_summary"],
+                "last_activity_at": result["last_activity_at"],
+                "last_checked_at": now,
+            }
+        )
         conn.execute(
-            """
-            UPDATE github_repos
-            SET notes = ?, tracked_branches_json = ?, enabled = ?, git_mode = ?,
-                fetch_pull_requests = ?, fetch_issues = ?, fetch_milestones = ?, fetch_org_projects = ?,
-                status = ?, status_message = ?, activity_summary = ?, last_activity_at = ?,
-                last_checked_at = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-            """,
-            (
-                notes,
-                json.dumps(branches),
-                enabled,
-                git_mode,
-                flags["fetch_pull_requests"],
-                flags["fetch_issues"],
-                flags["fetch_milestones"],
-                flags["fetch_org_projects"],
-                result["status"],
-                result["status_message"],
-                result["activity_summary"],
-                result["last_activity_at"],
-                now,
-                now,
-                repo_id,
-                project_id,
-            ),
+            f"UPDATE github_repos SET {', '.join(f'{key} = ?' for key in updates)} WHERE id = ? AND project_id = ?",
+            (*updates.values(), repo_id, project_id),
         )
         return result
     conn.execute(
-        """
-        UPDATE github_repos
-        SET notes = ?, tracked_branches_json = ?, enabled = ?, git_mode = ?,
-            fetch_pull_requests = ?, fetch_issues = ?, fetch_milestones = ?, fetch_org_projects = ?,
-            updated_at = ?
-        WHERE id = ? AND project_id = ?
-        """,
-        (
-            notes,
-            json.dumps(branches),
-            enabled,
-            git_mode,
-            flags["fetch_pull_requests"],
-            flags["fetch_issues"],
-            flags["fetch_milestones"],
-            flags["fetch_org_projects"],
-            now,
-            repo_id,
-            project_id,
-        ),
+        f"UPDATE github_repos SET {', '.join(f'{key} = ?' for key in updates)} WHERE id = ? AND project_id = ?",
+        (*updates.values(), repo_id, project_id),
     )
     return None
 

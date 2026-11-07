@@ -146,3 +146,4 @@
 - [x] 14.2 Implement GitHub REST pull/issue/milestone readers and a bounded GraphQL read of organization Projects (v2) board items; GitLab merge-request/issue/milestone readers including ancestor group milestones
 - [x] 14.3 Deduplicate organization project reads per organization when several repos of the same org enable the switch, and feed extras plus org boards into report evidence only when switched on
 - [x] 14.4 Add the 抓取项 checkbox column to the repo table (组织Project shown for GitHub only) with save-on-toggle behavior and regression tests
+- [x] 14.5 Add the repository-level Projects (v2) fetch switch (fetch_repo_projects) alongside the organization one via a shared bounded GraphQL selection set; GitLab repos expose no board toggles

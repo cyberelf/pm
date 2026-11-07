@@ -41,7 +41,7 @@ def assemble_context(conn, project_id, week_key=None):
         """
         SELECT repo, git_mode, notes, tracked_branches_json, status, status_message,
                last_checked_at, last_activity_at, activity_summary,
-               fetch_pull_requests, fetch_issues, fetch_milestones, fetch_org_projects
+               fetch_pull_requests, fetch_issues, fetch_milestones, fetch_repo_projects, fetch_org_projects
         FROM github_repos WHERE project_id = ? AND enabled = 1 ORDER BY id
         """,
         (project_id,),
@@ -127,11 +127,23 @@ def assemble_context(conn, project_id, week_key=None):
     return context, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _section_items(repo, key):
+    """Items inside an extras section, which is either the wrapped result
+    object ({status, ..., <key>: [...]}) or a plain list."""
+    section = repo.get(key)
+    if isinstance(section, dict):
+        return section.get(key) or []
+    if isinstance(section, list):
+        return section
+    return []
+
+
 def input_summary(context):
     commits = sum(len(repo.get("commits", [])) for repo in context.get("git_commits_this_week", []))
     extras = context.get("git_extras_this_week", [])
-    pulls = sum(len(repo.get("pull_requests") or []) for repo in extras)
-    issues = sum(len(repo.get("issues") or []) for repo in extras)
+    pulls = sum(len(_section_items(repo, "pull_requests")) for repo in extras)
+    issues = sum(len(_section_items(repo, "issues")) for repo in extras)
+    repo_boards = sum(len(_section_items(repo, "projects")) for repo in extras)
     org_boards = sum(len(entry.get("projects") or []) for entry in context.get("git_org_projects", []))
     profile = context.get("project_profile") or {}
     plan = context.get("plan") or {}
@@ -145,6 +157,7 @@ def input_summary(context):
         f"commits={commits}; "
         f"pulls={pulls}; "
         f"issues={issues}; "
+        f"repo_boards={repo_boards}; "
         f"org_boards={org_boards}; "
         f"repos={len(context['github_activity'])}"
     )
@@ -153,6 +166,7 @@ def input_summary(context):
 def repo_fetch_switches_on(repo_row):
     return bool(
         repo_row["fetch_pull_requests"] or repo_row["fetch_issues"] or repo_row["fetch_milestones"]
+        or repo_row["fetch_repo_projects"]
     )
 
 
@@ -161,6 +175,7 @@ def repo_extras_context(repo_row, week_start, week_end, auth_info):
         "fetch_pull_requests": repo_row["fetch_pull_requests"],
         "fetch_issues": repo_row["fetch_issues"],
         "fetch_milestones": repo_row["fetch_milestones"],
+        "fetch_repo_projects": repo_row["fetch_repo_projects"],
     }
     result = fetch_repo_extras(
         repo_row["repo"], week_start, week_end, flags, git_mode=repo_row["git_mode"], auth_info=auth_info
@@ -340,8 +355,8 @@ def build_internal_evidence_prompt(context):
         "Evaluate this week's progress against the plan and the weekly supplement. "
         "Use repository notes to interpret what each repo means in this project. "
         "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
-        "If git_extras_this_week contains pull request / merge request, issue, or milestone entries, use them as secondary evidence for collaboration activity, open blockers, and upcoming deadlines; an empty or missing section means the repo owner chose not to fetch it, so never invent entries. "
-        "If git_org_projects is present, use its board items to describe project-level progress and statuses. "
+        "If git_extras_this_week contains pull request / merge request, issue, milestone, or repository Projects board entries, use them as secondary evidence for collaboration activity, open blockers, upcoming deadlines, and board statuses; an empty or missing section means the repo owner chose not to fetch it, so never invent entries. "
+        "If git_org_projects is present, use its organization board items to describe project-level progress and statuses. "
         "For every connected repository, include a short per-repo section. "
         "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "
         "If there are no new materials, say so explicitly. "

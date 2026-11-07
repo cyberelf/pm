@@ -241,7 +241,9 @@ function toast(message) {
 const autoSaveRegistry = new Map(); // key -> { run, schedule, timer }
 
 function serializeAutoSaveFields(root) {
-  return Array.from(root.querySelectorAll("input, textarea, select"))
+  // data-autosave-ignore 的控件（抓取开关、启用开关）自带即时保存，不进
+  // 自动保存表单：否则它们的 change 会冒泡触发行级保存，与即时 PUT 竞态互踩
+  return Array.from(root.querySelectorAll("input:not([data-autosave-ignore]), textarea, select"))
     .map((el) => `${el.id || el.name}|${el.type === "checkbox" ? (el.checked ? "1" : "0") : el.value}`)
     .join("\n");
 }
@@ -1827,7 +1829,7 @@ function renderSettings(ws) {
     </section>
     <section id="settings-sub-git" class="source-view hidden" role="tabpanel">
       <div class="panel">
-        <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，commits 每周进入生成上下文；抓取项决定本周 PR/MR、Issue、里程碑、组织 Project 是否一并读取</span></div>
+        <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，commits 每周进入生成上下文；抓取项决定本周 PR/MR、Issue、里程碑、仓库 Project、组织 Project 是否一并读取</span></div>
         <div class="row">
           <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
           <input id="repo-input" placeholder="owner/repo">
@@ -1965,24 +1967,26 @@ function renderRepoRow(r) {
       <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
-      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
+      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" data-autosave-ignore aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
     </tr>
   `;
 }
 
 const REPO_FETCH_FLAGS = [
-  ["fetch_pull_requests", "PR", "抓取本周更新的 Pull Request / Merge Request"],
-  ["fetch_issues", "Issue", "抓取本周更新的 Issue"],
-  ["fetch_milestones", "里程碑", "抓取仓库里程碑及到期状态"],
-  ["fetch_org_projects", "组织Project", "读取 GitHub 组织 Projects 看板（同组织多个仓库只读取一次）"],
+  ["fetch_pull_requests", "PR", "抓取本周更新的 Pull Request / Merge Request", "both"],
+  ["fetch_issues", "Issue", "抓取本周更新的 Issue", "both"],
+  ["fetch_milestones", "里程碑", "抓取仓库里程碑及到期状态", "both"],
+  ["fetch_repo_projects", "Project", "抓取仓库自己的 GitHub Projects 看板", "github"],
+  ["fetch_org_projects", "组织Project", "读取 GitHub 组织 Projects 看板（同组织多个仓库只读取一次）", "github"],
 ];
 
 function renderRepoFetchFlags(r) {
+  const gitlab = r.git_mode === "gitlab";
   return REPO_FETCH_FLAGS
-    .filter(([key]) => r.git_mode !== "gitlab" || key !== "fetch_org_projects")
+    .filter(([, , , scope]) => scope === "both" || !gitlab)
     .map(([key, label, title]) => `
       <label class="repo-fetch-flag" title="${title}">
-        <input type="checkbox" aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} onchange="toggleRepoFetch(${r.id}, '${key}', this)">
+        <input type="checkbox" data-autosave-ignore aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} onchange="toggleRepoFetch(${r.id}, '${key}', this)">
         <span>${label}</span>
       </label>
     `).join("");

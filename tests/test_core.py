@@ -53,7 +53,7 @@ from reports_app.gitlab import list_merge_requests as gitlab_list_merge_requests
 from reports_app.gitlab import weekly_commits as gitlab_weekly_commits
 from reports_app.github import check_repo as github_check_repo, token_kind
 from reports_app.github import fetch_org_projects as github_fetch_org_projects
-from reports_app.github import list_branches, list_issues, list_milestones, list_pull_requests, weekly_commits
+from reports_app.github import fetch_repo_projects, list_branches, list_issues, list_milestones, list_pull_requests, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
     build_summary_prompt,
@@ -1966,10 +1966,10 @@ class CoreTest(unittest.TestCase):
             f"""
             INSERT INTO github_repos
             (project_id, repo, git_mode, tracked_branches_json, status, status_message, activity_summary,
-             fetch_pull_requests, fetch_issues, fetch_milestones, fetch_org_projects, created_at, updated_at)
-            VALUES (?, ?, 'github', '["main"]', 'connected', 'ok', '', ?, ?, ?, ?, '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
+             fetch_pull_requests, fetch_issues, fetch_milestones, fetch_repo_projects, fetch_org_projects, created_at, updated_at)
+            VALUES (?, ?, 'github', '["main"]', 'connected', 'ok', '', ?, ?, ?, ?, ?, '2026-06-27T00:00:00+00:00', '2026-06-27T00:00:00+00:00')
             """,
-            (self.project_id, repo, flags.get("fetch_pull_requests", 0), flags.get("fetch_issues", 0), flags.get("fetch_milestones", 0), flags.get("fetch_org_projects", 0)),
+            (self.project_id, repo, flags.get("fetch_pull_requests", 0), flags.get("fetch_issues", 0), flags.get("fetch_milestones", 0), flags.get("fetch_repo_projects", 0), flags.get("fetch_org_projects", 0)),
         )
 
     @staticmethod
@@ -1992,32 +1992,32 @@ class CoreTest(unittest.TestCase):
             )
         row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
         self.assertEqual(
-            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
-            (1, 1, 0, 0),
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_repo_projects"], row["fetch_org_projects"]),
+            (1, 1, 0, 0, 0),
         )
-        update_repo_notes(self.conn, self.project_id, repo_id, {"fetch_milestones": True, "fetch_org_projects": True})
+        update_repo_notes(self.conn, self.project_id, repo_id, {"fetch_milestones": True, "fetch_repo_projects": True, "fetch_org_projects": True})
         row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
         self.assertEqual(
-            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
-            (1, 1, 1, 1),
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_repo_projects"], row["fetch_org_projects"]),
+            (1, 1, 1, 1, 1),
         )
         update_repo_notes(self.conn, self.project_id, repo_id, {"fetch_issues": False})
         row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
         self.assertEqual(
-            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
-            (1, 0, 1, 1),
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_repo_projects"], row["fetch_org_projects"]),
+            (1, 0, 1, 1, 1),
         )
         with mock.patch("reports_app.server.check_repo") as mocked:
             mocked.return_value = self._connected_result()
             add_repo(self.conn, self.project_id, {"repo": "owner/flags", "fetch_pull_requests": False})
         row = self.conn.execute("SELECT * FROM github_repos WHERE id = ?", (repo_id,)).fetchone()
         self.assertEqual(
-            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_org_projects"]),
-            (0, 0, 1, 1),
+            (row["fetch_pull_requests"], row["fetch_issues"], row["fetch_milestones"], row["fetch_repo_projects"], row["fetch_org_projects"]),
+            (0, 0, 1, 1, 1),
         )
         payload = workspace(self.conn, self.project_id)
-        flags = {key: item[key] for key in ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_org_projects") for item in payload["repos"] if item["id"] == repo_id}
-        self.assertEqual(flags, {"fetch_pull_requests": 0, "fetch_issues": 0, "fetch_milestones": 1, "fetch_org_projects": 1})
+        flags = {key: item[key] for key in ("fetch_pull_requests", "fetch_issues", "fetch_milestones", "fetch_repo_projects", "fetch_org_projects") for item in payload["repos"] if item["id"] == repo_id}
+        self.assertEqual(flags, {"fetch_pull_requests": 0, "fetch_issues": 0, "fetch_milestones": 1, "fetch_repo_projects": 1, "fetch_org_projects": 1})
 
     def test_github_extras_fetch_filters_window_and_compacts(self):
         week_start, week_end = week_bounds("Asia/Shanghai")
@@ -2105,6 +2105,42 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(failed["status"], "error")
         self.assertIn("Project caching", failed["status_message"])
         self.assertEqual(failed["projects"], [])
+        self.assertEqual(failed["org"], "owner")
+
+    def test_github_repo_projects_read_uses_repository_scope(self):
+        payload = {
+            "data": {
+                "repository": {
+                    "projectsV2": {
+                        "totalCount": 1,
+                        "nodes": [
+                            {
+                                "number": 3,
+                                "title": "Release board",
+                                "closed": False,
+                                "url": "https://github.com/owner/repo/projects/3",
+                                "items": {"totalCount": 1, "nodes": [{"type": "ISSUE", "content": {"number": 9, "title": "fix", "state": "OPEN", "url": "i9"}, "fieldValues": {"nodes": []}}]},
+                            }
+                        ],
+                    }
+                }
+            }
+        }
+        with mock.patch("reports_app.github._graphql", return_value=(payload, 200, None)) as graphql:
+            result = fetch_repo_projects("owner/repo")
+        graphql.assert_called_once()
+        query_text = graphql.call_args.args[0]
+        self.assertIn("repository(owner: $owner, name: $name)", query_text)
+        self.assertIn("projectsV2(first: 10", query_text)
+        self.assertEqual(graphql.call_args.args[1], {"owner": "owner", "name": "repo"})
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["projects"][0]["title"], "Release board")
+        self.assertEqual(result["projects"][0]["items"][0]["number"], 9)
+        with mock.patch("reports_app.github._graphql", return_value=(payload, 200, None)) as graphql:
+            bad = fetch_repo_projects("just-a-name")
+        graphql.assert_not_called()
+        self.assertEqual(bad["status"], "error")
+        self.assertEqual(bad["projects"], [])
 
     def test_gitlab_extras_fetch_compacts(self):
         week_start, week_end = week_bounds("Asia/Shanghai")
@@ -2163,15 +2199,17 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(context["git_extras_this_week"], [])
 
     def test_extras_enter_context_evidence_and_summary_when_switched_on(self):
-        self._connected_repo("owner/ex", fetch_pull_requests=1)
+        self._connected_repo("owner/ex", fetch_pull_requests=1, fetch_repo_projects=1)
+        # 与 fetch_repo_extras 的真实结构一致：各分区是包裹结果对象
         extras_result = {
             "repo": "owner/ex",
             "git_mode": "github",
             "status": "ok",
             "status_message": "",
-            "pull_requests": [{"number": 2, "title": "t", "state": "closed", "draft": False, "merged": True, "author": "u", "updated_at": "x", "url": "u"}],
-            "issues": [],
-            "milestones": [],
+            "pull_requests": {"status": "ok", "status_message": "1 pull requests", "pull_requests": [{"number": 2, "title": "t", "state": "closed", "draft": False, "merged": True, "author": "u", "updated_at": "x", "url": "u"}]},
+            "issues": {"status": "ok", "status_message": "0 issues", "issues": []},
+            "milestones": {"status": "ok", "status_message": "0 milestones", "milestones": []},
+            "projects": {"status": "ok", "status_message": "2 projects", "projects": [{"title": "Board A"}, {"title": "Board B"}]},
         }
         with mock.patch("reports_app.reports.weekly_commits") as commits:
             commits.return_value = {"repo": "owner/ex", "status": "ok", "status_message": "", "commits": []}
@@ -2179,18 +2217,44 @@ class CoreTest(unittest.TestCase):
                 extras.return_value = extras_result
                 context, _hash = assemble_context(self.conn, self.project_id)
         extras.assert_called_once()
-        self.assertEqual(extras.call_args.args[3], {"fetch_pull_requests": 1, "fetch_issues": 0, "fetch_milestones": 0})
-        self.assertEqual(context["git_extras_this_week"][0]["pull_requests"][0]["title"], "t")
+        self.assertEqual(
+            extras.call_args.args[3],
+            {"fetch_pull_requests": 1, "fetch_issues": 0, "fetch_milestones": 0, "fetch_repo_projects": 1},
+        )
+        self.assertEqual(context["git_extras_this_week"][0]["pull_requests"]["pull_requests"][0]["title"], "t")
+        self.assertEqual(context["git_extras_this_week"][0]["projects"]["projects"][0]["title"], "Board A")
         evidence = compact_evidence(context)
         self.assertIn("git_extras_this_week", evidence)
         self.assertIn("git_org_projects", evidence)
         summary = input_summary(context)
         self.assertIn("pulls=1", summary)
+        self.assertIn("repo_boards=2", summary)
         # the metric counts boards, not deduplicated organizations
         self.assertIn("org_boards=0", summary)
         prompt = build_internal_evidence_prompt(context)
         self.assertIn("git_extras_this_week", prompt)
         self.assertIn("git_org_projects", prompt)
+
+    def test_fetch_repo_extras_wiring_per_flags(self):
+        from reports_app.git_sources import fetch_repo_extras
+
+        week_start, week_end = week_bounds("Asia/Shanghai")
+        flags = {"fetch_pull_requests": 0, "fetch_issues": 0, "fetch_milestones": 0, "fetch_repo_projects": 1}
+        with mock.patch("reports_app.git_sources.github_fetch_repo_projects") as projects:
+            projects.return_value = {"status": "ok", "status_message": "", "projects": []}
+            extras = fetch_repo_extras("owner/repo", week_start, week_end, flags, git_mode="github", auth_info={})
+        projects.assert_called_once()
+        self.assertEqual(extras["projects"]["status"], "ok")
+        self.assertEqual(extras["pull_requests"], [])
+        # GitLab 没有 GitHub 式看板：开关打开也不发仓库 Project 读取
+        with mock.patch("reports_app.git_sources.gitlab_list_merge_requests") as mr, \
+                mock.patch("reports_app.git_sources.gitlab_list_issues") as issues, \
+                mock.patch("reports_app.git_sources.gitlab_list_milestones") as milestones:
+            mr.return_value = {"status": "ok", "status_message": "", "pull_requests": []}
+            issues.return_value = {"status": "ok", "status_message": "", "issues": []}
+            milestones.return_value = {"status": "ok", "status_message": "", "milestones": []}
+            extras = fetch_repo_extras("group/proj", week_start, week_end, flags, git_mode="gitlab", auth_info={"gitlab_enabled": True, "gitlab_url": "https://gitlab.example.com"})
+        self.assertEqual(extras["projects"], [])
 
     def test_repo_activity_endpoint_returns_fetch_switch_data(self):
         self._connected_repo("owner/act", fetch_pull_requests=1, fetch_org_projects=1)

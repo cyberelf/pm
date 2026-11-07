@@ -22,7 +22,7 @@ USER_AGENT = "zreport"
 # bounds for the optional PR/issue/milestone fetch so report evidence stays
 # small even on very busy repositories
 MAX_WEEK_ITEMS = 20
-MAX_ORG_PROJECTS = 10
+MAX_PROJECT_BOARDS = 10
 MAX_PROJECT_ITEMS = 10
 
 
@@ -435,40 +435,43 @@ def list_milestones(repo, token="", timeout=30):
     }
 
 
-ORG_PROJECTS_QUERY = f"""
-query($login: String!) {{
-  organization(login: $login) {{
-    projectsV2(first: {MAX_ORG_PROJECTS}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{
+PROJECTS_V2_SELECTION = """projectsV2(first: %d, orderBy: {field: UPDATED_AT, direction: DESC}) {
+  totalCount
+  nodes {
+    number
+    title
+    closed
+    url
+    items(first: %d) {
       totalCount
-      nodes {{
-        number
-        title
-        closed
-        url
-        items(first: {MAX_PROJECT_ITEMS}) {{
-          totalCount
-          nodes {{
-            type
-            content {{
-              ... on Issue {{ number title state url }}
-              ... on PullRequest {{ number title state isDraft url }}
-              ... on DraftIssue {{ title }}
-            }}
-            fieldValues(first: 8) {{
-              nodes {{
-                ... on ProjectV2ItemFieldSingleSelectValue {{
-                  name
-                  field {{ ... on ProjectV2SingleSelectField {{ name }} }}
-                }}
-              }}
-            }}
-          }}
-        }}
-      }}
-    }}
-  }}
-}}
-"""
+      nodes {
+        type
+        content {
+          ... on Issue { number title state url }
+          ... on PullRequest { number title state isDraft url }
+          ... on DraftIssue { title }
+        }
+        fieldValues(first: 8) {
+          nodes {
+            ... on ProjectV2ItemFieldSingleSelectValue {
+              name
+              field { ... on ProjectV2SingleSelectField { name } }
+            }
+          }
+        }
+      }
+    }
+  }
+}""" % (MAX_PROJECT_BOARDS, MAX_PROJECT_ITEMS)
+
+
+def _scoped_projects_query(scope_field, variable_defs):
+    selection = PROJECTS_V2_SELECTION.replace("\n", "\n  ")
+    return f"query({variable_defs}) {{\n  {scope_field} {{\n    {selection}\n  }}\n}}"
+
+
+ORG_PROJECTS_QUERY = _scoped_projects_query("organization(login: $login)", "$login: String!")
+REPO_PROJECTS_QUERY = _scoped_projects_query("repository(owner: $owner, name: $name)", "$owner: String!, $name: String!")
 
 
 def _graphql(query, variables, token, timeout):
@@ -528,25 +531,22 @@ def _compact_project_item(node):
     return entry
 
 
-def fetch_org_projects(org, token="", timeout=30):
-    """Bounded read of an organization's Projects (v2): the MAX_ORG_PROJECTS
-    most recently updated boards, each with its first MAX_PROJECT_ITEMS
-    items. Board-level read needs a token with `read:project` (classic) or an
-    org-approved fine-grained token; errors are reported per org and never
-    abort the report."""
-    org = (org or "").strip()
-    payload, status_code, error = _graphql(ORG_PROJECTS_QUERY, {"login": org}, token, timeout)
+def _fetch_projects(query, variables, token, timeout):
+    """Shared bounded Projects (v2) read for the organization and repository
+    scopes; both queries share the same selection set and node shape."""
+    payload, status_code, error = _graphql(query, variables, token, timeout)
     if status_code is None:
-        return {"org": org, "status": "error", "status_message": f"GitHub API unreachable: {error}", "projects": []}
+        return {"status": "error", "status_message": f"GitHub API unreachable: {error}", "projects": []}
     if status_code != 200:
-        return {"org": org, "status": "error", "status_message": _api_error(status_code, error), "projects": []}
+        return {"status": "error", "status_message": _api_error(status_code, error), "projects": []}
     if not isinstance(payload, dict):
-        return {"org": org, "status": "error", "status_message": "unexpected GitHub GraphQL response shape", "projects": []}
+        return {"status": "error", "status_message": "unexpected GitHub GraphQL response shape", "projects": []}
     errors = payload.get("errors")
     if errors:
         message = "; ".join(str(item.get("message")) for item in errors if isinstance(item, dict))
-        return {"org": org, "status": "error", "status_message": f"GitHub GraphQL error: {message[:300]}", "projects": []}
-    connection = ((payload.get("data") or {}).get("organization") or {}).get("projectsV2") or {}
+        return {"status": "error", "status_message": f"GitHub GraphQL error: {message[:300]}", "projects": []}
+    data = payload.get("data") or {}
+    connection = (data.get("organization") or data.get("repository") or {}).get("projectsV2") or {}
     projects = []
     for node in connection.get("nodes") or []:
         if not isinstance(node, dict):
@@ -567,8 +567,29 @@ def fetch_org_projects(org, token="", timeout=30):
             }
         )
     return {
-        "org": org,
         "status": "ok",
-        "status_message": f"{len(projects)} of {connection.get('totalCount', len(projects))} organization projects",
+        "status_message": f"{len(projects)} of {connection.get('totalCount', len(projects))} projects",
         "projects": projects,
     }
+
+
+def fetch_org_projects(org, token="", timeout=30):
+    """Bounded read of an organization's Projects (v2): the MAX_PROJECT_BOARDS
+    most recently updated boards, each with its first MAX_PROJECT_ITEMS
+    items. Board-level read needs a token with `read:project` (classic) or an
+    org-approved fine-grained token; errors are reported per org and never
+    abort the report."""
+    org = (org or "").strip()
+    result = _fetch_projects(ORG_PROJECTS_QUERY, {"login": org}, token, timeout)
+    result["org"] = org
+    return result
+
+
+def fetch_repo_projects(repo, token="", timeout=30):
+    """Bounded read of a repository's own Projects (v2) boards, same bounds
+    and error tolerance as the organization scope. GitLab has no equivalent
+    board concept, so this is GitHub-only."""
+    parts = [part.strip() for part in (repo or "").split("/")]
+    if len(parts) != 2 or not all(parts):
+        return {"status": "error", "status_message": "invalid owner/repo", "projects": []}
+    return _fetch_projects(REPO_PROJECTS_QUERY, {"owner": parts[0], "name": parts[1]}, token, timeout)

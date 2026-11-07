@@ -65,6 +65,18 @@ class FrontendTest(unittest.TestCase):
         # 编辑完全回退时清除残留的失败提示
         self.assertIn('if (status && status.classList.contains("is-error")) setAutoSaveStatus(root, "idle")', source)
 
+    def test_repo_fetch_flags_cover_repo_and_org_projects_github_only(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        # 仓库 Project 与组织 Project 都是 GitHub 专属开关；GitLab 没有看板
+        self.assertIn('["fetch_repo_projects", "Project", "抓取仓库自己的 GitHub Projects 看板", "github"]', source)
+        self.assertIn('["fetch_org_projects", "组织Project", "读取 GitHub 组织 Projects 看板（同组织多个仓库只读取一次）", "github"]', source)
+        self.assertIn(".filter(([, , , scope]) => scope === \"both\" || !gitlab)", source)
+        # 抓取开关与启用开关即时保存、不进行自动保存表单，避免冒泡触发
+        # saveRepoNotes 的 PUT 与即时 PUT 竞态互踩（读旧行值覆盖新开关）
+        self.assertIn('input:not([data-autosave-ignore]), textarea, select', source)
+        self.assertIn('<input type="checkbox" data-autosave-ignore aria-label="${label}抓取开关"', source)
+        self.assertIn('<input type="checkbox" data-autosave-ignore aria-label="启用或停用该仓库"', source)
+
     def test_git_settings_save_sends_gitlab_url_and_skip_verify(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('payload.gitlab_url = $("gitlab-url-input")?.value.trim() || "";', source)
@@ -963,7 +975,7 @@ const panel = {
   addEventListener(type, handler) { (this._handlers[type] = this._handlers[type] || []).push(handler); },
   querySelector(selector) { return selector === ".autosave-status" ? statusEl : null; },
   querySelectorAll(selector) {
-    if (selector === "input, textarea, select") return [capacityField, parallelField];
+    if (selector.startsWith("input") && selector.includes("textarea, select")) return [capacityField, parallelField];
     return [];
   },
   contains: () => false,
