@@ -273,7 +273,12 @@ function setupAutoSave(key, root, save) {
       state.rerun = true;
       return;
     }
-    if (serializeAutoSaveFields(root) === state.snapshot) return;
+    if (serializeAutoSaveFields(root) === state.snapshot) {
+      // 改动完全回退时无需保存；若此前失败提示仍在，一并清除避免误导
+      const status = root.querySelector(".autosave-status");
+      if (status && status.classList.contains("is-error")) setAutoSaveStatus(root, "idle");
+      return;
+    }
     state.running = true;
     setAutoSaveStatus(root, "saving");
     try {
@@ -1954,7 +1959,7 @@ function renderRepoRow(r) {
   return `
     <tr class="${enabled ? "" : "repo-row-disabled"}">
       <td data-label="仓库"><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}</td>
-      <td data-label="跟踪分支">${renderBranchPicker(r)}</td>
+      <td data-label="跟踪分支">${renderBranchPicker(r)}<div class="autosave-status" aria-live="polite"></div></td>
       <td data-label="补充说明"><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
       <td data-label="抓取项"><div class="repo-fetch-flags">${renderRepoFetchFlags(r)}</div></td>
       <td data-label="启用">${enabled
@@ -2455,6 +2460,12 @@ async function saveRepoNotes(id) {
   const payload = { notes: $(`repo-notes-${id}`).value, branches, git_mode: repo && repo.git_mode === "gitlab" ? "gitlab" : "github" };
   await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify(payload) });
   if (repo) Object.assign(repo, payload);
+  // 保存成功后同步 picker 摘要，否则已选分支与显示不一致，看起来像没保存
+  const picker = $(`branch-picker-${id}`);
+  if (picker) {
+    const summary = picker.querySelector("summary");
+    if (summary) summary.textContent = branches.includes(TRACK_ALL_BRANCHES) ? "All" : branches.join(", ");
+  }
 }
 
 async function refreshRepo(id) {

@@ -56,6 +56,15 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("toggleRepo(", source)
         self.assertIn("data-schedule-enabled", source)
 
+    def test_repo_row_branch_selection_has_visible_autosave_feedback(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        # 分支行内要有保存状态元素（否则 setAutoSaveStatus 静默空跑，勾选分支看起来像没保存）
+        self.assertIn('${renderBranchPicker(r)}<div class="autosave-status" aria-live="polite"></div>', source)
+        # 保存成功后同步 picker 摘要与已选分支
+        self.assertIn('summary.textContent = branches.includes(TRACK_ALL_BRANCHES) ? "All" : branches.join(", ")', source)
+        # 编辑完全回退时清除残留的失败提示
+        self.assertIn('if (status && status.classList.contains("is-error")) setAutoSaveStatus(root, "idle")', source)
+
     def test_git_settings_save_sends_gitlab_url_and_skip_verify(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('payload.gitlab_url = $("gitlab-url-input")?.value.trim() || "";', source)
