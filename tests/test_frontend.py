@@ -59,11 +59,47 @@ class FrontendTest(unittest.TestCase):
     def test_repo_row_branch_selection_has_visible_autosave_feedback(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         # 分支行内要有保存状态元素（否则 setAutoSaveStatus 静默空跑，勾选分支看起来像没保存）
-        self.assertIn('${renderBranchPicker(r)}<div class="autosave-status" aria-live="polite"></div>', source)
+        self.assertIn('${renderBranchPicker(r)}<div class="autosave-status" aria-live="polite"></div>` : `<span>${escapeHtml(trackedBranchSummary(r))}</span>`}', source)
         # 保存成功后同步 picker 摘要与已选分支
         self.assertIn('summary.textContent = branches.includes(TRACK_ALL_BRANCHES) ? "All" : branches.join(", ")', source)
         # 编辑完全回退时清除残留的失败提示
         self.assertIn('if (status && status.classList.contains("is-error")) setAutoSaveStatus(root, "idle")', source)
+
+    def test_project_sharing_ui_roles_and_owner_share_panel(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        # 角色判定助手：owner > manage > write > read，共享项目行带角色徽标
+        self.assertIn('const SHARE_ROLE_LABELS = { owner: "所有者", read: "只读", write: "读写", manage: "管理" }', source)
+        self.assertIn("function projectRoleOf(p)", source)
+        self.assertIn("function projectCanWrite(p)", source)
+        self.assertIn("function projectCanManage(p)", source)
+        self.assertIn("function canWriteWorkspace()", source)
+        self.assertIn("function canManageWorkspace()", source)
+        self.assertIn("function isProjectOwner()", source)
+        self.assertIn("共享 · ${SHARE_ROLE_LABELS[projectRoleOf(p)]}", source)
+        # 侧栏入口按角色裁剪：只读没有生成/设置按钮
+        self.assertIn("${projectCanWrite(p) ? `\n      <button class=\"project-generate\"", source)
+        self.assertIn("${projectCanManage(p) ? `", source)
+        self.assertIn('data-project-settings="${p.id}"', source)
+        # 顶部项目元信息标注共享来源与权限
+        self.assertIn("共享 · ${SHARE_ROLE_LABELS[wsRole]}权限", source)
+        # 设置页：无管理权限时停用整个表单（停用控件不触发自动保存）
+        self.assertIn('if (!manage) {\n    $("settings-form").querySelectorAll("input, textarea, select, button").forEach((el) => { el.disabled = true; });\n  }', source)
+        # 共享管理子页仅 owner 可见，切换到该页时拉取共享列表
+        self.assertIn('data-subtab="sharing"', source)
+        self.assertIn('id="settings-sub-sharing"', source)
+        self.assertIn('if (tab === "sharing" && isProjectOwner()) loadProjectShares();', source)
+        self.assertIn('id="share-table-body"', source)
+        self.assertIn('id="share-username-input"', source)
+        self.assertIn('id="share-role-select"', source)
+        self.assertIn("`/api/projects/${state.projectId}/shares`", source)
+        self.assertIn("`/api/projects/${state.projectId}/shares/${userId}`", source)
+        self.assertIn("async function addProjectShare()", source)
+        self.assertIn("async function changeShareRole(userId, role)", source)
+        self.assertIn("async function removeProjectShare(userId)", source)
+        # 关闭 TODO 归档下拉只列出可写项目
+        self.assertIn("state.projects.filter(projectCanWrite)", source)
+        # 周报编辑按钮需要写权限
+        self.assertIn("${canWriteWorkspace() ? `<button onclick=\"openReportEditor()\">编辑</button>` : \"\"}", source)
 
     def test_repo_fetch_flags_cover_repo_and_org_projects_github_only(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")

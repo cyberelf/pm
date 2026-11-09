@@ -55,6 +55,7 @@ const state = {
   sourceTab: "manual",
   planSubTab: "plan",
   settingsSubTab: "project",
+  projectShares: [],
   busy: false,
 };
 
@@ -988,7 +989,7 @@ function openCloseTodo(id) {
   $("close-todo-title").textContent = todo.title;
   $("close-todo-project").innerHTML = `
     <option value="">不归属项目</option>
-    ${state.projects.map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("")}
+    ${state.projects.filter(projectCanWrite).map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("")}
   `;
   $("close-todo-form").elements.reason.value = "";
   $("close-todo-dialog").showModal();
@@ -1671,21 +1672,60 @@ function projectPaused(p) {
   return p.status === "paused";
 }
 
+// —— 项目共享：owner > manage > write > read，前端据此隐藏对应操作入口 ——
+const SHARE_ROLES = ["read", "write", "manage"];
+const SHARE_ROLE_LABELS = { owner: "所有者", read: "只读", write: "读写", manage: "管理" };
+
+function projectRoleOf(p) {
+  return p && SHARE_ROLES.includes(p.role) ? p.role : "owner";
+}
+
+function projectCanWrite(p) {
+  return projectRoleOf(p) !== "read";
+}
+
+function projectCanManage(p) {
+  return projectRoleOf(p) === "owner" || projectRoleOf(p) === "manage";
+}
+
+function currentProjectRole() {
+  if (state.workspace && state.workspace.project && state.workspace.project.id === state.projectId) {
+    return SHARE_ROLES.includes(state.workspace.role) ? state.workspace.role : "owner";
+  }
+  return projectRoleOf(state.projects.find((item) => item.id === state.projectId));
+}
+
+function canWriteWorkspace() {
+  return currentProjectRole() !== "read";
+}
+
+function canManageWorkspace() {
+  return projectCanManage({ role: currentProjectRole() });
+}
+
+function isProjectOwner() {
+  return currentProjectRole() === "owner";
+}
+
 function projectRowHtml(p) {
   const paused = projectPaused(p);
+  const shared = projectRoleOf(p) !== "owner";
   return `
     <div class="project-row${p.id === state.projectId ? " active" : ""}${paused ? " paused" : ""}">
       <button class="project-item" data-project="${p.id}" aria-label="${escapeAttr(`${p.name}，${projectDisplayStatus(p)}`)}">
         ${statusDot(projectDisplayStatus(p), "project-item-status")}
         <strong>${escapeHtml(p.name)}</strong>
         ${paused ? '<small class="project-item-flag">已停用</small>' : ""}
+        ${shared ? `<small class="project-item-flag">共享 · ${SHARE_ROLE_LABELS[projectRoleOf(p)]}</small>` : ""}
       </button>
+      ${projectCanWrite(p) ? `
       <button class="project-generate" data-project-generate="${p.id}" aria-label="为 ${escapeAttr(p.name)} 生成周报" title="生成周报">
         ${faIcon("report")}
-      </button>
+      </button>` : ""}
+      ${projectCanManage(p) ? `
       <button class="project-settings ${p.id === state.projectId && state.tab === "settings" ? "active" : ""}" data-project-settings="${p.id}" aria-label="打开 ${escapeAttr(p.name)} 的设置" title="项目设置">
         ${faIcon("gear")}
-      </button>
+      </button>` : ""}
     </div>
   `;
 }
@@ -1750,6 +1790,10 @@ function render() {
   projectStatusDot.className = `status-dot ${statusTone(displayStatus)}`;
   projectStatusDot.title = statusLabel(displayStatus);
   projectStatusDot.setAttribute("aria-label", `项目状态：${statusLabel(displayStatus)}`);
+  const wsRole = SHARE_ROLES.includes(ws.role) ? ws.role : "owner";
+  $("project-meta").textContent = wsRole === "owner"
+    ? ws.week_key
+    : `${ws.week_key} · ${ws.project.owner} 共享 · ${SHARE_ROLE_LABELS[wsRole]}权限`;
   renderProjects();
   renderOverview(ws);
   renderSettings(ws);
@@ -1802,16 +1846,20 @@ function renderOverview(ws) {
 
 function renderSettings(ws) {
   const p = ws.project;
+  const manage = canManageWorkspace();
+  const owner = isProjectOwner();
+  if (state.settingsSubTab === "sharing" && !owner) state.settingsSubTab = "project";
   $("tab-settings").innerHTML = `
     <div class="source-tabs" role="tablist" aria-label="设置分类">
       <button type="button" data-subtab="project" role="tab" onclick="switchSettingsSubTab('project')">项目设置</button>
       <button type="button" data-subtab="git" role="tab" onclick="switchSettingsSubTab('git')">Git 仓库</button>
       <button type="button" data-subtab="diagnostics" role="tab" onclick="switchSettingsSubTab('diagnostics')">系统诊断</button>
+      ${owner ? `<button type="button" data-subtab="sharing" role="tab" onclick="switchSettingsSubTab('sharing')">共享</button>` : ""}
     </div>
     <section id="settings-sub-project" class="source-view" role="tabpanel">
       <form id="settings-form" class="panel form-grid">
         <div class="panel-head wide">
-          <div class="panel-title"><h2>项目设置</h2><span>项目与报告配置 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
+          <div class="panel-title"><h2>项目设置</h2><span>${manage ? "项目与报告配置 · 修改后自动保存" : "项目与报告配置 · 只读"}</span><span class="autosave-status" aria-live="polite"></span></div>
         </div>
         ${input("name", "名称", p.name)}
         ${projectRunToggle(p)}
@@ -1830,13 +1878,14 @@ function renderSettings(ws) {
     <section id="settings-sub-git" class="source-view hidden" role="tabpanel">
       <div class="panel">
         <div class="panel-head"><h2>Git 仓库</h2><span>GitHub / GitLab，commits 每周进入生成上下文；抓取项决定本周 PR/MR、Issue、里程碑、仓库 Project、组织 Project 是否一并读取</span></div>
+        ${manage ? `
         <div class="row">
           <select id="repo-mode-input" onchange="onRepoModeChange()" aria-label="Git 模式">${state.githubEnabled !== false ? '<option value="github">GitHub</option>' : ""}${state.gitlabEnabled !== false ? '<option value="gitlab">GitLab</option>' : ""}</select>
           <input id="repo-input" placeholder="owner/repo">
           <input id="repo-notes-input" placeholder="补充说明，例如正式名称、模块边界">
           <button type="button" onclick="addRepo()">添加仓库</button>
-        </div>
-        <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>抓取项</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map(renderRepoRow).join("") || "<tr><td colspan='6'>暂无仓库。</td></tr>"}</tbody></table>
+        </div>` : `<p class="share-readonly-hint">需要管理权限才能添加或修改 Git 仓库。</p>`}
+        <table class="table"><thead><tr><th>仓库</th><th>跟踪分支</th><th>补充说明</th><th>抓取项</th><th>状态</th><th>操作</th></tr></thead><tbody>${ws.repos.map((r) => renderRepoRow(r, manage)).join("") || "<tr><td colspan='6'>暂无仓库。</td></tr>"}</tbody></table>
       </div>
     </section>
     <section id="settings-sub-diagnostics" class="source-view hidden" role="tabpanel">
@@ -1845,14 +1894,38 @@ function renderSettings(ws) {
         <table class="table"><thead><tr><th>类型</th><th>严重度</th><th>标题</th><th>更新时间</th></tr></thead><tbody>${(ws.source_diagnostics || []).map(d => `<tr><td>${escapeHtml(d.kind)}</td><td><span class="status ${d.severity}">${escapeHtml(statusLabel(d.severity))}</span></td><td>${escapeHtml(d.title)}<br>${escapeHtml(d.details || "")}</td><td>${escapeHtml(formatChinaTime(d.updated_at))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无诊断信息。</td></tr>"}</tbody></table>
       </div>
     </section>
+    ${owner ? `
+    <section id="settings-sub-sharing" class="source-view hidden" role="tabpanel">
+      <div class="panel">
+        <div class="panel-head"><h2>共享成员</h2><span>把项目共享给其他账号并分配权限 · 仅项目所有者可操作</span></div>
+        <div class="row share-add-row">
+          <input id="share-username-input" placeholder="用户名" aria-label="要共享到的用户名">
+          <select id="share-role-select" aria-label="共享权限">
+            <option value="read">只读</option>
+            <option value="write">读写</option>
+            <option value="manage">管理</option>
+          </select>
+          <button type="button" class="primary" onclick="addProjectShare()">添加成员</button>
+        </div>
+        <table class="table"><thead><tr><th>成员</th><th>权限</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="share-table-body"><tr><td colspan="4">加载中…</td></tr></tbody></table>
+        <small>只读：查看周报、资料、计划与仓库状态；读写：上传资料、填写本周补充、调整计划和当前周报、生成周报；管理：项目设置、Git 仓库与资料删除。共享成员看不到共享管理入口，也无法把项目再共享给他人。</small>
+      </div>
+    </section>` : ""}
   `;
   $("settings-form").onsubmit = saveSettings;
   setupAutoSave("project-settings", $("settings-form"), saveSettings);
+  // 只读/读写角色没有管理权限：整个设置表单停用，停用的控件不再触发
+  // 自动保存，也不会进入提交 payload
+  if (!manage) {
+    $("settings-form").querySelectorAll("input, textarea, select, button").forEach((el) => { el.disabled = true; });
+  }
   // 仓库行的补充说明与分支勾选也是填写即保存（分支 change 事件会冒泡到行上）
-  document.querySelectorAll("textarea[id^='repo-notes-']").forEach((el) => {
-    const id = Number(el.id.replace("repo-notes-", ""));
-    setupAutoSave(`repo-notes-${id}`, el.closest("tr"), () => saveRepoNotes(id));
-  });
+  if (manage) {
+    document.querySelectorAll("textarea[id^='repo-notes-']").forEach((el) => {
+      const id = Number(el.id.replace("repo-notes-", ""));
+      setupAutoSave(`repo-notes-${id}`, el.closest("tr"), () => saveRepoNotes(id));
+    });
+  }
   onRepoModeChange();
   switchSettingsSubTab(state.settingsSubTab);
 }
@@ -1865,10 +1938,86 @@ function switchSettingsSubTab(tab) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  ["project", "git", "diagnostics"].forEach((name) => {
+  ["project", "git", "diagnostics", "sharing"].forEach((name) => {
     const view = root.querySelector(`#settings-sub-${name}`);
     if (view) view.classList.toggle("hidden", name !== tab);
   });
+  if (tab === "sharing" && isProjectOwner()) loadProjectShares();
+}
+
+// —— 共享成员管理（仅项目所有者）：显式按钮即时保存，不走表单自动保存 ——
+
+function renderShareRows() {
+  const body = $("share-table-body");
+  if (!body) return;
+  body.innerHTML = (state.projectShares || []).map((share) => `
+    <tr>
+      <td data-label="成员"><strong>${escapeHtml(share.username)}</strong></td>
+      <td data-label="权限"><select aria-label="${escapeAttr(share.username)} 的共享权限" onchange="changeShareRole(${share.user_id}, this.value)">
+        ${SHARE_ROLES.map((role) => `<option value="${role}" ${share.role === role ? "selected" : ""}>${SHARE_ROLE_LABELS[role]}</option>`).join("")}
+      </select></td>
+      <td data-label="添加时间">${escapeHtml(formatChinaTime(share.created_at))}</td>
+      <td data-label="操作"><div class="table-actions"><button type="button" class="danger" onclick="removeProjectShare(${share.user_id})">移除</button></div></td>
+    </tr>
+  `).join("") || "<tr><td colspan='4'>还没有共享成员。</td></tr>";
+}
+
+async function loadProjectShares() {
+  try {
+    const data = await api(`/api/projects/${state.projectId}/shares`);
+    state.projectShares = data.shares || [];
+    renderShareRows();
+  } catch (error) {
+    const body = $("share-table-body");
+    if (body) body.innerHTML = `<tr><td colspan='4'>${escapeHtml(error.message)}</td></tr>`;
+  }
+}
+
+async function addProjectShare() {
+  const username = $("share-username-input")?.value.trim() || "";
+  const role = $("share-role-select")?.value || "read";
+  if (!username) {
+    toast("请填写要共享到的用户名");
+    $("share-username-input")?.focus();
+    return;
+  }
+  try {
+    const data = await api(`/api/projects/${state.projectId}/shares`, { method: "PUT", body: JSON.stringify({ username, role }) });
+    state.projectShares = data.shares || [];
+    $("share-username-input").value = "";
+    renderShareRows();
+    toast(`已共享给 ${username}（${SHARE_ROLE_LABELS[role]}）`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function changeShareRole(userId, role) {
+  const share = (state.projectShares || []).find((item) => item.user_id === userId);
+  if (!share) return;
+  try {
+    const data = await api(`/api/projects/${state.projectId}/shares`, { method: "PUT", body: JSON.stringify({ username: share.username, role }) });
+    state.projectShares = data.shares || [];
+    renderShareRows();
+    toast("共享权限已更新");
+  } catch (error) {
+    toast(error.message);
+    loadProjectShares();
+  }
+}
+
+async function removeProjectShare(userId) {
+  const share = (state.projectShares || []).find((item) => item.user_id === userId);
+  if (!share) return;
+  if (!window.confirm(`移除「${share.username}」对此项目的访问权限？`)) return;
+  try {
+    const data = await api(`/api/projects/${state.projectId}/shares/${userId}`, { method: "DELETE" });
+    state.projectShares = data.shares || [];
+    renderShareRows();
+    toast("已移除共享成员");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function templateJobPending() {
@@ -1955,21 +2104,28 @@ function onRepoModeChange() {
   $("repo-input").placeholder = gitlab ? "group/project 或 group/sub-group/project" : "owner/repo";
 }
 
-function renderRepoRow(r) {
+function renderRepoRow(r, manage = true) {
   const enabled = Number(r.enabled) !== 0;
   const modeLabel = r.git_mode === "gitlab" ? "GitLab" : "GitHub";
   return `
     <tr class="${enabled ? "" : "repo-row-disabled"}">
       <td data-label="仓库"><span class="status">${modeLabel}</span><br>${escapeHtml(r.repo)}</td>
-      <td data-label="跟踪分支">${renderBranchPicker(r)}<div class="autosave-status" aria-live="polite"></div></td>
-      <td data-label="补充说明"><textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea></td>
-      <td data-label="抓取项"><div class="repo-fetch-flags">${renderRepoFetchFlags(r)}</div></td>
+      <td data-label="跟踪分支">${manage ? `${renderBranchPicker(r)}<div class="autosave-status" aria-live="polite"></div>` : `<span>${escapeHtml(trackedBranchSummary(r))}</span>`}</td>
+      <td data-label="补充说明">${manage
+        ? `<textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea>`
+        : `<div class="locked-material">${escapeHtml(r.notes || "") || "—"}</div>`}</td>
+      <td data-label="抓取项"><div class="repo-fetch-flags">${renderRepoFetchFlags(r, manage)}</div></td>
       <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
-      <td data-label="操作"><div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" data-autosave-ignore aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div></td>
+      <td data-label="操作">${manage ? `<div class="table-actions"><label class="switch" title="${enabled ? "已启用 · 参与周报生成" : "已停用 · 不参与周报生成"}"><input type="checkbox" data-autosave-ignore aria-label="启用或停用该仓库" ${enabled ? "checked" : ""} onchange="toggleRepo(${r.id}, this.checked)"><span class="switch-slider"></span></label><button type="button" onclick="refreshRepo(${r.id})">刷新</button><button type="button" class="danger" onclick="deleteRepo(${r.id})">删除</button></div>` : `<span class="status">仅查看</span>`}</td>
     </tr>
   `;
+}
+
+function trackedBranchSummary(r) {
+  const selected = r.tracked_branches && r.tracked_branches.length ? r.tracked_branches : ["main"];
+  return selected.includes(TRACK_ALL_BRANCHES) ? "All" : selected.join(", ");
 }
 
 const REPO_FETCH_FLAGS = [
@@ -1980,13 +2136,13 @@ const REPO_FETCH_FLAGS = [
   ["fetch_org_projects", "组织Project", "读取 GitHub 组织 Projects 看板（同组织多个仓库只读取一次）", "github"],
 ];
 
-function renderRepoFetchFlags(r) {
+function renderRepoFetchFlags(r, manage = true) {
   const gitlab = r.git_mode === "gitlab";
   return REPO_FETCH_FLAGS
     .filter(([, , , scope]) => scope === "both" || !gitlab)
     .map(([key, label, title]) => `
       <label class="repo-fetch-flag" title="${title}">
-        <input type="checkbox" data-autosave-ignore aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} onchange="toggleRepoFetch(${r.id}, '${key}', this)">
+        <input type="checkbox" data-autosave-ignore aria-label="${label}抓取开关" ${Number(r[key]) ? "checked" : ""} ${manage ? "" : "disabled"} onchange="toggleRepoFetch(${r.id}, '${key}', this)">
         <span>${label}</span>
       </label>
     `).join("");
@@ -2012,7 +2168,7 @@ async function toggleRepoFetch(id, key, input) {
 function renderBranchPicker(repo) {
   const selected = repo.tracked_branches && repo.tracked_branches.length ? repo.tracked_branches : ["main"];
   const options = branchOptionsFor(repo);
-  const summary = selected.includes(TRACK_ALL_BRANCHES) ? "All" : selected.join(", ");
+  const summary = trackedBranchSummary(repo);
   return `
     <details class="branch-picker" id="branch-picker-${repo.id}">
       <summary>${escapeHtml(summary)}</summary>
@@ -2105,12 +2261,14 @@ async function saveSettings(event) {
 }
 
 function renderPlan(ws) {
+  const writable = canWriteWorkspace();
   $("tab-plan").innerHTML = `
     <div class="source-tabs" role="tablist" aria-label="计划和风险">
       <button type="button" data-subtab="plan" role="tab" onclick="switchPlanSubTab('plan')">项目计划</button>
       <button type="button" data-subtab="risk" role="tab" onclick="switchPlanSubTab('risk')">进度风险</button>
     </div>
     <section id="plan-sub-plan" class="source-view" role="tabpanel">
+      ${writable ? `
       <form id="plan-form" class="panel">
         <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
         ${textarea("objectives", "目标", ws.plan.objectives)}
@@ -2120,7 +2278,15 @@ function renderPlan(ws) {
         <h3>交付物</h3>
         <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
         <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
-      </form>
+      </form>` : `
+      <div class="panel">
+        <div class="panel-head"><h2>项目计划</h2><span>只读</span></div>
+        <p>${escapeHtml(ws.plan.objectives || "暂无目标。")}</p>
+        <h3>里程碑</h3>
+        <table class="table"><tbody>${ws.plan.milestones.map(rowItem).join("") || "<tr><td>暂无里程碑。</td></tr>"}</tbody></table>
+        <h3>交付物</h3>
+        <table class="table"><tbody>${ws.plan.deliverables.map(rowItem).join("") || "<tr><td>暂无交付物。</td></tr>"}</tbody></table>
+      </div>`}
     </section>
     <section id="plan-sub-risk" class="source-view hidden" role="tabpanel">
       <div class="panel">
@@ -2130,8 +2296,10 @@ function renderPlan(ws) {
       </div>
     </section>
   `;
-  $("plan-form").onsubmit = savePlan;
-  setupAutoSave("plan", $("plan-form"), savePlan);
+  if (writable) {
+    $("plan-form").onsubmit = savePlan;
+    setupAutoSave("plan", $("plan-form"), savePlan);
+  }
   switchPlanSubTab(state.planSubTab);
 }
 
@@ -2195,7 +2363,9 @@ function supplementFieldsHtml(item) {
 
 function renderUpdates(ws) {
   const u = ws.weekly_update || {};
+  const writable = canWriteWorkspace();
   $("tab-updates").innerHTML = `
+    ${writable ? `
     <form id="update-form" class="panel form-grid">
       <div class="panel-head wide"><h2>本周补充</h2><span>${escapeHtml(ws.week_key)} · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
       ${textarea("completed", "已完成", u.completed || "", "wide")}
@@ -2203,7 +2373,11 @@ function renderUpdates(ws) {
       ${textarea("blockers", "阻塞事项", u.blockers || "", "wide")}
       ${textarea("risks", "风险", u.risks || "", "wide")}
       ${textarea("next_steps", "下一步计划", u.next_steps || "", "wide")}
-    </form>
+    </form>` : `
+    <div class="panel">
+      <div class="panel-head"><h2>本周补充</h2><span>${escapeHtml(ws.week_key)} · 只读</span></div>
+      ${supplementFieldsHtml(u) || "<p>本周还没有填写补充内容。</p>"}
+    </div>`}
     <div id="supplement-history" class="panel">
       <div class="panel-head"><h2>补充历史</h2><span>生成周报时同步留档</span></div>
       ${(ws.update_history || []).map(item => `
@@ -2214,8 +2388,10 @@ function renderUpdates(ws) {
       `).join("") || "<p>还没有历史补充。</p>"}
     </div>
   `;
-  $("update-form").onsubmit = saveWeeklyUpdate;
-  setupAutoSave("weekly-update", $("update-form"), saveWeeklyUpdate);
+  if (writable) {
+    $("update-form").onsubmit = saveWeeklyUpdate;
+    setupAutoSave("weekly-update", $("update-form"), saveWeeklyUpdate);
+  }
 }
 
 async function saveWeeklyUpdate(event) {
@@ -2228,6 +2404,8 @@ async function saveWeeklyUpdate(event) {
 }
 
 function renderSources(ws) {
+  const writable = canWriteWorkspace();
+  const manageable = canManageWorkspace();
   $("tab-sources").innerHTML = `
     <div class="source-tabs" role="tablist" aria-label="资料类型">
       <button type="button" data-source-tab="manual" role="tab" onclick="switchSourceTab('manual')">手工资料</button>
@@ -2236,6 +2414,7 @@ function renderSources(ws) {
     <section id="source-files" class="source-view" role="tabpanel">
       <div class="panel source-panel">
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
+        ${writable ? `
         <label id="material-dropzone" class="upload-dropzone" for="material-file" role="button" tabindex="0">
           <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf" multiple>
           <span class="upload-icon" aria-hidden="true">↑</span>
@@ -2244,19 +2423,20 @@ function renderSources(ws) {
         </label>
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
-        </div>
-        <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map(renderUploadedMaterialRow).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
+        </div>` : `<p class="share-readonly-hint">只读权限：资料仅供查看，需要读写权限才能上传。</p>`}
+        <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map((m) => renderUploadedMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
       </div>
     </section>
     <section id="source-manual" class="source-view hidden" role="tabpanel">
       <div class="panel source-panel">
         <div class="panel-head"><h2>手工资料</h2><span>仅本周录入的资料可以修改 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
+        ${writable ? `
         <div class="manual-material-form" id="manual-material-form">
           <input id="manual-material-title" placeholder="资料标题" onkeydown="if (event.key === 'Enter') addManualMaterial()">
           <textarea id="manual-material-content" placeholder="输入本周新增的背景、决策、会议记录或补充资料"></textarea>
           <div class="manual-material-actions"><button class="primary" type="button" onclick="addManualMaterial()">添加资料</button></div>
-        </div>
-        <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map(renderManualMaterialRow).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
+        </div>` : `<p class="share-readonly-hint">只读权限：手工资料仅供查看。</p>`}
+        <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map((m) => renderManualMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
       </div>
     </section>
   `;
@@ -2323,22 +2503,27 @@ function updateMaterialSelection() {
     : "支持 Markdown、纯文本、HTML 和 PDF，可多选";
 }
 
-function renderUploadedMaterialRow(m) {
+function renderUploadedMaterialRow(m, writable = true, manageable = true) {
   const extractionMessage = m.extraction_error ? `<div class="material-message">${escapeHtml(m.extraction_error)}</div>` : "";
   const summaryMessage = m.summary_error ? `<div class="material-message">AI 摘要失败，当前显示回退摘要：${escapeHtml(m.summary_error)}</div>` : "";
   return `<tr>
     <td data-label="文件"><strong>${escapeHtml(m.filename)}</strong><small>${formatBytes(m.size_bytes)}</small></td>
     <td data-label="提取"><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
-    <td data-label="摘要"><textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}</td>
+    <td data-label="摘要">${writable
+      ? `<textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}`
+      : `<div class="locked-material">${escapeHtml(m.summary || "")}</div>`}</td>
     <td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
-    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
+    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${manageable && m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
   </tr>`;
 }
 
-function renderManualMaterialRow(m) {
+function renderManualMaterialRow(m, writable = true, manageable = true) {
   const content = escapeHtml(m.content || "");
+  if (writable && m.editable) {
+    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${manageable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td></tr>`;
+  }
   if (m.editable) {
-    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button class="danger" onclick="deleteMaterial(${m.id})">删除</button></div></td></tr>`;
+    return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button></div></td></tr>`;
   }
   return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><span class="status">已锁定</span></div></td></tr>`;
 }
@@ -2525,7 +2710,7 @@ function renderReport(ws) {
     <div class="panel">
       <div class="panel-head">
         <div class="panel-title"><h2>当前周报</h2>${ws.report && ws.report.edited_at ? '<span class="status edited">已手工调整</span>' : ""}<span>最近一次成功生成的 Markdown</span></div>
-        <div class="panel-actions">${ws.report ? `<button onclick="openReportEditor()">编辑</button><button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
+        <div class="panel-actions">${ws.report ? `${canWriteWorkspace() ? `<button onclick="openReportEditor()">编辑</button>` : ""}<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
       </div>
       ${jobNotice}
       ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>当前项目周还没有生成周报。</p>"}

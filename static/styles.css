@@ -867,6 +867,8 @@ span.autosave-status { text-align: left; }
 .material-message { max-width: 260px; margin-top: 7px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .material-editor { width: min(520px, 100%); min-width: 240px; min-height: 104px; }
 .locked-material { max-width: 520px; max-height: 140px; overflow: auto; white-space: pre-wrap; color: var(--body); overflow-wrap: anywhere; }
+.share-readonly-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.share-add-row { margin-bottom: 12px; }
 .status {
   display: inline-flex;
   max-width: 100%;
