@@ -89,6 +89,14 @@ from .reports import changed_since_last_success, fail_stale_generation_jobs, gen
 from .task_queue import enqueue_template_generation
 from .risks import evaluate_risks, progress_status
 from .search_index import search
+from .sharing import (
+    ACCESSIBLE_PROJECTS_SQL,
+    project_role,
+    remove_share,
+    require_role,
+    set_share,
+    share_rows,
+)
 from .task_queue import (
     QueueFullError,
     enqueue_report_generation,
@@ -658,9 +666,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/state" and method == "GET":
                 projects = []
+                # owned projects plus projects shared with this account; the
+                # share row carries the collaborator role, owned rows are "owner"
                 for row in conn.execute(
-                    "SELECT * FROM projects WHERE user_id = ? ORDER BY updated_at DESC",
-                    (user_id,),
+                    """
+                    SELECT p.*,
+                           CASE WHEN ps.user_id IS NULL THEN 'owner' ELSE ps.role END AS role,
+                           CASE WHEN ps.user_id IS NULL THEN '' ELSE u.username END AS shared_by
+                    FROM projects p
+                    JOIN users u ON u.id = p.user_id
+                    LEFT JOIN project_shares ps ON ps.project_id = p.id AND ps.user_id = ?
+                    WHERE p.user_id = ? OR ps.user_id = ?
+                    ORDER BY p.updated_at DESC
+                    """,
+                    (user_id, user_id, user_id),
                 ):
                     project = dict(row)
                     project["progress_status"] = progress_status(conn, project["id"])
@@ -862,14 +881,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if len(parts) == 3 and parts[:2] == ["api", "materials"] and parts[2].isdigit() and method == "GET":
                 # id-addressed material lookup for CLI `material show`; the
-                # project ownership join keeps per-user isolation
+                # ownership/share join keeps per-user isolation
                 material_id = int(parts[2])
                 owner = conn.execute(
-                    """
+                    f"""
                     SELECT m.project_id FROM materials m JOIN projects p ON p.id = m.project_id
-                    WHERE m.id = ? AND p.user_id = ?
+                    WHERE m.id = ? AND p.id IN {ACCESSIBLE_PROJECTS_SQL}
                     """,
-                    (material_id, user_id),
+                    (material_id, user_id, user_id),
                 ).fetchone()
                 material = material_detail(conn, owner["project_id"], material_id) if owner else None
                 if not material:
@@ -881,12 +900,12 @@ class Handler(BaseHTTPRequestHandler):
                 # id-addressed weekly report lookup for CLI `report show`
                 report_id = int(parts[2])
                 row = conn.execute(
-                    """
+                    f"""
                     SELECT wr.id, wr.project_id, wr.week_key, wr.content_md, p.name AS project_name
                     FROM weekly_reports wr JOIN projects p ON p.id = wr.project_id
-                    WHERE wr.id = ? AND p.user_id = ?
+                    WHERE wr.id = ? AND p.id IN {ACCESSIBLE_PROJECTS_SQL}
                     """,
-                    (report_id, user_id),
+                    (report_id, user_id, user_id),
                 ).fetchone()
                 if not row:
                     self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
@@ -904,15 +923,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "projects" and parts[2].isdigit():
                 project_id = int(parts[2])
-                owned = conn.execute(
-                    "SELECT id FROM projects WHERE id = ? AND user_id = ?",
-                    (project_id, user_id),
-                ).fetchone()
-                if not owned:
+                # Collaborator roles: unknown or unshared projects answer 404
+                # like before (existence masking), insufficient roles answer
+                # 403 through require_role below.
+                role = project_role(conn, project_id, user_id)
+                if role is None:
                     self.error(HTTPStatus.NOT_FOUND, "project not found")
                     return
                 if len(parts) == 4 and parts[3] == "workspace" and method == "GET":
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "GET":
                     material = material_detail(conn, project_id, int(parts[4]))
@@ -932,6 +951,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(archived)
                     return
                 if len(parts) == 5 and parts[3] == "reports" and method == "PUT":
+                    require_role(role, "write")
                     updated = save_report_edit(conn, project_id, parts[4], self.body_json())
                     if not updated:
                         self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
@@ -943,6 +963,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.report_pdf(conn, project_id, parts[4])
                     return
                 if len(parts) == 4 and parts[3] == "status" and method == "POST":
+                    require_role(role, "manage")
                     payload = self.body_json()
                     status = "active" if payload.get("enabled", True) else "paused"
                     conn.execute(
@@ -953,17 +974,39 @@ class Handler(BaseHTTPRequestHandler):
                     self.json({"id": project_id, "status": status})
                     return
                 if len(parts) == 4 and parts[3] == "settings" and method == "PUT":
+                    require_role(role, "manage")
                     update_settings(conn, project_id, self.body_json())
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 4 and parts[3] == "suggest-template" and method == "POST":
+                    require_role(role, "manage")
                     payload = self.body_json()
                     template_job_id = enqueue_template_generation(conn, self.server.db_path, project_id, str(payload.get("requirements") or ""))
                     conn.commit()
                     self.json({"id": template_job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
                     return
+                if len(parts) == 4 and parts[3] == "shares" and method == "GET":
+                    if role != "owner":
+                        raise PermissionError("只有项目所有者可以查看共享成员")
+                    self.json({"shares": share_rows(conn, project_id)})
+                    return
+                if len(parts) == 4 and parts[3] == "shares" and method == "PUT":
+                    if role != "owner":
+                        raise PermissionError("只有项目所有者可以管理共享成员")
+                    shares = set_share(conn, project_id, self.body_json())
+                    conn.commit()
+                    self.json({"shares": shares})
+                    return
+                if len(parts) == 5 and parts[3] == "shares" and parts[4].isdigit() and method == "DELETE":
+                    if role != "owner":
+                        raise PermissionError("只有项目所有者可以管理共享成员")
+                    shares = remove_share(conn, project_id, int(parts[4]))
+                    conn.commit()
+                    self.json({"shares": shares})
+                    return
                 if len(parts) == 4 and parts[3] == "materials" and method == "POST":
+                    require_role(role, "write")
                     payload = self.body_json()
                     if payload.get("source_type") == "manual":
                         material_id = store_manual_material(conn, project_id, payload)
@@ -979,6 +1022,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.json({"id": material_ids[0], "ids": material_ids}, HTTPStatus.CREATED)
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "PUT":
+                    require_role(role, "write")
                     payload = self.body_json()
                     if "summary" in payload:
                         update_material_summary(conn, project_id, int(parts[4]), payload)
@@ -986,32 +1030,36 @@ class Handler(BaseHTTPRequestHandler):
                         update_manual_material(conn, project_id, int(parts[4]), payload)
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "DELETE":
+                    require_role(role, "manage")
                     storage_path = delete_material(conn, project_id, int(parts[4]))
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     remove_material_file(storage_path)
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 4 and parts[3] == "repos" and method == "POST":
+                    require_role(role, "manage")
                     repo_id = add_repo(conn, project_id, self.body_json(), auth_info=git_auth_for_user(conn, user_id))
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     self.json({"id": repo_id}, HTTPStatus.CREATED)
                     return
                 if len(parts) == 5 and parts[3] == "repos" and method == "PUT":
+                    require_role(role, "manage")
                     update_repo_notes(conn, project_id, int(parts[4]), self.body_json(), auth_info=git_auth_for_user(conn, user_id))
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 5 and parts[3] == "repos" and method == "DELETE":
+                    require_role(role, "manage")
                     delete_repo(conn, project_id, int(parts[4]))
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "branches" and method == "GET":
                     self.json(repo_branches(conn, project_id, int(parts[4]), auth_info=git_auth_for_user(conn, user_id)))
@@ -1020,23 +1068,27 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(repo_activity_detail(conn, project_id, int(parts[4]), auth_info=git_auth_for_user(conn, user_id)))
                     return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "refresh" and method == "POST":
+                    require_role(role, "manage")
                     refresh_repo(conn, int(parts[4]))
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 4 and parts[3] == "plan" and method == "PUT":
+                    require_role(role, "write")
                     save_plan(conn, project_id, self.body_json())
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 4 and parts[3] == "weekly-update" and method == "PUT":
+                    require_role(role, "write")
                     save_weekly_update(conn, project_id, self.body_json())
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 4 and parts[3] == "generate" and method == "POST":
+                    require_role(role, "write")
                     payload = self.body_json()
                     job_id = enqueue_report_generation(
                         conn, self.server.db_path, project_id, "manual", force=bool(payload.get("force", True))
@@ -1045,18 +1097,26 @@ class Handler(BaseHTTPRequestHandler):
                     self.json({"id": job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
                     return
                 if len(parts) == 4 and parts[3] == "schedule-check" and method == "POST":
+                    require_role(role, "write")
                     evaluate_schedules(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id))
+                    self.json(workspace(conn, project_id, role))
                     return
             if len(parts) == 4 and parts[:2] == ["api", "risks"] and parts[2].isdigit() and method == "POST":
                 status = parts[3]
                 if status not in {"dismissed", "resolved"}:
                     raise ValidationError("invalid risk status")
-                conn.execute(
-                    "UPDATE risk_warnings SET status = ?, updated_at = ? WHERE id = ? AND project_id IN (SELECT id FROM projects WHERE user_id = ?)",
-                    (status, iso_now(), int(parts[2]), user_id),
-                )
+                risk = conn.execute(
+                    "SELECT project_id FROM risk_warnings WHERE id = ?",
+                    (int(parts[2]),),
+                ).fetchone()
+                if risk:
+                    # changing risk status writes project content: write role+
+                    require_role(project_role(conn, risk["project_id"], user_id), "write")
+                    conn.execute(
+                        "UPDATE risk_warnings SET status = ?, updated_at = ? WHERE id = ?",
+                        (status, iso_now(), int(parts[2])),
+                    )
                 conn.commit()
                 self.json({"ok": True})
                 return
@@ -1142,7 +1202,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def workspace(conn, project_id):
+def workspace(conn, project_id, role="owner"):
     evaluate_risks(conn, project_id)
     project = dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
     week_key = current_week_key(project["timezone"])
@@ -1169,6 +1229,7 @@ def workspace(conn, project_id):
         report_history.append(item)
     return {
         "project": project,
+        "role": role,
         "week_key": week_key,
         "schedules": [dict(row) for row in conn.execute("SELECT * FROM update_schedules WHERE project_id = ? ORDER BY weekday, local_time", (project_id,))],
         "materials": material_rows(conn, project_id, project["timezone"]),

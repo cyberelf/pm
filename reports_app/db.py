@@ -251,6 +251,17 @@ CREATE TABLE IF NOT EXISTS user_settings (
     value TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (user_id, key)
 );
+
+CREATE TABLE IF NOT EXISTS project_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(project_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_shares_user ON project_shares(user_id);
 """
 
 

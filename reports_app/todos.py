@@ -2,6 +2,7 @@ import hashlib
 
 from .materials import material_is_unlocked, store_manual_material
 from .markdown import render_markdown
+from .sharing import project_role, require_role
 from .timeutil import iso_now
 from .validation import ValidationError
 
@@ -139,11 +140,13 @@ def close_todo(conn, todo_id, payload, user_id):
             project_id = int(raw_project_id)
         except (TypeError, ValueError) as exc:
             raise ValidationError("invalid project") from exc
-        project = conn.execute(
-            "SELECT id FROM projects WHERE id = ? AND user_id = ?", (project_id, user_id)
-        ).fetchone()
-        if not project:
+        # closing into a project stores a manual material there, so shared
+        # collaborators need at least the write role; owners always can
+        role = project_role(conn, project_id, user_id)
+        if role is None:
             raise ValidationError("project not found")
+        require_role(role, "write")
+        project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
         material_id = store_manual_material(
             conn,
             project_id,

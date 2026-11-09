@@ -5031,3 +5031,339 @@ class SearchTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+class ProjectSharingTest(unittest.TestCase):
+    """Owner-granted project shares: role hierarchy, share management API,
+    per-role endpoint permissions, and shared scope in search / queue state."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        os.environ["REPORTS_ADMIN_PASSWORD"] = "changeme"
+        init_db(self.db_path)
+        self.conn = connect(self.db_path)
+        self.owner = ensure_bootstrap_admin(self.conn)
+        self.owner_id = self.owner["id"]
+        self.read_id = auth.create_user(self.conn, "reader", "secret1", is_admin=False)
+        self.write_id = auth.create_user(self.conn, "writer", "secret1", is_admin=False)
+        self.manage_id = auth.create_user(self.conn, "manager", "secret1", is_admin=False)
+        self.outsider_id = auth.create_user(self.conn, "outsider", "secret1", is_admin=False)
+        self.project_id = create_project(
+            self.conn,
+            {"name": "Shared", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "internal"},
+            self.owner,
+        )
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def tearDown(self):
+        self.conn.close()
+        os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        os.environ.pop("REPORTS_ADMIN_PASSWORD", None)
+        self.tmp.cleanup()
+
+    def grant(self, user_id, role):
+        self.conn.execute(
+            "INSERT INTO project_shares (project_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (self.project_id, user_id, role, iso_now(), iso_now()),
+        )
+        self.conn.commit()
+
+    def start_server(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread
+
+    def token_for(self, port, username, password):
+        client = HTTPConnection("127.0.0.1", port, timeout=10)
+        client.request(
+            "POST",
+            "/api/auth/login",
+            body=json.dumps({"username": username, "password": password}),
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        response.read()
+        cookie = response.getheader("Set-Cookie") or ""
+        client.close()
+        return cookie.split("reports_session=")[1].split(";")[0]
+
+    def api(self, port, method, path, token, body=None):
+        client = HTTPConnection("127.0.0.1", port, timeout=30)
+        headers = {"Content-Type": "application/json", "Cookie": f"reports_session={token}"}
+        client.request(method, path, body=body, headers=headers)
+        response = client.getresponse()
+        payload = json.loads(response.read())
+        client.close()
+        return response.status, payload
+
+    def test_share_management_api_and_guards(self):
+        server, thread = self.start_server()
+        try:
+            port = server.server_port
+            owner_token = self.token_for(port, "darren", "changeme")
+            manage_token = self.token_for(port, "manager", "secret1")
+            self.grant(self.manage_id, "manage")
+
+            # grant + list
+            status, payload = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
+                                       body=json.dumps({"username": "reader", "role": "read"}))
+            self.assertEqual(status, 200)
+            shares = {(s["username"], s["role"]) for s in payload["shares"]}
+            self.assertIn(("reader", "read"), shares)
+            self.assertIn(("manager", "manage"), shares)
+            status, payload = self.api(port, "GET", f"/api/projects/{self.project_id}/shares", owner_token)
+            self.assertEqual(status, 200)
+            self.assertIn("reader", [s["username"] for s in payload["shares"]])
+
+            # upsert changes the role in place
+            status, payload = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
+                                       body=json.dumps({"username": "reader", "role": "write"}))
+            self.assertEqual(status, 200)
+            self.assertEqual(next(s["role"] for s in payload["shares"] if s["username"] == "reader"), "write")
+
+            # guards: bad role, unknown user, the owner themself, disabled account
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
+                                 body=json.dumps({"username": "reader", "role": "admin"}))
+            self.assertEqual(status, 400)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
+                                 body=json.dumps({"username": "ghost", "role": "read"}))
+            self.assertEqual(status, 400)
+            status, payload = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
+                                       body=json.dumps({"username": "darren", "role": "read"}))
+            self.assertEqual(status, 400)
+            self.conn.execute("UPDATE users SET enabled = 0 WHERE id = ?", (self.outsider_id,))
+            self.conn.commit()
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
+                                 body=json.dumps({"username": "outsider", "role": "read"}))
+            self.assertEqual(status, 400)
+            self.conn.execute("UPDATE users SET enabled = 1 WHERE id = ?", (self.outsider_id,))
+            self.conn.commit()
+
+            # share management is owner-only, viewing the list included
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", manage_token,
+                                 body=json.dumps({"username": "outsider", "role": "read"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "GET", f"/api/projects/{self.project_id}/shares", manage_token)
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "DELETE", f"/api/projects/{self.project_id}/shares/{self.read_id}", manage_token)
+            self.assertEqual(status, 403)
+
+            # revoke cuts access
+            status, payload = self.api(port, "DELETE", f"/api/projects/{self.project_id}/shares/{self.read_id}", owner_token)
+            self.assertEqual(status, 200)
+            self.assertNotIn("reader", [s["username"] for s in payload["shares"]])
+            self.assertIn("manager", [s["username"] for s in payload["shares"]])
+            status, _ = self.api(port, "GET", f"/api/projects/{self.project_id}/workspace", manage_token)
+            self.assertEqual(status, 200)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_shared_project_visibility_and_existence_masking(self):
+        server, thread = self.start_server()
+        try:
+            port = server.server_port
+            reader_token = self.token_for(port, "reader", "secret1")
+            outsider_token = self.token_for(port, "outsider", "secret1")
+            self.grant(self.read_id, "read")
+
+            # /api/state lists the shared project with role and owner name
+            status, payload = self.api(port, "GET", "/api/state", reader_token)
+            self.assertEqual(status, 200)
+            shared = [p for p in payload["projects"] if p["id"] == self.project_id]
+            self.assertEqual(len(shared), 1)
+            self.assertEqual(shared[0]["role"], "read")
+            self.assertEqual(shared[0]["shared_by"], "darren")
+
+            # the owner's own rows still say owner and carry no shared_by
+            owner_token = self.token_for(port, "darren", "changeme")
+            status, payload = self.api(port, "GET", "/api/state", owner_token)
+            own = [p for p in payload["projects"] if p["id"] == self.project_id]
+            self.assertEqual(own[0]["role"], "owner")
+            self.assertEqual(own[0]["shared_by"], "")
+
+            # existence stays masked for outsiders, readable for grantees
+            status, _ = self.api(port, "GET", f"/api/projects/{self.project_id}/workspace", reader_token)
+            self.assertEqual(status, 200)
+            status, payload = self.api(port, "GET", f"/api/projects/{self.project_id}/workspace", reader_token)
+            self.assertEqual(payload["role"], "read")
+            status, _ = self.api(port, "GET", f"/api/projects/{self.project_id}/workspace", outsider_token)
+            self.assertEqual(status, 404)
+            status, _ = self.api(port, "GET", f"/api/projects/{self.project_id}/shares", reader_token)
+            self.assertEqual(status, 403)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_share_role_permission_matrix(self):
+        server, thread = self.start_server()
+        try:
+            port = server.server_port
+            tokens = {
+                "read": self.token_for(port, "reader", "secret1"),
+                "write": self.token_for(port, "writer", "secret1"),
+                "manage": self.token_for(port, "manager", "secret1"),
+            }
+            for user_id, role in ((self.read_id, "read"), (self.write_id, "write"), (self.manage_id, "manage")):
+                self.grant(user_id, role)
+            status, payload = self.api(port, "POST", f"/api/projects/{self.project_id}/materials", tokens["write"],
+                                       body=json.dumps({"source_type": "manual", "title": "协作者资料", "content": "本周联调记录"}))
+            self.assertEqual(status, 201)
+            material_id = payload["id"]
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/weekly-update", tokens["write"],
+                                 body=json.dumps({"completed": "完成联调"}))
+            self.assertEqual(status, 200)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/plan", tokens["write"],
+                                 body=json.dumps({"objectives": "发布", "milestones": [], "deliverables": []}))
+            self.assertEqual(status, 200)
+
+            # current-week report edit: write+, not read
+            now = iso_now()
+            self.conn.execute(
+                "INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)"
+                " VALUES (?, ?, '# 周报', NULL, ?, ?)",
+                (self.project_id, current_week_key("Asia/Shanghai"), now, now),
+            )
+            self.conn.commit()
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/reports/{current_week_key('Asia/Shanghai')}", tokens["read"],
+                                 body=json.dumps({"content_md": "# 改写"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/reports/{current_week_key('Asia/Shanghai')}", tokens["write"],
+                                 body=json.dumps({"content_md": "# 协作者改写"}))
+            self.assertEqual(status, 200)
+
+            # read: everything visible, nothing writable
+            status, payload = self.api(port, "GET", f"/api/projects/{self.project_id}/workspace", tokens["read"])
+            self.assertEqual(status, 200)
+            self.assertEqual(len(payload["materials"]), 1)
+            status, _ = self.api(port, "POST", f"/api/projects/{self.project_id}/materials", tokens["read"],
+                                 body=json.dumps({"source_type": "manual", "title": "x", "content": "y"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/materials/{material_id}", tokens["read"],
+                                 body=json.dumps({"summary": "x"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/weekly-update", tokens["read"],
+                                 body=json.dumps({"completed": "x"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/plan", tokens["read"],
+                                 body=json.dumps({"objectives": "x", "milestones": [], "deliverables": []}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "POST", f"/api/projects/{self.project_id}/generate", tokens["read"], body="{}")
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/settings", tokens["read"],
+                                 body=json.dumps({"name": "X", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "status": "active", "report_provider": "internal"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "POST", f"/api/projects/{self.project_id}/status", tokens["read"],
+                                 body=json.dumps({"enabled": False}))
+            self.assertEqual(status, 403)
+
+            # write: content yes, configuration no
+            status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/settings", tokens["write"],
+                                 body=json.dumps({"name": "X", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "status": "active", "report_provider": "internal"}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "POST", f"/api/projects/{self.project_id}/status", tokens["write"],
+                                 body=json.dumps({"enabled": False}))
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "DELETE", f"/api/projects/{self.project_id}/materials/{material_id}", tokens["write"])
+            self.assertEqual(status, 403)
+
+            # manage: settings and deletion yes
+            status, payload = self.api(port, "PUT", f"/api/projects/{self.project_id}/settings", tokens["manage"],
+                                       body=json.dumps({"name": "Shared", "description": "协作项目", "start_date": "2026-06-27",
+                                                        "timezone": "Asia/Shanghai", "status": "active", "report_provider": "internal"}))
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["project"]["description"], "协作项目")
+            status, _ = self.api(port, "DELETE", f"/api/projects/{self.project_id}/materials/{material_id}", tokens["manage"])
+            self.assertEqual(status, 200)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_generation_and_risks_follow_share_roles(self):
+        server, thread = self.start_server()
+        try:
+            port = server.server_port
+            read_token = self.token_for(port, "reader", "secret1")
+            write_token = self.token_for(port, "writer", "secret1")
+            self.grant(self.read_id, "read")
+            self.grant(self.write_id, "write")
+
+            # a write collaborator can queue generation and sees the job in
+            # the queue snapshot; a read collaborator cannot queue it
+            status, payload = self.api(port, "POST", f"/api/projects/{self.project_id}/generate", write_token,
+                                       body=json.dumps({"force": True}))
+            self.assertEqual(status, 202)
+            status, payload = self.api(port, "GET", "/api/task-queue", write_token)
+            self.assertEqual(status, 200)
+            self.assertTrue(any(task["project_id"] == self.project_id for task in payload["tasks"]))
+            status, _ = self.api(port, "POST", f"/api/projects/{self.project_id}/generate", read_token,
+                                 body=json.dumps({"force": True}))
+            self.assertEqual(status, 403)
+
+            # risk status changes need write+
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO risk_warnings (project_id, week_key, rule, severity, title, details, status, source_ref, created_at, updated_at)
+                VALUES (?, ?, 'missing_update', 'medium', '缺周补充', '', 'active', '', ?, ?)
+                """,
+                (self.project_id, current_week_key("Asia/Shanghai"), iso_now(), iso_now()),
+            )
+            self.conn.execute(
+                "UPDATE risk_warnings SET status = 'active' WHERE project_id = ? AND rule = 'missing_update'",
+                (self.project_id,),
+            )
+            self.conn.commit()
+            risk_id = self.conn.execute("SELECT id FROM risk_warnings").fetchone()["id"]
+            status, _ = self.api(port, "POST", f"/api/risks/{risk_id}/dismissed", read_token)
+            self.assertEqual(status, 403)
+            status, _ = self.api(port, "POST", f"/api/risks/{risk_id}/dismissed", write_token)
+            self.assertEqual(status, 200)
+            row = self.conn.execute("SELECT status FROM risk_warnings WHERE id = ?", (risk_id,)).fetchone()
+            self.assertEqual(row["status"], "dismissed")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_close_todo_into_shared_project_requires_write(self):
+        todo_id = create_todo(self.conn, {"title": "完成固件联调"}, self.read_id)
+        self.conn.commit()
+        # no access at all behaves like an unknown project
+        with self.assertRaises(ValidationError):
+            close_todo(self.conn, todo_id, {"reason": "done", "project_id": self.project_id}, self.read_id)
+        self.grant(self.read_id, "read")
+        # a read grant is not enough: archiving stores a material
+        with self.assertRaises(PermissionError):
+            close_todo(self.conn, todo_id, {"reason": "done", "project_id": self.project_id}, self.read_id)
+        self.conn.execute("UPDATE project_shares SET role = 'write' WHERE user_id = ?", (self.read_id,))
+        self.conn.commit()
+        material_id = close_todo(self.conn, todo_id, {"reason": "done", "project_id": self.project_id}, self.read_id)
+        self.assertIsNotNone(material_id)
+        row = self.conn.execute("SELECT project_id FROM materials WHERE id = ?", (material_id,)).fetchone()
+        self.assertEqual(row["project_id"], self.project_id)
+
+    def test_search_scope_covers_shared_projects(self):
+        now = iso_now()
+        self.conn.execute(
+            "INSERT INTO weekly_reports (project_id, week_key, content_md, latest_job_id, created_at, updated_at)"
+            " VALUES (?, '2026-W40', '# 周报\n\nShared 项目的机密进展：芯片流片。', NULL, ?, ?)",
+            (self.project_id, now, now),
+        )
+        self.conn.commit()
+        # before the grant the collaborator sees nothing
+        self.assertEqual(search(self.conn, self.read_id, "芯片")["hits"], [])
+        self.grant(self.read_id, "read")
+        hits = search(self.conn, self.read_id, "芯片")["hits"]
+        self.assertTrue(hits)
+        self.assertTrue(all(hit["project_id"] == self.project_id for hit in hits))
+        # revoking the share removes it from the searchable scope again
+        self.conn.execute("DELETE FROM project_shares WHERE user_id = ?", (self.read_id,))
+        self.conn.commit()
+        self.assertEqual(search(self.conn, self.read_id, "芯片")["hits"], [])

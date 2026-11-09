@@ -1,8 +1,8 @@
 """Hybrid keyword + vector search over weekly reports and materials.
 
 Search scope follows the account model: chunks are keyed by project and every
-query is limited to `project_id IN (SELECT id FROM projects WHERE user_id=?)`,
-the same isolation pattern as the rest of the app.
+query is limited to projects the account owns or that are shared with it, the
+same isolation pattern as the rest of the app.
 
 Indexing is lazy and incremental: each search request first re-chunks the
 sources in scope (weekly_reports.content_md, materials.extracted_text), drops
@@ -33,6 +33,7 @@ import urllib.request
 from .config import LLM_EMBEDDING_BASE_URL_SETTING, LLM_EMBEDDING_MODEL_SETTING
 from .db import get_setting
 from .internal_agent import resolve_llm_settings
+from .sharing import ACCESSIBLE_PROJECTS_SQL
 from .timeutil import iso_now
 
 EMBED_BATCH_SIZE = 32
@@ -170,8 +171,11 @@ def _embed(texts, settings):
 
 
 def _scope_clause(user_id, project_id):
-    clause = "project_id IN (SELECT id FROM projects WHERE user_id = ?)"
-    params = [user_id]
+    # visible scope: owned projects plus projects shared with the user; the
+    # chunk table itself is shared, the scope only filters what is indexed
+    # and queried for this account
+    clause = f"project_id IN {ACCESSIBLE_PROJECTS_SQL}"
+    params = [user_id, user_id]
     if project_id is not None:
         clause += " AND project_id = ?"
         params.append(project_id)
@@ -181,8 +185,8 @@ def _scope_clause(user_id, project_id):
 def _source_rows(conn, user_id, source_type, project_id):
     """Source rows in scope as (source_id, project_id, title, week_key, text, updated_at, project_name)."""
     if source_type == "report":
-        where = "p.user_id = ?"
-        params = [user_id]
+        where = f"p.id IN {ACCESSIBLE_PROJECTS_SQL}"
+        params = [user_id, user_id]
         if project_id is not None:
             where += " AND wr.project_id = ?"
             params.append(project_id)
@@ -198,8 +202,8 @@ def _source_rows(conn, user_id, source_type, project_id):
             (row["id"], row["project_id"], f"周报 {row['project_name']} {row['week_key']}", row["week_key"] or "", row["text"] or "", row["updated_at"], row["project_name"])
             for row in rows
         ]
-    where = "p.user_id = ? AND m.extracted_text != ''"
-    params = [user_id]
+    where = f"p.id IN {ACCESSIBLE_PROJECTS_SQL} AND m.extracted_text != ''"
+    params = [user_id, user_id]
     if project_id is not None:
         where += " AND m.project_id = ?"
         params.append(project_id)

@@ -26,6 +26,7 @@ from .config import (
 )
 from .db import connect, get_setting
 from .reports import run_report_job, run_template_job
+from .sharing import ACCESSIBLE_PROJECTS_SQL
 from .timeutil import current_week_key, iso_now
 from .validation import ValidationError
 from .voice_todos import create_voice_job, run_voice_job
@@ -237,18 +238,22 @@ def enqueue_voice_job(conn, db_path, payload, asr_endpoint, asr_model, asr_langu
 
 
 def task_queue_state(conn, user_id=None, is_admin=False):
-    """Queue snapshot for the frontend. Tasks stay visible to their owner
-    (report tasks through the owning project); queue configuration values are
+    """Queue snapshot for the frontend. Report tasks stay visible to the
+    owning project's owner and to every shared collaborator (a write-level
+    collaborator can trigger generation and must see its job); voice tasks
+    stay with their submitting account. Queue configuration values are
     included only for administrators."""
     if user_id is None:
         project_filter, params = "", ()
         project_names = {row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM projects")}
         voice_filter = ""
     else:
-        project_filter, params = " AND project_id IN (SELECT id FROM projects WHERE user_id = ?)", (user_id,)
+        accessible = f"p.id IN {ACCESSIBLE_PROJECTS_SQL}"
+        project_filter = f" AND project_id IN {ACCESSIBLE_PROJECTS_SQL}"
+        params = (user_id, user_id)
         project_names = {
             row["id"]: row["name"]
-            for row in conn.execute("SELECT id, name FROM projects WHERE user_id = ?", (user_id,))
+            for row in conn.execute(f"SELECT id, name FROM projects p WHERE {accessible}", (user_id, user_id))
         }
         voice_filter = " AND user_id = ?"
     tasks = []
