@@ -19,6 +19,7 @@ Open `http://127.0.0.1:8000` and sign in.
 - On first startup the service bootstraps an administrator account named `darren`. The initial password comes from `REPORTS_ADMIN_PASSWORD` (`.env` or environment); when it is unset, a random one-time password is generated and printed to the server log — set it before the first start, then change it in 全局设置 → 修改密码.
 - Administrators manage accounts in 全局设置 → 用户管理 (create users, reset passwords, toggle admin/enabled, delete). A user whose projects/TODOs still exist cannot be deleted; the last enabled admin cannot be removed or demoted.
 - Users see only their own data: projects, TODOs, voice jobs, and queue tasks are filtered per account. Appearance preferences and Git tokens are stored per user too.
+- Project sharing: a project's owner can share it with other accounts from 项目设置 → 共享 and assign 只读 (view everything, export PDFs), 读写 (also contribute materials/weekly updates/plan/report edits/generation), or 管理 (also project settings, Git repositories, material deletion) access. Only the owner manages share members; revoked members immediately lose access. Shared projects show a 「共享 · 角色」 badge in the sidebar.
 - 全局设置 panels for 内部 Agent LLM, 语音 TODO (ASR service), and 任务队列, plus the GitHub/GitLab enable switches and 用户管理, are visible to administrators only.
 
 For a steadier background service on port 8765:
