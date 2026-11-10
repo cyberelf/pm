@@ -44,7 +44,7 @@ from reports_app.internal_agent import (
 )
 from reports_app.asr import normalize_asr_endpoint, transcribe_audio, validate_asr_audio
 from reports_app import auth
-from reports_app.backup import backup_due, evaluate_backup, run_backup
+from reports_app.backup import backup_due, evaluate_backup, run_backup, verify_target_writable
 from reports_app.db import create_project, ensure_bootstrap_admin, init_db, connect, set_setting, set_user_setting
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
@@ -5572,6 +5572,84 @@ class BackupTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(len(payload["runs"]), 1)
             self.assertEqual(payload["runs"][0]["trigger_type"], "manual")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_verify_target_writable_preflight(self):
+        # 目标目录不存在时创建；探针文件用完即删
+        good = Path(self.tmp.name) / "good-target"
+        verify_target_writable(str(good))
+        self.assertTrue(good.is_dir())
+        self.assertEqual(list(good.iterdir()), [])
+        # 无写权限 → PermissionError → 提示隐私保护排查路径
+        locked = Path(self.tmp.name) / "locked"
+        locked.mkdir()
+        locked.chmod(0o555)
+        try:
+            with self.assertRaises(ValidationError) as ctx:
+                verify_target_writable(str(locked))
+            self.assertIn("隐私保护", str(ctx.exception))
+        finally:
+            locked.chmod(0o755)
+        # 目标路径被普通文件顶住 → 普通 OSError → 原始错误信息
+        blocker = Path(self.tmp.name) / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        with self.assertRaises(ValidationError) as ctx:
+            verify_target_writable(str(blocker))
+        self.assertIn("备份目标目录不可写", str(ctx.exception))
+
+    def test_backup_api_preflights_target_on_save(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_port
+            admin_token = auth.create_session(self.conn, self.admin["id"])
+            self.conn.commit()
+
+            def api(method, path, token, body=None):
+                client = HTTPConnection("127.0.0.1", port, timeout=10)
+                headers = {"Content-Type": "application/json", "Cookie": f"reports_session={token}"}
+                client.request(method, path, body=body, headers=headers)
+                response = client.getresponse()
+                payload = json.loads(response.read())
+                client.close()
+                return response.status, payload
+
+            # 保存不可写的目标目录被 400 拒绝，且数据库保持旧值
+            self.configure(target_dir="/tmp/old-target")
+            locked = Path(self.tmp.name) / "locked-target"
+            locked.mkdir()
+            locked.chmod(0o555)
+            try:
+                status, payload = api(
+                    "PUT",
+                    "/api/settings",
+                    admin_token,
+                    body=json.dumps({"backup_target_dir": str(locked)}),
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("隐私保护", payload["error"])
+                self.assertEqual(
+                    self.conn.execute(
+                        "SELECT value FROM app_settings WHERE key = 'backup_target_dir'"
+                    ).fetchone()["value"],
+                    "/tmp/old-target",
+                )
+            finally:
+                locked.chmod(0o755)
+            # 可写目录正常保存
+            status, payload = api(
+                "PUT",
+                "/api/settings",
+                admin_token,
+                body=json.dumps({"backup_target_dir": str(self.target)}),
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["backup_target_dir"], str(self.target))
         finally:
             server.shutdown()
             server.server_close()

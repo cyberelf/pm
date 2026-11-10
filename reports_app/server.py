@@ -62,7 +62,7 @@ from .config import (
     GITLAB_TOKEN_SETTING,
     GITLAB_URL_SETTING,
 )
-from .backup import backup_config, backup_state, evaluate_backup, run_backup
+from .backup import backup_config, backup_state, evaluate_backup, run_backup, verify_target_writable
 from .config import (
     BACKUP_ENABLED_SETTING,
     BACKUP_INTERVAL_HOURS_SETTING,
@@ -870,11 +870,15 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, QUEUE_CAPACITY_SETTING, str(validate_queue_capacity(payload.get("queue_capacity"))))
                 if "queue_parallelism" in payload:
                     set_setting(conn, QUEUE_PARALLELISM_SETTING, str(validate_queue_parallelism(payload.get("queue_parallelism"))))
-                # 数据备份配置：目标目录先落库，启用开关最后判断，避免同一次
-                # 保存里"先勾启用、后填目录"被旧值误拒。空值回退默认，与
-                # ASR 设置的行为一致。
+                # 数据备份配置：目标目录先探测可写性再落库（macOS 对后台服务
+                # 访问网络卷/外接磁盘有隐私保护，保存时立刻暴露而不是等定时
+                # 任务失败），启用开关最后判断，避免同一次保存里"先勾启用、
+                # 后填目录"被旧值误拒。空值回退默认，与 ASR 设置的行为一致。
                 if "backup_target_dir" in payload:
-                    set_setting(conn, BACKUP_TARGET_DIR_SETTING, validate_backup_target_dir(payload.get("backup_target_dir")))
+                    target_dir = validate_backup_target_dir(payload.get("backup_target_dir"))
+                    if target_dir:
+                        verify_target_writable(target_dir)
+                    set_setting(conn, BACKUP_TARGET_DIR_SETTING, target_dir)
                 if "backup_schedule_type" in payload:
                     schedule_type = (payload.get("backup_schedule_type") or "").strip() or DEFAULT_BACKUP_SCHEDULE_TYPE
                     set_setting(conn, BACKUP_SCHEDULE_TYPE_SETTING, validate_backup_schedule_type(schedule_type))

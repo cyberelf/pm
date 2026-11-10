@@ -15,6 +15,10 @@ The system SHALL let administrators configure automatic data backup in 全局设
 - **WHEN** a non-administrator account calls the backup configuration, history, or manual-run APIs or changes backup settings
 - **THEN** the system rejects the request with a permission error
 
+#### Scenario: Saving the target directory probes writability
+- **WHEN** an administrator saves a backup target directory
+- **THEN** the system creates it when missing and writes and removes a probe file, rejecting the save with an actionable error when the service cannot write there (with a macOS privacy-protection remediation hint for network/external volumes when the denial is a permission error)
+
 ### Requirement: Backup run contents and layout
 The system SHALL back up the SQLite database as a consistent online snapshot (the sqlite3 backup API) and a full copy of the uploads directory into `<target>/zreport-backup-YYYYMMDD-HHMMSS/` (timestamp in Beijing time, deduplicated with a numeric suffix when needed); a failed run SHALL record the failure and SHALL NOT leave a partial backup directory behind.
 

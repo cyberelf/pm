@@ -37,6 +37,7 @@ from .config import (
 )
 from .db import get_setting
 from .timeutil import get_zone, iso_now, parse_iso
+from .validation import ValidationError
 
 # 同一进程内串行化备份执行：定时触发撞上手动触发时后者直接失败返回，
 # 不排队也不并行拷贝两份
@@ -50,6 +51,34 @@ def _int_setting(conn, key, default):
         return int(str(get_setting(conn, key, "")).strip())
     except ValueError:
         return default
+
+
+def _writable_error(exc):
+    """目标目录写不进去时的可操作提示。macOS 对 LaunchAgent 后台进程访问
+    SMB 挂载/外接磁盘有隐私保护（TCC），报 EPERM 而普通权限错误报 EACCES，
+    两者都是 PermissionError，这里统一给出排查路径。"""
+    if isinstance(exc, PermissionError):
+        return (
+            "目标目录拒绝写入（macOS 隐私保护拦截了后台服务访问网络卷或外接磁盘）："
+            "在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 中添加服务使用的 Python"
+            "（如 /Library/Developer/CommandLineTools/usr/bin/python3）并重新触发备份，"
+            "或改选本机磁盘上的目录"
+        )
+    return f"备份目标目录不可写：{exc}"
+
+
+def verify_target_writable(target_dir):
+    """设置保存时探测目标目录可写性：确保目录存在并试写一个探针文件。
+    让配置错误在保存时立刻暴露（面板自动保存会显示错误），而不是等到
+    定时任务失败后才发现。探针文件用完即删，不会残留。"""
+    target = Path(target_dir)
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / f"{BACKUP_DIR_PREFIX}.probe"
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError as exc:
+        raise ValidationError(_writable_error(exc)) from None
 
 
 def backup_config(conn):
@@ -148,7 +177,8 @@ def run_backup(conn, db_path=DB_PATH, trigger="manual"):
             started_at=started_at,
         )
     except Exception as exc:
-        return _record_run(conn, trigger, "failed", message=str(exc), started_at=started_at)
+        message = _writable_error(exc) if isinstance(exc, PermissionError) else str(exc)
+        return _record_run(conn, trigger, "failed", message=message, started_at=started_at)
     finally:
         _backup_lock.release()
 
