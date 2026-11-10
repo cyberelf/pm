@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import ssl
 import struct
 import subprocess
@@ -15,7 +16,7 @@ from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from pypdf import PdfWriter
@@ -43,6 +44,7 @@ from reports_app.internal_agent import (
 )
 from reports_app.asr import normalize_asr_endpoint, transcribe_audio, validate_asr_audio
 from reports_app import auth
+from reports_app.backup import backup_due, evaluate_backup, run_backup
 from reports_app.db import create_project, ensure_bootstrap_admin, init_db, connect, set_setting, set_user_setting
 from reports_app import git_sources
 from reports_app.gitlab import check_repo as gitlab_check_repo
@@ -5380,3 +5382,197 @@ class ProjectSharingTest(unittest.TestCase):
         self.conn.execute("DELETE FROM project_shares WHERE user_id = ?", (self.read_id,))
         self.conn.commit()
         self.assertEqual(search(self.conn, self.read_id, "芯片")["hits"], [])
+
+
+class BackupTest(unittest.TestCase):
+    """数据备份：调度到期判定、快照内容、保留清理、定时入口与管理员 API。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        self.uploads = Path(self.tmp.name) / "uploads"
+        self.target = Path(self.tmp.name) / "backups"
+        (self.uploads / "project_1").mkdir(parents=True)
+        (self.uploads / "project_1" / "note.md").write_text("hello", encoding="utf-8")
+        init_db(self.db_path)
+        self.conn = connect(self.db_path)
+        self.admin = ensure_bootstrap_admin(self.conn)
+        self.non_admin_id = auth.create_user(self.conn, "worker", "secret1", is_admin=False)
+        self.conn.commit()
+        os.environ["REPORTS_FAKE_PROVIDER"] = "1"
+
+    def tearDown(self):
+        self.conn.close()
+        os.environ.pop("REPORTS_FAKE_PROVIDER", None)
+        self.tmp.cleanup()
+
+    def configure(self, **fields):
+        for key, value in fields.items():
+            set_setting(self.conn, f"backup_{key}", str(value))
+        self.conn.commit()
+
+    def test_backup_due_schedule_logic(self):
+        zone = ZoneInfo("Asia/Shanghai")
+        config = {
+            "backup_enabled": True,
+            "backup_target_dir": "/tmp/x",
+            "backup_schedule_type": "daily",
+            "backup_schedule_time": "03:00",
+            "backup_interval_hours": 24,
+        }
+        early = datetime(2026, 11, 10, 2, 0, tzinfo=zone).astimezone(timezone.utc)
+        opened = datetime(2026, 11, 10, 3, 0, tzinfo=zone).astimezone(timezone.utc)
+        ran_today = datetime(2026, 11, 10, 3, 5, tzinfo=zone).astimezone(timezone.utc)
+        next_day = datetime(2026, 11, 11, 3, 5, tzinfo=zone).astimezone(timezone.utc)
+        # 未到今天的备份点：不跑
+        self.assertFalse(backup_due(config, None, early))
+        # 到点且从未备份过：跑
+        self.assertTrue(backup_due(config, None, opened))
+        # 今天已经跑过（手动或定时都算）：不再跑
+        self.assertFalse(backup_due(config, ran_today.isoformat(), opened))
+        # 第二天到点重新触发
+        self.assertTrue(backup_due(config, ran_today.isoformat(), next_day))
+        # 关闭开关或未配置目标目录：永不触发
+        self.assertFalse(backup_due({**config, "backup_enabled": False}, None, opened))
+        self.assertFalse(backup_due({**config, "backup_target_dir": ""}, None, opened))
+        # 固定间隔模式：首次立即触发，之后要等满间隔
+        interval = {**config, "backup_schedule_type": "interval", "backup_interval_hours": 6}
+        self.assertTrue(backup_due(interval, None, opened))
+        self.assertFalse(backup_due(interval, opened.isoformat(), opened + timedelta(hours=5)))
+        self.assertTrue(backup_due(interval, opened.isoformat(), opened + timedelta(hours=6)))
+
+    def test_run_backup_snapshots_database_and_uploads(self):
+        with mock.patch("reports_app.backup.UPLOAD_DIR", self.uploads):
+            self.configure(enabled="1", target_dir=str(self.target))
+            run = run_backup(self.conn, self.db_path, trigger="manual")
+            self.conn.commit()
+        self.assertEqual(run["status"], "success")
+        self.assertIn("zreport-backup-", run["backup_path"])
+        backup_dir = Path(run["backup_path"])
+        snapshot = backup_dir / "reports.sqlite3"
+        self.assertTrue(snapshot.exists())
+        check = sqlite3.connect(str(snapshot))
+        try:
+            users = check.execute("SELECT COUNT(*) AS n FROM users").fetchone()[0]
+        finally:
+            check.close()
+        self.assertGreaterEqual(users, 1)
+        copied = backup_dir / "uploads" / "project_1" / "note.md"
+        self.assertEqual(copied.read_text(encoding="utf-8"), "hello")
+        self.assertEqual(run["file_count"], 1)
+        self.assertGreater(run["size_bytes"], 0)
+
+    def test_run_backup_failure_is_recorded(self):
+        # 用一个普通文件顶住目标目录路径，mkdir 必然失败
+        blocker = Path(self.tmp.name) / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        self.configure(enabled="1", target_dir=str(blocker))
+        run = run_backup(self.conn, self.db_path, trigger="scheduled")
+        self.conn.commit()
+        self.assertEqual(run["status"], "failed")
+        self.assertTrue(run["message"])
+        row = self.conn.execute("SELECT status, trigger_type FROM backup_runs").fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["trigger_type"], "scheduled")
+
+    def test_retention_prunes_old_backups(self):
+        self.target.mkdir(parents=True)
+        (self.target / "unrelated.txt").write_text("keep me", encoding="utf-8")
+        with mock.patch("reports_app.backup.UPLOAD_DIR", self.uploads):
+            self.configure(enabled="1", target_dir=str(self.target), keep="2")
+            for _ in range(3):
+                run_backup(self.conn, self.db_path, trigger="manual")
+                self.conn.commit()
+        names = sorted(p.name for p in self.target.iterdir() if p.name.startswith("zreport-backup-"))
+        self.assertEqual(len(names), 2)
+        self.assertTrue((self.target / "unrelated.txt").exists())
+
+    def test_evaluate_backup_runs_once_when_due(self):
+        with mock.patch("reports_app.backup.UPLOAD_DIR", self.uploads):
+            self.configure(enabled="1", target_dir=str(self.target), schedule_type="interval", interval_hours="1")
+            evaluate_backup(self.conn, self.db_path)
+            self.conn.commit()
+            row = self.conn.execute("SELECT trigger_type, status FROM backup_runs").fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["trigger_type"], "scheduled")
+            self.assertEqual(row["status"], "success")
+            # 刚跑完，同一轮调度不再重复
+            evaluate_backup(self.conn, self.db_path)
+            count = self.conn.execute("SELECT COUNT(*) AS n FROM backup_runs").fetchone()["n"]
+            self.assertEqual(count, 1)
+
+    def test_backup_api_permissions_and_flow(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.db_path = self.db_path
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_port
+            admin_token = auth.create_session(self.conn, self.admin["id"])
+            worker_token = auth.create_session(self.conn, self.non_admin_id)
+            self.conn.commit()
+
+            def api(method, path, token, body=None):
+                client = HTTPConnection("127.0.0.1", port, timeout=10)
+                headers = {"Content-Type": "application/json", "Cookie": f"reports_session={token}"}
+                client.request(method, path, body=body, headers=headers)
+                response = client.getresponse()
+                payload = json.loads(response.read())
+                client.close()
+                return response.status, payload
+
+            # 非管理员：查看与触发都被拒绝
+            self.assertEqual(api("GET", "/api/backup", worker_token)[0], 403)
+            self.assertEqual(api("POST", "/api/backup/run", worker_token)[0], 403)
+            # 相对路径被拒绝
+            self.assertEqual(
+                api("PUT", "/api/settings", admin_token, body=json.dumps({"backup_target_dir": "not/absolute"}))[0],
+                400,
+            )
+            # 未配置目标目录时不能启用
+            status, _ = api(
+                "PUT",
+                "/api/settings",
+                admin_token,
+                body=json.dumps({"backup_enabled": True, "backup_target_dir": ""}),
+            )
+            self.assertEqual(status, 400)
+            # 配置并启用
+            status, payload = api(
+                "PUT",
+                "/api/settings",
+                admin_token,
+                body=json.dumps(
+                    {
+                        "backup_enabled": True,
+                        "backup_target_dir": str(self.target),
+                        "backup_schedule_type": "daily",
+                        "backup_schedule_time": "03:00",
+                        "backup_keep": 7,
+                    }
+                ),
+            )
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["backup_enabled"])
+            self.assertEqual(payload["backup_target_dir"], str(self.target))
+            self.assertEqual(payload["backup_schedule_type"], "daily")
+            self.assertEqual(payload["backup_schedule_time"], "03:00")
+            self.assertEqual(payload["backup_keep"], 7)
+            # 非管理员改备份配置被拒绝
+            self.assertEqual(
+                api("PUT", "/api/settings", worker_token, body=json.dumps({"backup_enabled": False}))[0],
+                403,
+            )
+            # 手动触发一次并查看历史
+            with mock.patch("reports_app.backup.UPLOAD_DIR", self.uploads):
+                status, payload = api("POST", "/api/backup/run", admin_token)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["run"]["status"], "success")
+            status, payload = api("GET", "/api/backup", admin_token)
+            self.assertEqual(status, 200)
+            self.assertEqual(len(payload["runs"]), 1)
+            self.assertEqual(payload["runs"][0]["trigger_type"], "manual")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)

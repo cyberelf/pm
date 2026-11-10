@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -5,8 +6,11 @@ from urllib.parse import urlparse
 from .config import (
     GIT_MODE_GITHUB,
     GIT_MODE_GITLAB,
+    MAX_BACKUP_INTERVAL_HOURS,
+    MAX_BACKUP_KEEP,
     MAX_QUEUE_CAPACITY,
     MAX_QUEUE_PARALLELISM,
+    SUPPORTED_BACKUP_SCHEDULE_TYPES,
     SUPPORTED_GIT_MODES,
     SUPPORTED_LLM_PROVIDERS,
     SUPPORTED_MATERIAL_EXTENSIONS,
@@ -54,6 +58,39 @@ def validate_queue_capacity(value):
 
 def validate_queue_parallelism(value):
     return _validate_bounded_int(value, "queue parallelism", MAX_QUEUE_PARALLELISM)
+
+
+def validate_backup_target_dir(value):
+    """Normalize the backup target to an absolute path (expanding a leading
+    ~); an empty value means unset. The service runs as the login user, so ~
+    always resolves to that account's home."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    expanded = os.path.expanduser(text)
+    if not os.path.isabs(expanded):
+        raise ValidationError("backup target directory must be an absolute path")
+    return expanded
+
+
+def validate_backup_schedule_type(value):
+    if value not in SUPPORTED_BACKUP_SCHEDULE_TYPES:
+        raise ValidationError("invalid backup schedule type; use daily or interval")
+    return value
+
+
+def validate_backup_schedule_time(value):
+    if not TIME_RE.match(value or ""):
+        raise ValidationError("backup schedule time must be HH:MM")
+    return value
+
+
+def validate_backup_interval_hours(value):
+    return _validate_bounded_int(value, "backup interval hours", MAX_BACKUP_INTERVAL_HOURS)
+
+
+def validate_backup_keep(value):
+    return _validate_bounded_int(value, "backup keep count", MAX_BACKUP_KEEP)
 
 
 def validate_llm_provider(provider):

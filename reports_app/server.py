@@ -62,6 +62,19 @@ from .config import (
     GITLAB_TOKEN_SETTING,
     GITLAB_URL_SETTING,
 )
+from .backup import backup_config, backup_state, evaluate_backup, run_backup
+from .config import (
+    BACKUP_ENABLED_SETTING,
+    BACKUP_INTERVAL_HOURS_SETTING,
+    BACKUP_KEEP_SETTING,
+    BACKUP_SCHEDULE_TIME_SETTING,
+    BACKUP_SCHEDULE_TYPE_SETTING,
+    BACKUP_TARGET_DIR_SETTING,
+    DEFAULT_BACKUP_INTERVAL_HOURS,
+    DEFAULT_BACKUP_KEEP,
+    DEFAULT_BACKUP_SCHEDULE_TIME,
+    DEFAULT_BACKUP_SCHEDULE_TYPE,
+)
 from .git_sources import (
     check_repo,
     fetch_org_projects,
@@ -133,6 +146,11 @@ from .validation import (
     validate_timezone,
     validate_ui_mode,
     validate_ui_theme,
+    validate_backup_interval_hours,
+    validate_backup_keep,
+    validate_backup_schedule_time,
+    validate_backup_schedule_type,
+    validate_backup_target_dir,
 )
 
 
@@ -206,6 +224,12 @@ ADMIN_ONLY_SETTING_KEYS = {
     "queue_parallelism",
     "github_enabled",
     "gitlab_enabled",
+    "backup_enabled",
+    "backup_target_dir",
+    "backup_schedule_type",
+    "backup_schedule_time",
+    "backup_interval_hours",
+    "backup_keep",
 }
 
 
@@ -317,6 +341,7 @@ def settings_state(conn, user):
                 "queue_parallelism": queue_parallelism(conn),
             }
         )
+        state.update(backup_config(conn))
         state.update(llm_state(conn))
     return state
 
@@ -372,6 +397,7 @@ def scheduler_loop(stop, db_path):
             with connect(db_path) as conn:
                 for row in conn.execute("SELECT id FROM projects WHERE status = 'active'"):
                     evaluate_schedules(conn, row["id"])
+                evaluate_backup(conn, db_path)
                 conn.commit()
         except Exception:
             print(f"scheduler loop error: {traceback.format_exc()}", file=sys.stderr, flush=True)
@@ -734,6 +760,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/task-queue" and method == "GET":
                 self.json(task_queue_state(conn, None if is_admin else user_id, is_admin=is_admin))
                 return
+            # 数据备份：配置查看与手动触发都只对管理员开放
+            if path == "/api/backup" and method == "GET":
+                require_admin(user)
+                self.json(backup_state(conn))
+                return
+            if path == "/api/backup/run" and method == "POST":
+                require_admin(user)
+                run = run_backup(conn, self.server.db_path, trigger="manual")
+                conn.commit()
+                self.json({"run": run})
+                return
             if path == "/api/voice-jobs/active" and method == "GET":
                 self.json({"job": get_active_voice_job(conn, user_id)})
                 return
@@ -833,6 +870,32 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, QUEUE_CAPACITY_SETTING, str(validate_queue_capacity(payload.get("queue_capacity"))))
                 if "queue_parallelism" in payload:
                     set_setting(conn, QUEUE_PARALLELISM_SETTING, str(validate_queue_parallelism(payload.get("queue_parallelism"))))
+                # 数据备份配置：目标目录先落库，启用开关最后判断，避免同一次
+                # 保存里"先勾启用、后填目录"被旧值误拒。空值回退默认，与
+                # ASR 设置的行为一致。
+                if "backup_target_dir" in payload:
+                    set_setting(conn, BACKUP_TARGET_DIR_SETTING, validate_backup_target_dir(payload.get("backup_target_dir")))
+                if "backup_schedule_type" in payload:
+                    schedule_type = (payload.get("backup_schedule_type") or "").strip() or DEFAULT_BACKUP_SCHEDULE_TYPE
+                    set_setting(conn, BACKUP_SCHEDULE_TYPE_SETTING, validate_backup_schedule_type(schedule_type))
+                if "backup_schedule_time" in payload:
+                    schedule_time = (payload.get("backup_schedule_time") or "").strip() or DEFAULT_BACKUP_SCHEDULE_TIME
+                    set_setting(conn, BACKUP_SCHEDULE_TIME_SETTING, validate_backup_schedule_time(schedule_time))
+                if "backup_interval_hours" in payload:
+                    raw = str(payload.get("backup_interval_hours") or "").strip()
+                    set_setting(
+                        conn,
+                        BACKUP_INTERVAL_HOURS_SETTING,
+                        str(validate_backup_interval_hours(raw)) if raw else str(DEFAULT_BACKUP_INTERVAL_HOURS),
+                    )
+                if "backup_keep" in payload:
+                    raw = str(payload.get("backup_keep") or "").strip()
+                    set_setting(conn, BACKUP_KEEP_SETTING, str(validate_backup_keep(raw)) if raw else str(DEFAULT_BACKUP_KEEP))
+                if "backup_enabled" in payload:
+                    enabled = bool(payload.get("backup_enabled"))
+                    if enabled and not get_setting(conn, BACKUP_TARGET_DIR_SETTING):
+                        raise ValidationError("启用定时备份前先填写备份目标目录")
+                    set_setting(conn, BACKUP_ENABLED_SETTING, "1" if enabled else "0")
                 conn.commit()
                 self.json(settings_state(conn, user))
                 return
