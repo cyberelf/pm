@@ -72,6 +72,26 @@ def share_rows(conn, project_id):
     ]
 
 
+def share_candidates(conn, project_id):
+    """Enabled accounts that can still be added to the project: everyone
+    except the owner and current members. Feeds the share-member dropdown."""
+    project = conn.execute("SELECT user_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        return []
+    return [
+        {"id": row["id"], "username": row["username"]}
+        for row in conn.execute(
+            """
+            SELECT id, username FROM users
+            WHERE enabled = 1 AND id != ?
+              AND id NOT IN (SELECT user_id FROM project_shares WHERE project_id = ?)
+            ORDER BY username
+            """,
+            (project["user_id"], project_id),
+        )
+    ]
+
+
 def set_share(conn, project_id, payload):
     """Grant or update one collaborator's role. Validations mirror the member
     rules: the target must be an existing enabled account that is not the

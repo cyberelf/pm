@@ -56,6 +56,7 @@ const state = {
   planSubTab: "plan",
   settingsSubTab: "project",
   projectShares: [],
+  shareCandidates: [],
   busy: false,
 };
 
@@ -1899,13 +1900,15 @@ function renderSettings(ws) {
       <div class="panel">
         <div class="panel-head"><h2>共享成员</h2><span>把项目共享给其他账号并分配权限 · 仅项目所有者可操作</span></div>
         <div class="row share-add-row">
-          <input id="share-username-input" placeholder="用户名" aria-label="要共享到的用户名">
+          <select id="share-user-select" aria-label="要共享到的账号">
+            <option value="">加载中…</option>
+          </select>
           <select id="share-role-select" aria-label="共享权限">
             <option value="read">只读</option>
             <option value="write">读写</option>
             <option value="manage">管理</option>
           </select>
-          <button type="button" class="primary" onclick="addProjectShare()">添加成员</button>
+          <button type="button" id="share-add-button" class="primary" onclick="addProjectShare()">添加成员</button>
         </div>
         <table class="table"><thead><tr><th>成员</th><th>权限</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="share-table-body"><tr><td colspan="4">加载中…</td></tr></tbody></table>
         <small>只读：查看周报、资料、计划与仓库状态；读写：上传资料、填写本周补充、调整计划和当前周报、生成周报；管理：项目设置、Git 仓库与资料删除。共享成员看不到共享管理入口，也无法把项目再共享给他人。</small>
@@ -1942,7 +1945,10 @@ function switchSettingsSubTab(tab) {
     const view = root.querySelector(`#settings-sub-${name}`);
     if (view) view.classList.toggle("hidden", name !== tab);
   });
-  if (tab === "sharing" && isProjectOwner()) loadProjectShares();
+  if (tab === "sharing" && isProjectOwner()) {
+    loadProjectShares();
+    loadShareCandidates();
+  }
 }
 
 // —— 共享成员管理（仅项目所有者）：显式按钮即时保存，不走表单自动保存 ——
@@ -1973,20 +1979,43 @@ async function loadProjectShares() {
   }
 }
 
+// 可共享账号下拉：后端返回除所有者与现有成员外的启用账号
+function renderShareUserOptions() {
+  const select = $("share-user-select");
+  if (!select) return;
+  const candidates = state.shareCandidates || [];
+  select.innerHTML = candidates.length
+    ? candidates.map((user) => `<option value="${escapeAttr(user.username)}">${escapeHtml(user.username)}</option>`).join("")
+    : `<option value="">没有可共享的账号</option>`;
+  const add = $("share-add-button");
+  if (add) add.disabled = candidates.length === 0;
+}
+
+async function loadShareCandidates() {
+  try {
+    const data = await api(`/api/projects/${state.projectId}/shares/candidates`);
+    state.shareCandidates = data.candidates || [];
+    renderShareUserOptions();
+  } catch (error) {
+    state.shareCandidates = [];
+    renderShareUserOptions();
+    toast(error.message);
+  }
+}
+
 async function addProjectShare() {
-  const username = $("share-username-input")?.value.trim() || "";
+  const username = $("share-user-select")?.value || "";
   const role = $("share-role-select")?.value || "read";
   if (!username) {
-    toast("请填写要共享到的用户名");
-    $("share-username-input")?.focus();
+    toast("没有可共享的账号");
     return;
   }
   try {
     const data = await api(`/api/projects/${state.projectId}/shares`, { method: "PUT", body: JSON.stringify({ username, role }) });
     state.projectShares = data.shares || [];
-    $("share-username-input").value = "";
     renderShareRows();
     toast(`已共享给 ${username}（${SHARE_ROLE_LABELS[role]}）`);
+    loadShareCandidates();
   } catch (error) {
     toast(error.message);
   }
@@ -2015,6 +2044,7 @@ async function removeProjectShare(userId) {
     state.projectShares = data.shares || [];
     renderShareRows();
     toast("已移除共享成员");
+    loadShareCandidates();
   } catch (error) {
     toast(error.message);
   }

@@ -5125,6 +5125,19 @@ class ProjectSharingTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(next(s["role"] for s in payload["shares"] if s["username"] == "reader"), "write")
 
+            # candidates feed the member dropdown: enabled accounts minus the
+            # owner and current members; fetching them is owner-only
+            status, payload = self.api(port, "GET", f"/api/projects/{self.project_id}/shares/candidates", owner_token)
+            self.assertEqual(status, 200)
+            names = [u["username"] for u in payload["candidates"]]
+            self.assertIn("writer", names)
+            self.assertIn("outsider", names)
+            self.assertNotIn("darren", names)
+            self.assertNotIn("reader", names)
+            self.assertNotIn("manager", names)
+            status, _ = self.api(port, "GET", f"/api/projects/{self.project_id}/shares/candidates", manage_token)
+            self.assertEqual(status, 403)
+
             # guards: bad role, unknown user, the owner themself, disabled account
             status, _ = self.api(port, "PUT", f"/api/projects/{self.project_id}/shares", owner_token,
                                  body=json.dumps({"username": "reader", "role": "admin"}))

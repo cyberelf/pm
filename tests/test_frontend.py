@@ -87,9 +87,14 @@ class FrontendTest(unittest.TestCase):
         # 共享管理子页仅 owner 可见，切换到该页时拉取共享列表
         self.assertIn('data-subtab="sharing"', source)
         self.assertIn('id="settings-sub-sharing"', source)
-        self.assertIn('if (tab === "sharing" && isProjectOwner()) loadProjectShares();', source)
+        self.assertIn('if (tab === "sharing" && isProjectOwner()) {\n    loadProjectShares();\n    loadShareCandidates();\n  }', source)
         self.assertIn('id="share-table-body"', source)
-        self.assertIn('id="share-username-input"', source)
+        # 添加成员：账号下拉（来自 candidates 接口），不再是手输用户名
+        self.assertIn('id="share-user-select"', source)
+        self.assertNotIn('id="share-username-input"', source)
+        self.assertIn("`/api/projects/${state.projectId}/shares/candidates`", source)
+        self.assertIn("function renderShareUserOptions()", source)
+        self.assertIn("async function loadShareCandidates()", source)
         self.assertIn('id="share-role-select"', source)
         self.assertIn("`/api/projects/${state.projectId}/shares`", source)
         self.assertIn("`/api/projects/${state.projectId}/shares/${userId}`", source)

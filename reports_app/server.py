@@ -95,6 +95,7 @@ from .sharing import (
     remove_share,
     require_role,
     set_share,
+    share_candidates,
     share_rows,
 )
 from .task_queue import (
@@ -997,6 +998,11 @@ class Handler(BaseHTTPRequestHandler):
                     shares = set_share(conn, project_id, self.body_json())
                     conn.commit()
                     self.json({"shares": shares})
+                    return
+                if len(parts) == 5 and parts[3] == "shares" and parts[4] == "candidates" and method == "GET":
+                    if role != "owner":
+                        raise PermissionError("只有项目所有者可以查看可共享的账号")
+                    self.json({"candidates": share_candidates(conn, project_id)})
                     return
                 if len(parts) == 5 and parts[3] == "shares" and parts[4].isdigit() and method == "DELETE":
                     if role != "owner":
