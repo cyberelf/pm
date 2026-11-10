@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=60" />
+    <link rel="stylesheet" href="/styles.css?v=61" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -218,6 +218,35 @@
                 <small>提交超过容量时新任务会被拒绝；并行执行数决定同时运行的任务数，其余在队列中按提交顺序等待。修改立即生效，无需重启服务。</small>
               </div>
             </div>
+            <div class="panel admin-only hidden" id="backup-settings-panel">
+              <div class="panel-head"><h2>数据备份</h2><span>定时备份 SQLite 数据库与上传文件到目标目录 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
+              <div class="voice-settings">
+                <label class="switch-row"><span class="switch"><input id="backup-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用定时备份</span></label>
+                <label>备份目标目录
+                  <input id="backup-target-dir-input" placeholder="/Volumes/backup/zreport 或本机其他绝对路径">
+                </label>
+                <label>调度方式
+                  <select id="backup-schedule-type-select">
+                    <option value="daily">每天定时</option>
+                    <option value="interval">固定间隔</option>
+                  </select>
+                </label>
+                <label id="backup-time-field">备份时间（北京时间）
+                  <input id="backup-schedule-time-input" type="time" value="03:00">
+                </label>
+                <label id="backup-interval-field" class="hidden">间隔小时数
+                  <input id="backup-interval-hours-input" type="number" min="1" max="168" placeholder="24">
+                </label>
+                <label>保留份数
+                  <input id="backup-keep-input" type="number" min="1" max="100" placeholder="14">
+                </label>
+                <div class="row">
+                  <button id="backup-run-now" type="button">立即备份</button>
+                </div>
+                <small>每次备份包含 SQLite 数据库的在线快照与 uploads 上传文件，写入目标目录下的 zreport-backup-日期-时间 子目录；超出保留份数的旧备份自动清理，只删除该命名规则的目录，目标目录里的其他文件不受影响。目标目录建议选本机其他磁盘或外接存储，避免与数据同盘。调度按北京时间计算，修改立即生效，无需重启服务。</small>
+                <table class="table"><thead><tr><th>时间</th><th>触发</th><th>状态</th><th>大小</th><th>说明</th></tr></thead><tbody id="backup-runs-body"></tbody></table>
+              </div>
+            </div>
             <div class="panel admin-only hidden">
               <div class="panel-head"><h2>用户管理</h2><span>只有系统管理员可以管理账号</span></div>
               <div class="voice-settings">
@@ -423,6 +452,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=64"></script>
+    <script src="/app.js?v=65"></script>
   </body>
 </html>

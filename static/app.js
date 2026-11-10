@@ -367,14 +367,22 @@ async function loadState() {
   state.llmApiKeySet = !!data.llm_api_key_set;
   state.queueCapacity = data.queue_capacity || 5;
   state.queueParallelism = data.queue_parallelism || 2;
+  state.backupEnabled = !!data.backup_enabled;
+  state.backupTargetDir = data.backup_target_dir || "";
+  state.backupScheduleType = data.backup_schedule_type === "interval" ? "interval" : "daily";
+  state.backupScheduleTime = data.backup_schedule_time || "03:00";
+  state.backupIntervalHours = data.backup_interval_hours || 24;
+  state.backupKeep = data.backup_keep || 14;
   if (data.ui_theme && THEMES.some((theme) => theme.id === data.ui_theme)) applyTheme(data.ui_theme, false);
   if (data.ui_mode) applyAppearance(data.ui_mode, false);
   renderVoiceSettings();
   renderLlmSettings();
   renderQueueSettings();
+  renderBackupSettings();
   renderGitSettings();
   if (state.isAdmin) {
     loadUsers().catch(() => {});
+    loadBackupRuns().catch(() => {});
   }
   if (!state.projectId && state.projects.length) state.projectId = state.projects[0].id;
   if (state.projectId && !state.projects.some((p) => p.id === state.projectId)) {
@@ -1472,6 +1480,105 @@ async function saveQueueSettings() {
   });
   state.queueCapacity = data.queue_capacity;
   state.queueParallelism = data.queue_parallelism;
+}
+
+function renderBackupSettings() {
+  const enabled = $("backup-enabled-input");
+  if (!enabled) return;
+  enabled.checked = !!state.backupEnabled;
+  $("backup-target-dir-input").value = state.backupTargetDir || "";
+  const type = $("backup-schedule-type-select");
+  type.value = state.backupScheduleType === "interval" ? "interval" : "daily";
+  $("backup-schedule-time-input").value = state.backupScheduleTime || "03:00";
+  $("backup-interval-hours-input").value = state.backupIntervalHours || 24;
+  $("backup-keep-input").value = state.backupKeep || 14;
+  syncBackupScheduleFields();
+  refreshAutoSaveSnapshot("backup-settings");
+}
+
+function syncBackupScheduleFields() {
+  const isInterval = $("backup-schedule-type-select")?.value === "interval";
+  $("backup-time-field")?.classList.toggle("hidden", isInterval);
+  $("backup-interval-field")?.classList.toggle("hidden", !isInterval);
+}
+
+async function saveBackupSettings() {
+  const time = $("backup-schedule-time-input")?.value || "";
+  const intervalHours = Number($("backup-interval-hours-input")?.value);
+  const keep = Number($("backup-keep-input")?.value);
+  if (!time) throw new Error("请选择备份时间");
+  if (!Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
+    throw new Error("间隔小时数需为 1-168 的整数");
+  }
+  if (!Number.isInteger(keep) || keep < 1 || keep > 100) {
+    throw new Error("保留份数需为 1-100 的整数");
+  }
+  const data = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      backup_enabled: $("backup-enabled-input")?.checked,
+      backup_target_dir: $("backup-target-dir-input")?.value.trim(),
+      backup_schedule_type: $("backup-schedule-type-select")?.value,
+      backup_schedule_time: time,
+      backup_interval_hours: intervalHours,
+      backup_keep: keep,
+    }),
+  });
+  state.backupEnabled = !!data.backup_enabled;
+  state.backupTargetDir = data.backup_target_dir || "";
+  state.backupScheduleType = data.backup_schedule_type || "daily";
+  state.backupScheduleTime = data.backup_schedule_time || "03:00";
+  state.backupIntervalHours = data.backup_interval_hours || 24;
+  state.backupKeep = data.backup_keep || 14;
+  syncBackupScheduleFields();
+}
+
+const BACKUP_TRIGGER_LABELS = { scheduled: "定时", manual: "手动" };
+
+function formatBackupSize(bytes) {
+  if (!bytes || bytes <= 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+async function loadBackupRuns() {
+  const data = await api("/api/backup");
+  renderBackupRuns(data.runs || []);
+}
+
+function renderBackupRuns(runs) {
+  const body = $("backup-runs-body");
+  if (!body) return;
+  body.innerHTML =
+    runs
+      .map(
+        (run) => `<tr><td data-label="时间">${escapeHtml(formatChinaTime(run.started_at))}</td><td data-label="触发">${escapeHtml(BACKUP_TRIGGER_LABELS[run.trigger_type] || run.trigger_type)}</td><td data-label="状态"><span class="status ${run.status === "success" ? "success" : "failed"}">${run.status === "success" ? "成功" : "失败"}</span></td><td data-label="大小">${formatBackupSize(run.size_bytes)}</td><td data-label="说明">${escapeHtml(run.message || "")}</td></tr>`
+      )
+      .join("") || "<tr><td colspan='5'>暂无备份记录。</td></tr>";
+}
+
+async function runBackupNow() {
+  const button = $("backup-run-now");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  button.textContent = "备份中…";
+  try {
+    const data = await api("/api/backup/run", { method: "POST" });
+    const run = data.run || {};
+    if (run.status === "success") {
+      toast(`备份完成：${run.message || run.backup_path}`);
+    } else {
+      toast(run.message || "备份失败");
+    }
+    await loadBackupRuns();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "立即备份";
+  }
 }
 
 const GITHUB_TOKEN_KIND_LABELS = { classic: "经典", "fine-grained": "细粒度" };
@@ -3345,6 +3452,9 @@ setupAutoSave("voice-settings", $("voice-settings-panel"), saveVoiceSettings);
 setupAutoSave("llm-settings", $("llm-settings-panel"), saveLlmSettings);
 setupAutoSave("queue-settings", $("queue-settings-panel"), saveQueueSettings);
 setupAutoSave("git-settings", $("git-settings-panel"), saveGitSettings);
+setupAutoSave("backup-settings", $("backup-settings-panel"), saveBackupSettings);
+$("backup-schedule-type-select").addEventListener("change", syncBackupScheduleFields);
+$("backup-run-now").onclick = runBackupNow;
 $("save-password").onclick = () => changeOwnPassword().catch((error) => toast(error.message));
 $("login-form").onsubmit = login;
 $("logout-button").onclick = logout;
