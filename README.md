@@ -116,6 +116,14 @@ Supported project material types:
 - Markdown: `.md`, `.markdown`
 - Plain text: `.txt`
 - PDF: `.pdf`
+- HTML: `.html`, `.htm`
+- Excel: `.xlsx`, `.xls`
+
+Excel uploads support `.xlsx` and `.xls` using openpyxl and xlrd. Text extraction preserves worksheet names, rows, numbers, dates and formulas where available (formulas are not executed). Extraction is limited to 200,000 cells and 2,000,000 text characters; XLSX expanded data is limited to 64 MiB. Empty, encrypted or corrupt workbooks are marked failed while their original files remain downloadable. Every uploaded file has a 下载 action, including historical and failed-extraction files, subject to project read access.
+
+Administrators configure **全局设置 → 文件冷存储** with an enable switch and an absolute target directory. The scheduler checks hourly and moves uploads strictly older than one calendar month in Asia/Shanghai (month-end dates clamp to the previous month's last day); 立即转存 runs a check immediately. Files are copied into `<target>/zreport-cold/project_<id>/material_<id>/`, verified by SHA-256 and size, and their database paths committed before hot copies are deleted. Failed files retain their hot originals and the panel displays the last scan, count and errors. Extracted text, timestamps and report context remain unchanged. Keep the cold volume mounted: preview and download read it directly. Changing the target applies to future transfers; existing archived files keep their recorded locations. Disabling the feature stops transfers and does not move files back.
+
+Cold storage must not overlap the application data directory or the full-backup destination. Full backups also copy archived originals into `cold_uploads/<material-id>/` with a `cold_uploads.json` manifest mapping backup paths to original storage paths. To restore, restore `reports.sqlite3` and `uploads/` as before, then copy each manifest entry back to its recorded `storage_path` (or update the database `storage_path` and `archive_root` together if relocating). A missing cold original fails the full backup rather than silently omitting it. Docker deployments must bind-mount the cold target into the reports container and configure that container path.
 
 Markdown and plain text are extracted as UTF-8. PDF files are parsed server-side with pypdf and surfaced in report context with extraction status; scans or unreadable PDFs are marked failed instead of blocking the report.
 

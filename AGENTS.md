@@ -17,6 +17,7 @@ This repository implements zreport (Zero Report), a local weekly project reporti
 
 ## Development Rules
 
+- Do not create GitHub Issues for this project. Commit and push authorized changes directly.
 - Keep changes small and aligned with the OpenSpec change under `openspec/changes/add-weekly-project-management-system`.
 - Prefer standard library code unless a dependency clearly removes meaningful complexity.
 - Preserve the local-only scope and the account model: one admin manages users, per-user data isolation stays intact, and report/voice/summary generation stays on the internal agent. Do not add remote runners, OAuth, or additional providers without a new OpenSpec change.

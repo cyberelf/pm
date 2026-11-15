@@ -312,6 +312,8 @@ def migrate_schema(conn):
     if "enabled" not in schedule_columns:
         conn.execute("ALTER TABLE update_schedules ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
     material_columns = {row["name"] for row in conn.execute("PRAGMA table_info(materials)")}
+    if "archive_root" not in material_columns:
+        conn.execute("ALTER TABLE materials ADD COLUMN archive_root TEXT NOT NULL DEFAULT ''")
     if "source_type" not in material_columns:
         conn.execute("ALTER TABLE materials ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload'")
     if "summary" not in material_columns:

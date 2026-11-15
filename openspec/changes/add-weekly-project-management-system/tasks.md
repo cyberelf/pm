@@ -147,3 +147,15 @@
 - [x] 14.3 Deduplicate organization project reads per organization when several repos of the same org enable the switch, and feed extras plus org boards into report evidence only when switched on
 - [x] 14.4 Add the 抓取项 checkbox column to the repo table (组织Project shown for GitHub only) with save-on-toggle behavior and regression tests
 - [x] 14.5 Add the repository-level Projects (v2) fetch switch (fetch_repo_projects) alongside the organization one via a shared bounded GraphQL selection set; GitLab repos expose no board toggles
+
+
+## 15. Excel uploads, original download and cold storage
+
+- [x] 15.1 Add bounded XLSX/XLS worksheet extraction and preserve failed originals in the file list
+- [x] 15.2 Add original downloads with UTF-8 attachment names and existing project read permissions
+- [x] 15.3 Add admin-only cold-storage configuration, hourly calendar-month transfers and manual scans with status
+- [x] 15.4 Verify copies before switching persisted paths, preserve original files on failure and retain access across directory changes
+- [x] 15.5 Include cold originals and a restore manifest in full backups; document local and Docker storage behavior
+- [x] 15.6 Run regression and OpenSpec checks, restart the service and verify live endpoints and frontend assets
+
+Validation (2026-11-15): `python3 -m unittest` — 208 tests passed; `npx --yes @fission-ai/openspec validate add-weekly-project-management-system` — valid, with pre-existing duplicate task ID warnings; `node --check static/app.js` and `git diff --check` passed. A temporary account on the LaunchAgent service verified XLSX upload, extracted preview, byte-identical download, cold-storage configuration, and fresh browser controls. Temporary data was removed. Service binding was temporarily changed to 127.0.0.1 for verification because the configured VPN address timed out; the original 10.200.200.3 binding was restored and confirmed listening.

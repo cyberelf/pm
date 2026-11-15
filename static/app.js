@@ -379,6 +379,7 @@ async function loadState() {
   renderLlmSettings();
   renderQueueSettings();
   renderBackupSettings();
+  renderColdStorageSettings(data);
   renderGitSettings();
   if (state.isAdmin) {
     loadUsers().catch(() => {});
@@ -2553,14 +2554,14 @@ function renderSources(ws) {
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
         ${writable ? `
         <label id="material-dropzone" class="upload-dropzone" for="material-file" role="button" tabindex="0">
-          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf" multiple>
+          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls" multiple>
           <span class="upload-icon" aria-hidden="true">↑</span>
           <strong>拖入文件，或点击选择</strong>
-          <span id="material-selection">支持 Markdown、纯文本、HTML 和 PDF，可多选</span>
+          <span id="material-selection">支持 Markdown、纯文本、HTML、PDF 和 Excel，可多选</span>
         </label>
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
-        </div>` : `<p class="share-readonly-hint">只读权限：资料仅供查看，需要读写权限才能上传。</p>`}
+        </div>` : `<p class="share-readonly-hint">只读权限：可预览和下载资料，需要读写权限才能上传。</p>`}
         <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map((m) => renderUploadedMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
       </div>
     </section>
@@ -2637,7 +2638,16 @@ function updateMaterialSelection() {
   if (!label) return;
   label.textContent = files.length
     ? `已选择 ${files.length} 个文件：${files.map((file) => file.name).join("、")}`
-    : "支持 Markdown、纯文本、HTML 和 PDF，可多选";
+    : "支持 Markdown、纯文本、HTML、PDF 和 Excel，可多选";
+}
+
+function downloadMaterial(id) {
+  const link = document.createElement("a");
+  link.href = `/api/projects/${state.projectId}/materials/${id}/download`;
+  link.download = "";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function renderUploadedMaterialRow(m, writable = true, manageable = true) {
@@ -2650,7 +2660,7 @@ function renderUploadedMaterialRow(m, writable = true, manageable = true) {
       ? `<textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}`
       : `<div class="locked-material">${escapeHtml(m.summary || "")}</div>`}</td>
     <td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}<small><span class="status ${m.summary_status}">${escapeHtml(m.summary_status)}</span></small></td>
-    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${manageable && m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
+    <td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><button type="button" onclick="downloadMaterial(${m.id})">下载</button>${manageable && m.deletable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td>
   </tr>`;
 }
 
@@ -3553,3 +3563,44 @@ function renderVersion(version) {
     toast(err.message);
   }
 })();
+
+function renderColdStorageSettings(data) {
+  $("cold-storage-enabled-input").checked = !!data.cold_storage_enabled;
+  $("cold-storage-target-dir-input").value = data.cold_storage_target_dir || "";
+  $("cold-storage-status").textContent = data.cold_storage_last_error
+    ? `最近转存异常：${data.cold_storage_last_error}`
+    : data.cold_storage_last_run
+      ? `最近检查：${formatChinaTime(data.cold_storage_last_run)} · 转存 ${data.cold_storage_last_count || 0} 个文件`
+      : "尚未执行转存";
+  refreshAutoSaveSnapshot("cold-storage-settings");
+}
+
+async function saveColdStorageSettings() {
+  const data = await api("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      cold_storage_enabled: $("cold-storage-enabled-input").checked,
+      cold_storage_target_dir: $("cold-storage-target-dir-input").value.trim(),
+    }),
+  });
+  renderColdStorageSettings(data);
+}
+
+setupAutoSave("cold-storage-settings", $("cold-storage-settings-panel"), saveColdStorageSettings);
+$("cold-storage-run-now").onclick = async () => {
+  const button = $("cold-storage-run-now");
+  button.disabled = true;
+  button.textContent = "转存中…";
+  try {
+    await saveColdStorageSettings();
+    if (!$("cold-storage-enabled-input").checked) throw new Error("请先启用冷存储");
+    const data = await api("/api/cold-storage/run", { method: "POST" });
+    renderColdStorageSettings(data);
+    toast(data.cold_storage_last_error ? "转存完成，部分文件失败，请查看详情" : `已转存 ${data.cold_storage_last_count || 0} 个文件`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "立即转存";
+  }
+};

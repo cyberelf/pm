@@ -1404,7 +1404,7 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(broken["extraction_status"], "failed")
 
         data = workspace(self.conn, self.project_id)
-        self.assertNotIn("broken.pdf", {item["filename"] for item in data["materials"]})
+        self.assertIn("broken.pdf", {item["filename"] for item in data["materials"]})
         self.assertIn(
             "broken.pdf",
             {item["details"].split(":", 1)[0] for item in data["source_diagnostics"] if item["kind"] == "material"},
@@ -1481,7 +1481,7 @@ class CoreTest(unittest.TestCase):
         self.assertIn("HTML text extraction failed", row["extraction_error"])
 
         data = workspace(self.conn, self.project_id)
-        self.assertNotIn("empty.html", {item["filename"] for item in data["materials"]})
+        self.assertIn("empty.html", {item["filename"] for item in data["materials"]})
         self.assertIn(
             "empty.html",
             {item["details"].split(":", 1)[0] for item in data["source_diagnostics"] if item["kind"] == "material"},

@@ -11,10 +11,11 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote
 
 from . import auth
 from . import device_auth
+from .cold_storage import cold_storage_config, evaluate_cold_storage, material_file_path, storage_lock, validate_cold_target
 from .config import (
     APP_VERSION,
     ASR_ENDPOINT_SETTING,
@@ -211,6 +212,8 @@ class LoginRateLimiter:
 
 
 ADMIN_ONLY_SETTING_KEYS = {
+    "cold_storage_enabled",
+    "cold_storage_target_dir",
     "asr_endpoint",
     "asr_model",
     "asr_language",
@@ -342,6 +345,7 @@ def settings_state(conn, user):
             }
         )
         state.update(backup_config(conn))
+        state.update(cold_storage_config(conn))
         state.update(llm_state(conn))
     return state
 
@@ -397,6 +401,8 @@ def scheduler_loop(stop, db_path):
             with connect(db_path) as conn:
                 for row in conn.execute("SELECT id FROM projects WHERE status = 'active'"):
                     evaluate_schedules(conn, row["id"])
+                conn.commit()
+                evaluate_cold_storage(conn)
                 evaluate_backup(conn, db_path)
                 conn.commit()
         except Exception:
@@ -591,6 +597,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             user_id = user["id"] if user else None
             is_admin = bool(user and user["is_admin"])
+            if path == "/api/cold-storage/run" and method == "POST":
+                require_admin(user)
+                self.json(evaluate_cold_storage(conn, force=True))
+                return
             if path == "/api/auth/login" and method == "POST":
                 payload = self.body_json()
                 ip = self.client_address[0]
@@ -900,6 +910,23 @@ class Handler(BaseHTTPRequestHandler):
                     if enabled and not get_setting(conn, BACKUP_TARGET_DIR_SETTING):
                         raise ValidationError("启用定时备份前先填写备份目标目录")
                     set_setting(conn, BACKUP_ENABLED_SETTING, "1" if enabled else "0")
+                if "cold_storage_target_dir" in payload:
+                    target = validate_cold_target(payload.get("cold_storage_target_dir"), get_setting(conn, BACKUP_TARGET_DIR_SETTING))
+                    if target:
+                        verify_target_writable(target)
+                    set_setting(conn, "cold_storage_target_dir", target)
+                # Validate both directions: changing full-backup settings must
+                # not let retention pruning reach the cold-storage originals.
+                cold_target = get_setting(conn, "cold_storage_target_dir")
+                if cold_target:
+                    validate_cold_target(cold_target, get_setting(conn, BACKUP_TARGET_DIR_SETTING))
+                if "backup_target_dir" in payload:
+                    for archived in conn.execute("SELECT DISTINCT archive_root FROM materials WHERE archive_root != ''"):
+                        validate_cold_target(archived["archive_root"], get_setting(conn, BACKUP_TARGET_DIR_SETTING))
+                if "cold_storage_enabled" in payload:
+                    set_setting(conn, "cold_storage_enabled", "1" if payload["cold_storage_enabled"] else "0")
+                if get_setting(conn, "cold_storage_enabled") == "1" and not cold_target:
+                    raise ValidationError("启用冷存储前先填写目标目录")
                 conn.commit()
                 self.json(settings_state(conn, user))
                 return
@@ -1010,6 +1037,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 6 and parts[3] == "materials" and parts[5] == "content" and method == "GET":
                     self.material_content(conn, project_id, int(parts[4]))
+                    return
+                if len(parts) == 6 and parts[3] == "materials" and parts[5] == "download" and method == "GET":
+                    self.material_content(conn, project_id, int(parts[4]), download=True)
                     return
                 if len(parts) == 5 and parts[3] == "reports" and method == "GET":
                     archived = report_archive(conn, project_id, parts[4])
@@ -1248,25 +1278,21 @@ class Handler(BaseHTTPRequestHandler):
         pdf = report_pdf_bytes(project_id, project, report_dict)
         self.bytes_response(pdf, "application/pdf", pdf_filename(project["name"], week_key))
 
-    def material_content(self, conn, project_id, material_id):
-        row = conn.execute(
-            "SELECT filename, content_type, storage_path, source_type FROM materials WHERE id = ? AND project_id = ?",
-            (material_id, project_id),
-        ).fetchone()
-        if not row or row["source_type"] != "upload" or Path(row["filename"]).suffix.lower() != ".pdf":
-            self.error(HTTPStatus.NOT_FOUND, "PDF material not found")
-            return
-        path = Path(row["storage_path"] or "").resolve()
-        upload_root = UPLOAD_DIR.resolve()
-        try:
-            path.relative_to(upload_root)
-        except ValueError:
-            self.error(HTTPStatus.NOT_FOUND, "PDF material not found")
-            return
-        if not path.is_file():
-            self.error(HTTPStatus.NOT_FOUND, "PDF material not found")
-            return
-        self.bytes_response(path.read_bytes(), "application/pdf")
+    def material_content(self, conn, project_id, material_id, download=False):
+        with storage_lock:
+            row = conn.execute("SELECT * FROM materials WHERE id = ? AND project_id = ?", (material_id, project_id)).fetchone()
+            if not row or (not download and Path(row["filename"]).suffix.lower() != ".pdf"):
+                self.error(HTTPStatus.NOT_FOUND, "material not found")
+                return
+            try:
+                data = material_file_path(row, UPLOAD_DIR).read_bytes()
+            except OSError:
+                self.error(HTTPStatus.NOT_FOUND, "material file not found")
+                return
+        headers = []
+        if download:
+            headers.append(("Content-Disposition", "attachment; filename=\"material\"; filename*=UTF-8''" + quote(row["filename"], safe="")))
+        self._send_bytes(data, "application/octet-stream" if download else "application/pdf", extra_headers=headers)
 
     def error(self, status, message, extra_headers=None):
         self.json({"error": message}, status, extra_headers=extra_headers)
@@ -1456,7 +1482,6 @@ def material_rows(conn, project_id, timezone):
                created_at, updated_at
         FROM materials
         WHERE project_id = ?
-          AND (source_type = 'manual' OR extraction_status != 'failed')
         ORDER BY id DESC
         """,
         (project_id,),
@@ -1500,7 +1525,9 @@ def material_detail(conn, project_id, material_id):
         item["content_html"] = ""
         if storage_path:
             try:
-                item["content_html"] = decode_document_bytes(Path(storage_path).read_bytes())
+                with storage_lock:
+                    current = conn.execute("SELECT * FROM materials WHERE id = ? AND project_id = ?", (material_id, project_id)).fetchone()
+                    item["content_html"] = decode_document_bytes(material_file_path(current, UPLOAD_DIR).read_bytes())
             except (OSError, ValueError):
                 item["content_html"] = ""
         item["preview_kind"] = "html" if item["content_html"] else "text"

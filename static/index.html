@@ -218,6 +218,16 @@
                 <small>提交超过容量时新任务会被拒绝；并行执行数决定同时运行的任务数，其余在队列中按提交顺序等待。修改立即生效，无需重启服务。</small>
               </div>
             </div>
+            <div class="panel admin-only hidden" id="cold-storage-settings-panel">
+              <div class="panel-head"><h2>文件冷存储</h2></div>
+              <div class="voice-settings">
+                <label class="switch-row"><span class="switch"><input id="cold-storage-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用自动转存</span></label>
+                <label>冷存储目录<input id="cold-storage-target-dir-input" placeholder="/Volumes/archive/zreport"></label>
+                <small>每小时检查，将上传超过一个自然月的原文件转存到此目录，仍可预览和下载。目录需保持可访问，不能与应用数据或完整备份目录重叠。</small>
+                <div class="row"><button id="cold-storage-run-now" type="button">立即转存</button></div>
+                <small id="cold-storage-status" role="status"></small>
+              </div>
+            </div>
             <div class="panel admin-only hidden" id="backup-settings-panel">
               <div class="panel-head"><h2>数据备份</h2><span>定时备份 SQLite 数据库与上传文件到目标目录 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
@@ -243,7 +253,7 @@
                 <div class="row">
                   <button id="backup-run-now" type="button">立即备份</button>
                 </div>
-                <small>每次备份包含 SQLite 数据库的在线快照与 uploads 上传文件，写入目标目录下的 zreport-backup-日期-时间 子目录；超出保留份数的旧备份自动清理，只删除该命名规则的目录，目标目录里的其他文件不受影响。目标目录建议选本机其他磁盘或外接存储，避免与数据同盘。调度按北京时间计算，修改立即生效，无需重启服务。</small>
+                <small>每次备份包含 SQLite 数据库的在线快照、uploads 上传文件与已转存的冷存储文件，写入目标目录下的 zreport-backup-日期-时间 子目录；超出保留份数的旧备份自动清理，只删除该命名规则的目录，目标目录里的其他文件不受影响。目标目录建议选本机其他磁盘或外接存储，避免与数据同盘。调度按北京时间计算，修改立即生效，无需重启服务。</small>
                 <table class="table"><thead><tr><th>时间</th><th>触发</th><th>状态</th><th>大小</th><th>说明</th></tr></thead><tbody id="backup-runs-body"></tbody></table>
               </div>
             </div>

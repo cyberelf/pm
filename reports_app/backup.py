@@ -10,6 +10,7 @@
 """
 
 import re
+import json
 import shutil
 import sqlite3
 import threading
@@ -36,6 +37,7 @@ from .config import (
     UPLOAD_DIR,
 )
 from .db import get_setting
+from .cold_storage import storage_lock, material_file_path
 from .timeutil import get_zone, iso_now, parse_iso
 from .validation import ValidationError
 
@@ -146,6 +148,14 @@ def run_backup(conn, db_path=DB_PATH, trigger="manual"):
             conn, trigger, "failed", message="另一个备份任务正在进行中", started_at=started_at
         )
     try:
+        with storage_lock:
+            return _run_backup(conn, db_path, trigger, started_at)
+    finally:
+        _backup_lock.release()
+
+
+def _run_backup(conn, db_path, trigger, started_at):
+    try:
         config = backup_config(conn)
         if not config["backup_target_dir"]:
             raise ValueError("备份目标目录未配置")
@@ -156,6 +166,9 @@ def run_backup(conn, db_path=DB_PATH, trigger="manual"):
         try:
             size_bytes = _snapshot_database(Path(db_path), backup_dir)
             upload_size, upload_count = _copy_uploads(backup_dir)
+            cold_size, cold_count = _copy_cold_uploads(backup_dir)
+            upload_size += cold_size
+            upload_count += cold_count
         except Exception:
             # 快照或拷贝失败时清掉残缺目录，避免留下看似可用的半份备份
             shutil.rmtree(backup_dir, ignore_errors=True)
@@ -179,8 +192,6 @@ def run_backup(conn, db_path=DB_PATH, trigger="manual"):
     except Exception as exc:
         message = _writable_error(exc) if isinstance(exc, PermissionError) else str(exc)
         return _record_run(conn, trigger, "failed", message=message, started_at=started_at)
-    finally:
-        _backup_lock.release()
 
 
 def _record_run(conn, trigger, status, target_dir="", backup_path="", size_bytes=0, file_count=0, message="", started_at=None):
@@ -225,6 +236,33 @@ def _copy_uploads(backup_dir):
             count += 1
             size += path.stat().st_size
     return size, count
+
+
+def _copy_cold_uploads(backup_dir):
+    """Use the snapshot's paths; fail the backup if any original is unavailable.
+
+    The manifest maps portable backup paths to original cold-storage locations
+    for restoration on the same machine or relocation by the administrator.
+    """
+    snapshot = sqlite3.connect(str(backup_dir / "reports.sqlite3"))
+    snapshot.row_factory = sqlite3.Row
+    try:
+        rows = snapshot.execute("""SELECT id, source_type, storage_path, archive_root FROM materials
+                                   WHERE archive_root != '' AND source_type = 'upload'""").fetchall()
+    finally:
+        snapshot.close()
+    manifest, size = [], 0
+    for row in rows:
+        source = material_file_path(row)
+        relative = Path("cold_uploads") / str(row["id"]) / source.name
+        destination = backup_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        size += destination.stat().st_size
+        manifest.append({"material_id": row["id"], "backup_path": relative.as_posix(), "storage_path": str(source)})
+    if manifest:
+        (backup_dir / "cold_uploads.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return size, len(manifest)
 
 
 def _prune_old_backups(target, keep):

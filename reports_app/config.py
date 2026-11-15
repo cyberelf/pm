@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 # 平台（服务端 + UI）版本号，独立于 PyPI 的 CLI 版本（zreport.__version__）
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.3.10"
 DATA_DIR = ROOT_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "reports.sqlite3"
@@ -122,7 +122,7 @@ GITLAB_TOKEN_SETTING = "gitlab_token"
 GITLAB_URL_SETTING = "gitlab_url"
 GITLAB_SKIP_VERIFY_SETTING = "gitlab_skip_verify"
 MAX_GITLAB_PAGES = 5
-SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf"}
+SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls"}
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 # uploaded HTML documents get tag-stripping extraction, not the raw text decode
 SUPPORTED_HTML_EXTENSIONS = {".html", ".htm"}

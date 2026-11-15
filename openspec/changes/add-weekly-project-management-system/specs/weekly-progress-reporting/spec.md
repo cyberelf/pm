@@ -151,3 +151,38 @@ The system SHALL allow the workspace user to edit the Markdown body of the curre
 #### Scenario: Editing is restricted to the current week
 - **WHEN** an edit request targets any week other than the project's current week
 - **THEN** the system rejects the request and keeps the historical report unchanged
+
+
+### Requirement: Excel material extraction and original downloads
+The system SHALL accept XLSX and XLS uploads, extract worksheet names and cell text without executing formulas, and retain original bytes. Extraction SHALL be bounded to 200000 cells and 2000000 text characters, with XLSX expanded data bounded to 64 MiB. A failed extraction SHALL preserve the original and display the failed file in the material list. Downloads SHALL require project read access and return an attachment with the original UTF-8 filename, including for historical and failed files.
+
+#### Scenario: Upload an Excel workbook
+- **WHEN** a project writer uploads a supported Excel file with multiple worksheets
+- **THEN** its extracted text contains worksheet names and row values for preview, summaries and weekly report evidence
+
+#### Scenario: Download an original file
+- **WHEN** a project reader downloads an uploaded file, including an archived or extraction-failed upload
+- **THEN** the system returns the original bytes with an attachment filename
+- **AND** accounts without project access cannot download it
+
+### Requirement: Local file cold storage
+The system SHALL allow administrators to configure and enable a local absolute cold-storage directory independently of full backups. The scheduler SHALL check hourly and transfer uploaded originals strictly older than one calendar month in Asia/Shanghai, clamping the day at month end. Administrators SHALL also be able to trigger a scan and view the latest scan time, transferred count and errors. Unconfigured cold storage SHALL be disabled by default.
+
+#### Scenario: Safely transfer an aged upload
+- **WHEN** a file is older than the calendar-month cutoff and cold storage is enabled
+- **THEN** the system copies the original to a project/material-specific location, verifies size and SHA-256, commits its new path and archive root, and only then removes an unreferenced hot copy
+- **AND** extraction text, material timestamps, preview, project permissions and download behavior remain intact
+
+#### Scenario: A transfer fails
+- **WHEN** a cold-storage copy, verification or database update fails
+- **THEN** the hot original remains accessible and the scan records an error, with retry available on a subsequent scan
+
+#### Scenario: Change storage configuration
+- **WHEN** the administrator changes the cold-storage directory or disables future transfers
+- **THEN** previously archived originals remain accessible at their recorded locations
+- **AND** cold storage cannot overlap application data or a full-backup target
+
+#### Scenario: Back up cold originals
+- **WHEN** a full backup is taken after files have been transferred
+- **THEN** it includes all referenced cold originals and a manifest of their original storage paths
+- **AND** a missing cold original fails the backup rather than producing an incomplete successful backup

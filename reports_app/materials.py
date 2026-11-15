@@ -4,6 +4,8 @@ import io
 import json
 import os
 import re
+import uuid
+from zipfile import ZipFile
 from pathlib import Path
 
 from html.parser import HTMLParser
@@ -26,7 +28,7 @@ def store_material(conn, project_id, payload):
     checksum = hashlib.sha256(raw).hexdigest()
     project_dir = UPLOAD_DIR / f"project_{project_id}"
     project_dir.mkdir(parents=True, exist_ok=True)
-    storage_name = f"{checksum[:12]}_{safe_filename(filename)}"
+    storage_name = f"{uuid.uuid4().hex}_{safe_filename(filename)}"
     path = project_dir / storage_name
     path.write_bytes(raw)
 
@@ -49,6 +51,13 @@ def store_material(conn, project_id, payload):
         except Exception as exc:
             status = "failed"
             error = f"HTML text extraction failed: {exc}"
+    elif ext in {".xlsx", ".xls"}:
+        try:
+            extracted = extract_excel_text(raw, ext)
+            status = "extracted"
+        except Exception as exc:
+            status = "failed"
+            error = f"Excel text extraction failed: {exc}"
     elif ext == ".pdf":
         try:
             extracted = extract_pdf_text(raw)
@@ -89,6 +98,71 @@ def original_filename(name):
     if not value:
         raise ValidationError("material filename is required")
     return value[:255]
+
+
+def extract_excel_text(raw, ext):
+    """Keep sheet/row context, with bounded extraction; never evaluate formulas."""
+    parts = []
+    cells = 0
+    characters = 0
+
+    def append_sheet(name, rows):
+        nonlocal cells, characters
+        lines = []
+        for row in rows:
+            cells += len(row)
+            if cells > 200000:
+                raise ValueError("Excel exceeds 200000 cells")
+            values = ["" if value is None else str(value) for value in row]
+            while values and not values[-1]:
+                values.pop()
+            if not any(values):
+                continue
+            line = "\t".join(values)
+            characters += len(line)
+            if characters > 2000000:
+                raise ValueError("Excel text exceeds 2000000 characters")
+            lines.append(line)
+        if lines:
+            parts.append(f"## {name}\n" + "\n".join(lines))
+
+    if ext == ".xlsx":
+        from openpyxl import load_workbook
+        with ZipFile(io.BytesIO(raw)) as archive:
+            if sum(item.file_size for item in archive.infolist()) > 64 * 1024 * 1024:
+                raise ValueError("Excel uncompressed data exceeds 64 MiB")
+        workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
+        try:
+            for sheet in workbook:
+                if (sheet.max_row or 0) * (sheet.max_column or 0) > 200000:
+                    raise ValueError("Excel exceeds 200000 cells")
+                append_sheet(sheet.title, sheet.iter_rows(values_only=True))
+        finally:
+            workbook.close()
+    else:
+        import xlrd
+        workbook = xlrd.open_workbook(file_contents=raw, on_demand=True, ragged_rows=True)
+        try:
+            for sheet in workbook.sheets():
+                if sheet.nrows * sheet.ncols > 200000:
+                    raise ValueError("Excel exceeds 200000 cells")
+                def rows():
+                    for index in range(sheet.nrows):
+                        values = []
+                        for cell in sheet.row(index):
+                            value = cell.value
+                            if cell.ctype == xlrd.XL_CELL_DATE:
+                                value = xlrd.xldate_as_datetime(value, workbook.datemode).isoformat(sep=" ")
+                            elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                                value = bool(value)
+                            values.append(value)
+                        yield values
+                append_sheet(sheet.name, rows())
+        finally:
+            workbook.release_resources()
+    if not parts:
+        raise ValueError("Excel contains no extractable cells")
+    return "\n\n".join(parts)
 
 
 def extract_pdf_text(raw):
