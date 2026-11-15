@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=62" />
+    <link rel="stylesheet" href="/styles.css?v=63" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -125,7 +125,18 @@
             </div>
           </header>
           <section class="settings-panels">
-            <div class="panel">
+            <div class="source-tabs global-settings-tabs" role="tablist" aria-label="全局设置分类">
+              <button type="button" id="global-tab-appearance" data-global-settings-tab="appearance" role="tab" aria-controls="appearance-settings-panel" aria-selected="true" tabindex="0" class="active">外观</button>
+              <button type="button" id="global-tab-git" data-global-settings-tab="git" role="tab" aria-controls="git-settings-panel" aria-selected="false" tabindex="-1">Git 集成</button>
+              <button type="button" id="global-tab-llm" data-global-settings-tab="llm" role="tab" aria-controls="llm-settings-panel" aria-selected="false" tabindex="-1" class="admin-only hidden">内部 Agent LLM</button>
+              <button type="button" id="global-tab-voice" data-global-settings-tab="voice" role="tab" aria-controls="voice-settings-panel" aria-selected="false" tabindex="-1" class="admin-only hidden">语音 TODO</button>
+              <button type="button" id="global-tab-queue" data-global-settings-tab="queue" role="tab" aria-controls="queue-settings-panel" aria-selected="false" tabindex="-1" class="admin-only hidden">任务队列</button>
+              <button type="button" id="global-tab-cold-storage" data-global-settings-tab="cold-storage" role="tab" aria-controls="cold-storage-settings-panel" aria-selected="false" tabindex="-1" class="admin-only hidden">文件冷存储</button>
+              <button type="button" id="global-tab-backup" data-global-settings-tab="backup" role="tab" aria-controls="backup-settings-panel" aria-selected="false" tabindex="-1" class="admin-only hidden">数据备份</button>
+              <button type="button" id="global-tab-users" data-global-settings-tab="users" role="tab" aria-controls="users-settings-panel" aria-selected="false" tabindex="-1" class="admin-only hidden">用户管理</button>
+              <button type="button" id="global-tab-password" data-global-settings-tab="password" role="tab" aria-controls="password-settings-panel" aria-selected="false" tabindex="-1">修改密码</button>
+            </div>
+            <div class="panel" id="appearance-settings-panel" data-global-settings-panel="appearance" role="tabpanel" aria-labelledby="global-tab-appearance">
               <div class="panel-head"><h2>外观</h2><span>背景深浅与主题色，仅当前账号生效</span></div>
               <div class="mode-switch" role="group" aria-label="背景深浅色">
                 <button type="button" class="mode-option active" data-mode-option="light" onclick="applyAppearance('light')">浅色</button>
@@ -133,7 +144,7 @@
               </div>
               <div id="appearance-swatches" class="theme-swatches"></div>
             </div>
-            <div class="panel" id="git-settings-panel">
+            <div class="panel hidden" id="git-settings-panel" data-global-settings-panel="git" role="tabpanel" aria-labelledby="global-tab-git">
               <div class="panel-head"><h2>Git 集成</h2><span>配置你自己的 GitHub / GitLab 访问令牌 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div id="git-integration-admin" class="git-integration-admin hidden">
                 <label class="switch-row"><span class="switch"><input id="github-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用 GitHub 集成（全局，仅管理员可改）</span></label>
@@ -160,7 +171,7 @@
                 <small>令牌与服务器地址保存在你的账号下，接口不会回传令牌；令牌留空表示保持已保存的值。仓库状态读取和 commits 抓取通过 GitHub / GitLab REST API 使用你的配置；所有 GitLab 仓库统一使用这里的 GitLab 服务器地址；GitHub 未配置令牌时只能访问公开仓库。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden" id="llm-settings-panel">
+            <div class="panel admin-only hidden" id="llm-settings-panel" data-global-settings-panel="llm" role="tabpanel" aria-labelledby="global-tab-llm">
               <div class="panel-head"><h2>内部 Agent LLM</h2><span>周报生成与语音 TODO 整理都通过内部 Agent 调用 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label>LLM Provider
@@ -193,7 +204,7 @@
                 <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。图片识别模型复用上面的 API Key，用于识别上传图片中的文字和内容；填了图片识别 API 地址时按 OpenAI 兼容协议调用该地址（部分 Anthropic 兼容网关会丢弃图片）。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。Embedding 模型填了才启用 CLI/接口的向量检索，调用 Embedding API 地址（留空时为 API 地址）下的 /embeddings，需 OpenAI 兼容端点（Anthropic 官方无嵌入 API）——LLM 走远程网关、嵌入走本地服务时，把 Embedding API 地址单独指向本地。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden" id="voice-settings-panel">
+            <div class="panel admin-only hidden" id="voice-settings-panel" data-global-settings-panel="voice" role="tabpanel" aria-labelledby="global-tab-voice">
               <div class="panel-head"><h2>语音 TODO</h2><span>按住右下角麦克风说话，自动整理成 TODO · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label>识别服务地址
@@ -212,7 +223,7 @@
                 <small>浏览器只负责录音并转为 16k WAV，转写由识别服务地址对应的本地服务完成（如 whisper.cpp 的 /inference，或任何 OpenAI 兼容转写端点）；转写文本由内部 Agent 整理成 TODO 项，整理失败时按原始转写创建。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden" id="queue-settings-panel">
+            <div class="panel admin-only hidden" id="queue-settings-panel" data-global-settings-panel="queue" role="tabpanel" aria-labelledby="global-tab-queue">
               <div class="panel-head"><h2>任务队列</h2><span>周报生成与语音 TODO 共用的后台队列 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label>队列容量
@@ -224,7 +235,7 @@
                 <small>提交超过容量时新任务会被拒绝；并行执行数决定同时运行的任务数，其余在队列中按提交顺序等待。修改立即生效，无需重启服务。</small>
               </div>
             </div>
-            <div class="panel admin-only hidden" id="cold-storage-settings-panel">
+            <div class="panel admin-only hidden" id="cold-storage-settings-panel" data-global-settings-panel="cold-storage" role="tabpanel" aria-labelledby="global-tab-cold-storage">
               <div class="panel-head"><h2>文件冷存储</h2></div>
               <div class="voice-settings">
                 <label class="switch-row"><span class="switch"><input id="cold-storage-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用自动转存</span></label>
@@ -234,7 +245,7 @@
                 <small id="cold-storage-status" role="status"></small>
               </div>
             </div>
-            <div class="panel admin-only hidden" id="backup-settings-panel">
+            <div class="panel admin-only hidden" id="backup-settings-panel" data-global-settings-panel="backup" role="tabpanel" aria-labelledby="global-tab-backup">
               <div class="panel-head"><h2>数据备份</h2><span>定时备份 SQLite 数据库与上传文件到目标目录 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
               <div class="voice-settings">
                 <label class="switch-row"><span class="switch"><input id="backup-enabled-input" type="checkbox"><span class="switch-slider"></span></span><span>启用定时备份</span></label>
@@ -259,11 +270,11 @@
                 <div class="row">
                   <button id="backup-run-now" type="button">立即备份</button>
                 </div>
-                <small>每次备份包含 SQLite 数据库的在线快照、uploads 上传文件与已转存的冷存储文件，写入目标目录下的 zreport-backup-日期-时间 子目录；超出保留份数的旧备份自动清理，只删除该命名规则的目录，目标目录里的其他文件不受影响。目标目录建议选本机其他磁盘或外接存储，避免与数据同盘。调度按北京时间计算，修改立即生效，无需重启服务。</small>
+                <small>每次备份包含 SQLite 数据库的在线快照、uploads 上传文件与已转存的冷存储文件，压缩为目标目录下的 zreport-backup-日期-时间.zip 文件；超出保留份数的旧备份自动清理，仅处理该命名规则的 ZIP 文件和旧版目录，目标目录里的其他文件不受影响。目标目录建议选本机其他磁盘或外接存储，避免与数据同盘。调度按北京时间计算，修改立即生效，无需重启服务。</small>
                 <table class="table"><thead><tr><th>时间</th><th>触发</th><th>状态</th><th>大小</th><th>说明</th></tr></thead><tbody id="backup-runs-body"></tbody></table>
               </div>
             </div>
-            <div class="panel admin-only hidden">
+            <div class="panel admin-only hidden" id="users-settings-panel" data-global-settings-panel="users" role="tabpanel" aria-labelledby="global-tab-users">
               <div class="panel-head"><h2>用户管理</h2><span>只有系统管理员可以管理账号</span></div>
               <div class="voice-settings">
                 <div class="row user-create-row">
@@ -275,7 +286,7 @@
                 <table class="table"><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody id="user-table-body"></tbody></table>
               </div>
             </div>
-            <div class="panel">
+            <div class="panel hidden" id="password-settings-panel" data-global-settings-panel="password" role="tabpanel" aria-labelledby="global-tab-password">
               <div class="panel-head"><h2>修改密码</h2><span>修改当前登录账号的密码</span></div>
               <div class="voice-settings">
                 <label>当前密码
@@ -469,6 +480,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=66"></script>
+    <script src="/app.js?v=67"></script>
   </body>
 </html>

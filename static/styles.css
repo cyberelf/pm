@@ -648,6 +648,17 @@ body.todo-drag-in-progress { cursor: grabbing; user-select: none; -webkit-user-s
   font-weight: 600;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
 }
+.global-settings-tabs {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  scrollbar-width: thin;
+}
+.global-settings-tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .mode-switch { display: flex; width: fit-content; max-width: 100%; gap: 2px; padding: 5px; border-radius: 9999px; background: var(--surface-soft); }
 .mode-option { min-height: 34px; border: 0; border-radius: 9999px; padding: 6px 20px; background: transparent; color: var(--muted); font-weight: 500; }
 .mode-option.active { background: var(--canvas); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-soft); }

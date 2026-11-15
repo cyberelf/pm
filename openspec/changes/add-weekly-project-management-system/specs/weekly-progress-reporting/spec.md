@@ -215,3 +215,17 @@ The system SHALL produce full backups as DEFLATE-compressed ZIP archives named u
 - **WHEN** a successful backup exceeds the configured retention count
 - **THEN** the newest backups are retained across ZIP archives and legacy directories together
 - **AND** timestamp collision suffixes are ordered numerically, with unrelated files and symbolic links untouched
+
+### Requirement: Global settings tabs
+The global settings workspace SHALL use a horizontal tab strip to display one settings section at a time. It SHALL preserve form contents while switching tabs and show only sections permitted for the current account.
+
+#### Scenario: Navigate settings on desktop and mobile
+- **WHEN** a user opens global settings or selects a section
+- **THEN** the selected tab and its associated panel are active, with other panels hidden
+- **AND** narrow screens scroll the tab strip horizontally without wrapping it or widening the page
+- **AND** keyboard users can navigate tabs using Left, Right, Home and End
+
+#### Scenario: Apply account permissions to tabs
+- **WHEN** settings are loaded for a regular user
+- **THEN** only appearance, Git integration and password tabs are available
+- **AND** an unavailable selected administrator tab falls back to appearance

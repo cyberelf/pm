@@ -35,6 +35,7 @@ const state = {
   pendingDeleteUserId: null,
   mode: localStorage.getItem("workspaceMode") === "todos" ? "todos" : "reports",
   settingsView: false,
+  globalSettingsTab: "appearance",
   currentUser: null,
   isAdmin: false,
   asrEndpoint: "",
@@ -349,6 +350,7 @@ async function loadState() {
     ? `${state.currentUser.username}${state.isAdmin ? " · 管理员" : ""}`
     : "";
   document.querySelectorAll(".admin-only").forEach((el) => el.classList.toggle("hidden", !state.isAdmin));
+  switchGlobalSettingsTab(state.globalSettingsTab);
   state.githubEnabled = data.github_enabled !== false;
   state.gitlabEnabled = data.gitlab_enabled !== false;
   state.githubTokenSet = !!data.github_token_set;
@@ -442,8 +444,27 @@ function syncWorkspaceView() {
   });
 }
 
+function switchGlobalSettingsTab(tab) {
+  const buttons = [...document.querySelectorAll("[data-global-settings-tab]")];
+  const available = buttons.filter((button) => state.isAdmin || !button.classList.contains("admin-only"));
+  const selected = available.find((button) => button.dataset.globalSettingsTab === tab) || available[0];
+  if (!selected) return;
+  state.globalSettingsTab = selected.dataset.globalSettingsTab;
+  buttons.forEach((button) => {
+    const active = button === selected;
+    button.classList.toggle("hidden", !available.includes(button));
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-global-settings-panel]").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.globalSettingsPanel !== state.globalSettingsTab);
+  });
+}
+
 function toggleSettingsView(force) {
   state.settingsView = typeof force === "boolean" ? force : !state.settingsView;
+  if (state.settingsView) switchGlobalSettingsTab(state.globalSettingsTab);
   const showingTodos = state.mode === "todos" && !state.settingsView;
   document.body.classList.toggle("todo-mode", showingTodos);
   $("project-sidebar").classList.toggle("hidden", showingTodos);
@@ -3483,6 +3504,22 @@ document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () =
   switchAppMode(target);
 });
 $("open-global-settings").onclick = () => toggleSettingsView(true);
+document.querySelectorAll("[data-global-settings-tab]").forEach((button) => {
+  button.onclick = () => switchGlobalSettingsTab(button.dataset.globalSettingsTab);
+  button.onkeydown = (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = [...button.parentElement.querySelectorAll("[data-global-settings-tab]")]
+      .filter((item) => !item.classList.contains("hidden"));
+    const current = buttons.indexOf(button);
+    const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+    const next = buttons[index];
+    switchGlobalSettingsTab(next.dataset.globalSettingsTab);
+    next.focus();
+    next.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
+});
 setupAutoSave("voice-settings", $("voice-settings-panel"), saveVoiceSettings);
 setupAutoSave("llm-settings", $("llm-settings-panel"), saveLlmSettings);
 setupAutoSave("queue-settings", $("queue-settings-panel"), saveQueueSettings);

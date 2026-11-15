@@ -183,3 +183,12 @@ Validation (2026-11-15): The final working tree passed all 213 unit tests. OpenS
 - [x] 18.4 Run regression and OpenSpec validation, restart and verify a live compressed backup, push changes and clean temporary environment
 
 Validation (2026-11-15): All 216 unit tests passed; OpenSpec validation passed with the existing duplicate-task-ID and image-requirement-length warnings. The normal LaunchAgent was reinstalled for platform 1.3.13. A one-time LaunchAgent using the same entry point completed and committed backup run 17: zreport-backup-20261115-200211.zip, 222 upload/cold-original files, 11,034,074 compressed bytes (16,338,165 uncompressed bytes). All ZIP CRC checks passed, file counts and cold manifest entries were checked, and the extracted database passed PRAGMA quick_check. The verification LaunchAgent, copied ZIP, restored database, test caches and logs were removed; the backup archive and application data were retained. Local HTTP health checks against the configured VPN listener still timed out, as before this change; backup API behavior was covered by the HTTP regression tests.
+
+## 19. Horizontal global settings tabs
+
+- [x] 19.1 Show one global settings panel at a time using horizontal tabs and preserve existing form nodes and save handlers
+- [x] 19.2 Filter tabs by account role, fall back from unavailable admin sections and support keyboard navigation
+- [x] 19.3 Keep narrow-screen tabs on one horizontally scrollable row; refresh asset cache keys and ZIP backup help text
+- [x] 19.4 Complete regression, browser and OpenSpec checks, restart for the platform version bump and push
+
+Validation (2026-11-15): All 216 unit tests, node --check static/app.js and git diff --check passed. OpenSpec validation passed with existing warnings. A fresh isolated Chromium page loaded the actual static HTML/CSS/JS with authentication requests stubbed: all nine admin tabs selected exactly one linked panel, drafts survived switching, keyboard End/Right navigation worked, and regular-account fallback exposed only appearance/Git/password. Desktop rendering was inspected at 1440px; mobile emulation at 390px kept the 358px tab strip on one scrollable row with 863px of content and no page overflow. The platform version was bumped to 1.3.14 and the normal LaunchAgent reinstalled. The isolated page and temporary fixture, screenshots, test caches and logs were removed.
