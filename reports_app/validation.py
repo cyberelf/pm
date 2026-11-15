@@ -193,5 +193,5 @@ def validate_branches(branches):
 def validate_material_filename(filename):
     ext = Path(filename or "").suffix.lower()
     if ext not in SUPPORTED_MATERIAL_EXTENSIONS:
-        raise ValidationError("unsupported file type; upload Markdown, plain text, HTML, PDF, or Excel (.xlsx/.xls)")
+        raise ValidationError("unsupported file type; upload Markdown, plain text, HTML, PDF, Excel (.xlsx/.xls), or images (.png/.jpg/.jpeg/.gif/.webp)")
     return ext

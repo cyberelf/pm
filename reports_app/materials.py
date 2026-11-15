@@ -11,7 +11,13 @@ from pathlib import Path
 from html.parser import HTMLParser
 from pypdf import PdfReader
 
-from .config import SUPPORTED_HTML_EXTENSIONS, SUPPORTED_TEXT_EXTENSIONS, UPLOAD_DIR
+from .config import (
+    MAX_IMAGE_RECOGNITION_BYTES,
+    SUPPORTED_HTML_EXTENSIONS,
+    SUPPORTED_IMAGE_TYPES,
+    SUPPORTED_TEXT_EXTENSIONS,
+    UPLOAD_DIR,
+)
 from .timeutil import current_week_key, iso_now, parse_iso, week_key_for
 from .validation import ValidationError, validate_material_filename
 
@@ -25,6 +31,13 @@ def store_material(conn, project_id, payload):
     filename = original_filename(payload.get("filename") or "")
     ext = validate_material_filename(filename)
     raw = base64.b64decode(payload.get("content_base64") or "", validate=True)
+    content_type = payload.get("content_type") or "application/octet-stream"
+    if ext in SUPPORTED_IMAGE_TYPES:
+        # images are served inline, so the stored type comes from the bytes,
+        # never from the client
+        content_type = sniff_image_type(raw)
+        if not content_type:
+            raise ValidationError(f"{filename}: file content is not a PNG, JPEG, GIF, or WebP image")
     checksum = hashlib.sha256(raw).hexdigest()
     project_dir = UPLOAD_DIR / f"project_{project_id}"
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -58,6 +71,15 @@ def store_material(conn, project_id, payload):
         except Exception as exc:
             status = "failed"
             error = f"Excel text extraction failed: {exc}"
+    elif ext in SUPPORTED_IMAGE_TYPES:
+        try:
+            if len(raw) > MAX_IMAGE_RECOGNITION_BYTES:
+                raise ValueError(f"image exceeds {MAX_IMAGE_RECOGNITION_BYTES // (1024 * 1024)} MiB recognition limit")
+            extracted = recognize_image_text(filename, raw, content_type)
+            status = "extracted"
+        except Exception as exc:
+            status = "failed"
+            error = f"image recognition failed: {exc}"
     elif ext == ".pdf":
         try:
             extracted = extract_pdf_text(raw)
@@ -79,7 +101,7 @@ def store_material(conn, project_id, payload):
         (
             project_id,
             filename,
-            payload.get("content_type") or "application/octet-stream",
+            content_type,
             os.fspath(path),
             len(raw),
             checksum,
@@ -163,6 +185,31 @@ def extract_excel_text(raw, ext):
     if not parts:
         raise ValueError("Excel contains no extractable cells")
     return "\n\n".join(parts)
+
+
+def sniff_image_type(raw):
+    """Media type from the file signature, or "" when it is not a supported image."""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw[:6] in {b"GIF87a", b"GIF89a"}:
+        return "image/gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def recognize_image_text(filename, raw, media_type, timeout=120):
+    """Image text + description through the internal agent's vision call;
+    REPORTS_FAKE_PROVIDER keeps tests and dry runs offline."""
+    from .reports import fake_provider_enabled
+
+    if fake_provider_enabled():
+        return f"## 图片文字\n\n（离线模式未识别）\n\n## 图片描述\n\n图片 {filename}（{media_type}，{len(raw)} 字节）"
+    from .internal_agent import internal_image_text
+
+    return internal_image_text(raw, media_type, timeout=timeout)
 
 
 def extract_pdf_text(raw):

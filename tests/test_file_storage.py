@@ -180,6 +180,88 @@ class FileStorageTest(unittest.TestCase):
         Path(self.row(material)["storage_path"]).unlink()
         self.assertEqual(self.request(port, path)[0], 404)
 
+    def test_image_upload_recognition_inline_preview_and_spoofed_content(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        with mock.patch.dict("os.environ", {"REPORTS_FAKE_PROVIDER": "1"}):
+            image = store_material(self.conn, self.project, {
+                "filename": "看板截图.PNG", "content_type": "text/html",
+                "content_base64": base64.b64encode(png).decode(),
+            })
+        self.conn.commit()
+        row = self.row(image)
+        self.assertEqual((row["content_type"], row["extraction_status"]), ("image/png", "extracted"))
+        self.assertIn("## 图片描述", row["extracted_text"])
+        detail = material_detail(self.conn, self.project, image)
+        self.assertEqual(detail["preview_kind"], "image")
+        self.assertIn("<h2>图片描述</h2>", detail["content_html"])
+        port = self.start_api()
+        status, headers, body = self.request(port, f"/api/projects/{self.project}/materials/{image}/content")
+        self.assertEqual((status, headers["Content-Type"], body), (200, "image/png", png))
+        self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+        with self.assertRaisesRegex(ValidationError, "not a PNG, JPEG, GIF, or WebP"):
+            store_material(self.conn, self.project, {"filename": "fake.jpg", "content_base64": base64.b64encode(b"<svg onload=x>").decode()})
+        with self.assertRaises(ValidationError):
+            store_material(self.conn, self.project, {"filename": "logo.svg", "content_base64": base64.b64encode(b"<svg/>").decode()})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM materials").fetchone()[0], 1)
+        set_setting(self.conn, "llm_vision_model", "")
+        self.conn.commit()
+        status, _, body = self.request(port, "/api/settings", "PUT", payload={"llm_vision_model": " glm-4.6v "})
+        self.assertEqual((status, json.loads(body)["llm_vision_model"]), (200, "glm-4.6v"))
+        status, _, body = self.request(port, "/api/settings", "PUT", payload={"llm_vision_base_url": "https://vision.example/v4/"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["llm_vision_base_url"].startswith("https://vision.example/v4"))
+        self.assertEqual(self.request(port, "/api/settings", "PUT", payload={"llm_vision_base_url": "ftp://x"})[0], 400)
+        self.assertEqual(self.request(port, "/api/settings", "PUT", token=self.other_token, payload={"llm_vision_model": "x"})[0], 403)
+        self.assertEqual(len(list((self.uploads / f"project_{self.project}").iterdir())), 1)
+
+    def test_image_content_blocks_per_provider(self):
+        from reports_app.internal_agent import user_content
+
+        self.assertEqual(user_content("hi", "openai"), "hi")
+        self.assertEqual(user_content("describe", "openai", ("image/png", b"\x89PNG")), [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw=="}},
+            {"type": "text", "text": "describe"},
+        ])
+        self.assertEqual(user_content("describe", "anthropic", ("image/png", b"\x89PNG")), [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw=="}},
+            {"type": "text", "text": "describe"},
+        ])
+
+    def test_image_recognition_failure_keeps_original(self):
+        webp = b"RIFF\x10\x00\x00\x00WEBPVP8 " + b"\x00" * 8
+        settings = {"provider": "openai", "base_url": "http://llm", "api_key": "k", "model": "text-only", "vision_model": "", "vision_base_url": ""}
+        offline = mock.patch.dict("os.environ", {"REPORTS_FAKE_PROVIDER": ""})
+        with offline, mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value=settings), \
+                mock.patch("reports_app.internal_agent.internal_chat") as chat:
+            row = self.row(self.upload("no-model.png", b"\x89PNG\r\n\x1a\n"))
+        chat.assert_not_called()
+        self.assertEqual(row["extraction_status"], "failed")
+        self.assertIn("图片识别模型", row["extraction_error"])
+        settings["vision_model"] = "vision-1"
+        with offline, mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value=settings), \
+                mock.patch("reports_app.internal_agent.internal_chat", side_effect=RuntimeError("model rejects images")) as chat:
+            image = self.upload("photo.webp", webp)
+        self.assertEqual(chat.call_args.args[1]["model"], "vision-1")
+        self.assertEqual(chat.call_args.args[1]["provider"], "openai")
+        settings.update(provider="anthropic", vision_base_url="http://vision/v4")
+        with offline, mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value=settings), \
+                mock.patch("reports_app.internal_agent.internal_chat", return_value="## 图片文字\n\n本周进度") as routed:
+            self.assertEqual(self.row(self.upload("routed.png", b"\x89PNG\r\n\x1a\n"))["extraction_status"], "extracted")
+        self.assertEqual({k: routed.call_args.args[1][k] for k in ("provider", "base_url", "model")},
+                         {"provider": "openai", "base_url": "http://vision/v4", "model": "vision-1"})
+        self.assertEqual(routed.call_args.kwargs["max_tokens"], 8192)
+        self.assertEqual(chat.call_args.kwargs["image"], ("image/webp", webp))
+        row = self.row(image)
+        self.assertEqual((row["content_type"], row["extraction_status"]), ("image/webp", "failed"))
+        self.assertIn("model rejects images", row["extraction_error"])
+        self.assertEqual(Path(row["storage_path"]).read_bytes(), webp)
+        large = b"\xff\xd8\xff" + b"\x00" * (5 * 1024 * 1024)
+        with mock.patch("reports_app.internal_agent.internal_chat") as chat:
+            row = self.row(self.upload("big.jpg", large))
+        chat.assert_not_called()
+        self.assertEqual(row["extraction_status"], "failed")
+        self.assertIn("recognition limit", row["extraction_error"])
+
     def test_admin_configuration_permissions_and_validation(self):
         port = self.start_api()
         payload = {"cold_storage_enabled": True, "cold_storage_target_dir": str(self.cold)}

@@ -56,6 +56,11 @@ LLM_MODEL_SETTING = "llm_model"
 # OpenAI 兼容 /embeddings 端点用的嵌入模型；留空则 search 只做关键字检索。
 # 嵌入地址默认复用 llm_base_url；LLM 走远程、嵌入走本地（如 LM Studio）时单独设置。
 LLM_EMBEDDING_MODEL_SETTING = "llm_embedding_model"
+# image recognition model on the same provider/endpoint/key; empty disables it
+LLM_VISION_MODEL_SETTING = "llm_vision_model"
+# optional OpenAI-compatible endpoint for image recognition; some Anthropic-
+# compatible gateways (Zhipu /api/anthropic) silently drop image blocks
+LLM_VISION_BASE_URL_SETTING = "llm_vision_base_url"
 LLM_EMBEDDING_BASE_URL_SETTING = "llm_embedding_base_url"
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_BASE_URLS = {
@@ -71,6 +76,8 @@ LLM_API_KEY_ENV_VARS = {
 # Keep the request at the practical output ceiling so the visible answer
 # never starves.
 LLM_ANTHROPIC_MAX_OUTPUT_TOKENS = 32768
+# vision models cap output lower (glm-4.5v rejects anything above 16384)
+LLM_VISION_MAX_OUTPUT_TOKENS = 8192
 QUEUE_CAPACITY_SETTING = "queue_capacity"
 QUEUE_PARALLELISM_SETTING = "queue_parallelism"
 DEFAULT_QUEUE_CAPACITY = 5
@@ -122,7 +129,12 @@ GITLAB_TOKEN_SETTING = "gitlab_token"
 GITLAB_URL_SETTING = "gitlab_url"
 GITLAB_SKIP_VERIFY_SETTING = "gitlab_skip_verify"
 MAX_GITLAB_PAGES = 5
-SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls"}
+# raster images only: SVG can carry script, so it is never accepted
+SUPPORTED_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+SUPPORTED_IMAGE_EXTENSIONS = set(SUPPORTED_IMAGE_TYPES)
+# vision recognition is skipped above this size (Anthropic caps images at 5 MB)
+MAX_IMAGE_RECOGNITION_BYTES = 5 * 1024 * 1024
+SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls"} | SUPPORTED_IMAGE_EXTENSIONS
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 # uploaded HTML documents get tag-stripping extraction, not the raw text decode
 SUPPORTED_HTML_EXTENSIONS = {".html", ".htm"}

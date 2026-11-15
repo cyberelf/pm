@@ -32,6 +32,8 @@ from .config import (
     LLM_BASE_URL_SETTING,
     LLM_EMBEDDING_BASE_URL_SETTING,
     LLM_EMBEDDING_MODEL_SETTING,
+    LLM_VISION_BASE_URL_SETTING,
+    LLM_VISION_MODEL_SETTING,
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
     QUEUE_CAPACITY_SETTING,
@@ -39,6 +41,7 @@ from .config import (
     REPORT_PROVIDER,
     STATIC_DIR,
     SUPPORTED_HTML_EXTENSIONS,
+    SUPPORTED_IMAGE_TYPES,
     UI_MODE_SETTING,
     UI_THEME_SETTING,
     UPLOAD_DIR,
@@ -223,6 +226,8 @@ ADMIN_ONLY_SETTING_KEYS = {
     "llm_api_key",
     "llm_embedding_model",
     "llm_embedding_base_url",
+    "llm_vision_model",
+    "llm_vision_base_url",
     "queue_capacity",
     "queue_parallelism",
     "github_enabled",
@@ -305,6 +310,8 @@ def llm_state(conn):
         "llm_model": get_setting(conn, LLM_MODEL_SETTING, ""),
         "llm_embedding_model": get_setting(conn, LLM_EMBEDDING_MODEL_SETTING, ""),
         "llm_embedding_base_url": get_setting(conn, LLM_EMBEDDING_BASE_URL_SETTING, ""),
+        "llm_vision_model": get_setting(conn, LLM_VISION_MODEL_SETTING, ""),
+        "llm_vision_base_url": get_setting(conn, LLM_VISION_BASE_URL_SETTING, ""),
         "llm_api_key_set": bool(get_setting(conn, LLM_API_KEY_SETTING, "")) or bool(os.environ.get(LLM_API_KEY_ENV_VARS[provider], "")),
     }
 
@@ -868,6 +875,11 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting(conn, LLM_MODEL_SETTING, (payload.get("llm_model") or "").strip())
                 if "llm_embedding_model" in payload:
                     set_setting(conn, LLM_EMBEDDING_MODEL_SETTING, (payload.get("llm_embedding_model") or "").strip())
+                if "llm_vision_model" in payload:
+                    set_setting(conn, LLM_VISION_MODEL_SETTING, (payload.get("llm_vision_model") or "").strip())
+                if "llm_vision_base_url" in payload:
+                    llm_vision_base_url = (payload.get("llm_vision_base_url") or "").strip()
+                    set_setting(conn, LLM_VISION_BASE_URL_SETTING, validate_llm_base_url(llm_vision_base_url) if llm_vision_base_url else "")
                 if "llm_embedding_base_url" in payload:
                     llm_embedding_base_url = (payload.get("llm_embedding_base_url") or "").strip()
                     set_setting(conn, LLM_EMBEDDING_BASE_URL_SETTING, validate_llm_base_url(llm_embedding_base_url) if llm_embedding_base_url else "")
@@ -1281,7 +1293,8 @@ class Handler(BaseHTTPRequestHandler):
     def material_content(self, conn, project_id, material_id, download=False):
         with storage_lock:
             row = conn.execute("SELECT * FROM materials WHERE id = ? AND project_id = ?", (material_id, project_id)).fetchone()
-            if not row or (not download and Path(row["filename"]).suffix.lower() != ".pdf"):
+            inline_type = material_inline_type(row) if row else ""
+            if not row or (not download and not inline_type):
                 self.error(HTTPStatus.NOT_FOUND, "material not found")
                 return
             try:
@@ -1292,7 +1305,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = []
         if download:
             headers.append(("Content-Disposition", "attachment; filename=\"material\"; filename*=UTF-8''" + quote(row["filename"], safe="")))
-        self._send_bytes(data, "application/octet-stream" if download else "application/pdf", extra_headers=headers)
+        self._send_bytes(data, "application/octet-stream" if download else inline_type, extra_headers=headers)
 
     def error(self, status, message, extra_headers=None):
         self.json({"error": message}, status, extra_headers=extra_headers)
@@ -1497,6 +1510,20 @@ def material_rows(conn, project_id, timezone):
     return rows
 
 
+def material_inline_type(row):
+    """Media type for the inline /content view, or "" when only download applies.
+    Images use the type sniffed at upload, so a renamed non-image never
+    serves as an image."""
+    if row["source_type"] != "upload":
+        return ""
+    suffix = Path(row["filename"]).suffix.lower()
+    if suffix == ".pdf":
+        return "application/pdf"
+    if suffix in SUPPORTED_IMAGE_TYPES and row["content_type"] in SUPPORTED_IMAGE_TYPES.values():
+        return row["content_type"]
+    return ""
+
+
 def material_detail(conn, project_id, material_id):
     row = conn.execute(
         """
@@ -1516,6 +1543,9 @@ def material_detail(conn, project_id, material_id):
     suffix = Path(item["filename"]).suffix.lower()
     if suffix == ".pdf" and item["source_type"] == "upload":
         item["preview_kind"] = "pdf"
+    elif material_inline_type(item).startswith("image/"):
+        item["preview_kind"] = "image"
+        item["content_html"] = render_markdown(item["content"]) if item["content"] else ""
     elif item["source_type"] == "manual" or suffix in {".md", ".markdown"}:
         item["preview_kind"] = "markdown"
         item["content_html"] = render_markdown(item["content"])

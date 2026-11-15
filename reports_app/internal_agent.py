@@ -9,17 +9,21 @@ lazy so the rest of the app works without the optional dependencies
 installed.
 """
 
+import base64
 import os
 
 from .config import (
     DEFAULT_LLM_BASE_URLS,
     DEFAULT_LLM_PROVIDER,
     LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
+    LLM_VISION_MAX_OUTPUT_TOKENS,
     LLM_API_KEY_ENV_VARS,
     LLM_API_KEY_SETTING,
     LLM_BASE_URL_SETTING,
     LLM_MODEL_SETTING,
     LLM_PROVIDER_SETTING,
+    LLM_VISION_BASE_URL_SETTING,
+    LLM_VISION_MODEL_SETTING,
     SUPPORTED_LLM_PROVIDERS,
 )
 from .db import connect, get_setting
@@ -38,6 +42,8 @@ def resolve_llm_settings(conn=None):
             "base_url": (get_setting(conn, LLM_BASE_URL_SETTING, "") or "").strip(),
             "api_key": get_setting(conn, LLM_API_KEY_SETTING, ""),
             "model": (get_setting(conn, LLM_MODEL_SETTING, "") or "").strip(),
+            "vision_model": (get_setting(conn, LLM_VISION_MODEL_SETTING, "") or "").strip(),
+            "vision_base_url": (get_setting(conn, LLM_VISION_BASE_URL_SETTING, "") or "").strip(),
         }
     finally:
         if own_conn:
@@ -79,16 +85,36 @@ def build_client(settings, timeout):
     raise ValidationError("unsupported LLM provider; use openai or anthropic")
 
 
-def internal_chat(prompt, settings, timeout=120, temperature=None):
+def user_content(prompt, provider, image=None):
+    """User message content; image is (media_type, raw bytes) and rides
+    along inline as base64 in the provider's own image block format."""
+    if image is None:
+        return prompt
+    media_type, raw = image
+    data = base64.b64encode(raw).decode("ascii")
+    if provider == "openai":
+        return [
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}},
+            {"type": "text", "text": prompt},
+        ]
+    return [
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
+        {"type": "text", "text": prompt},
+    ]
+
+
+def internal_chat(prompt, settings, timeout=120, temperature=None, image=None, max_tokens=None):
     """Run one chat completion through the configured provider and return
-    the response text."""
+    the response text. The configured model must accept images when
+    image is given."""
     validate_llm_settings(settings)
     client = build_client(settings, timeout=timeout)
+    content = user_content(prompt, settings["provider"], image)
     try:
         if settings["provider"] == "openai":
             # No max_tokens cap: reasoning models spend part of a capped
             # budget on hidden thinking blocks and can come back empty.
-            kwargs = {"model": settings["model"], "messages": [{"role": "user", "content": prompt}]}
+            kwargs = {"model": settings["model"], "messages": [{"role": "user", "content": content}]}
             if temperature is not None:
                 kwargs["temperature"] = temperature
             response = client.chat.completions.create(**kwargs)
@@ -97,8 +123,8 @@ def internal_chat(prompt, settings, timeout=120, temperature=None):
             "model": settings["model"],
             # The Messages API mandates max_tokens; keep it far above the
             # report so thinking models retain budget for the visible answer.
-            "max_tokens": LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
-            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens or LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
+            "messages": [{"role": "user", "content": content}],
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -108,6 +134,34 @@ def internal_chat(prompt, settings, timeout=120, temperature=None):
         ).strip()
     except Exception as exc:
         raise RuntimeError(f"internal agent LLM call failed: {exc}") from exc
+
+
+IMAGE_RECOGNITION_PROMPT = (
+    "请如实转写这张图片中所有可辨认的文字（保持原有结构，表格用 Markdown 表格），"
+    "然后用一段话客观描述你实际看到的内容（如截图的界面、图表的数据趋势、照片的场景）。"
+    "只描述图片中可见的信息，不要推测用途或补充背景；没有文字时在“图片文字”下写“无”，内容无法辨认时直接说明。"
+    "使用图片文字的主要语言，没有文字时使用中文。"
+    "只输出 Markdown：先写“## 图片文字”，再写“## 图片描述”。"
+)
+
+
+def internal_image_text(raw, media_type, timeout=120):
+    """Recognise an uploaded image (text + description) with the configured
+    vision model. Text-only report models often answer "I cannot see the
+    image", which would land in report evidence, so recognition only runs
+    when an image-capable model is named explicitly."""
+    settings = resolve_llm_settings()
+    if not settings["vision_model"]:
+        raise ValidationError("image recognition model is not configured; set 图片识别模型 in 全局设置")
+    settings = {**settings, "model": settings["vision_model"]}
+    if settings["vision_base_url"]:
+        # a dedicated vision endpoint always speaks the OpenAI-compatible protocol
+        settings.update(provider="openai", base_url=settings["vision_base_url"])
+    output = internal_chat(IMAGE_RECOGNITION_PROMPT, settings, timeout=timeout, temperature=0, image=(media_type, raw),
+                           max_tokens=LLM_VISION_MAX_OUTPUT_TOKENS)
+    if not output.strip():
+        raise RuntimeError("internal agent returned no image description")
+    return output
 
 
 def internal_voice_todo_items(transcript, timeout=120):
