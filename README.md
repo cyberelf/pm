@@ -56,7 +56,7 @@ scripts/uninstall_service.sh            # add "asr" to remove the voice service 
 
 One script, three platforms:
 
-- macOS: LaunchAgent (launchd), as before.
+- macOS: LaunchAgent (launchd). The installer launches the actual Python framework executable directly, bypassing Apple's `/usr/bin/python3` shim so privacy permissions apply to the interpreter. For network/external backup volumes, add the `Python.app` path printed by the installer to 系统设置 → 隐私与安全性 → 完全磁盘访问权限, then re-run `scripts/install_service.sh`. Directory and SMB share permissions must also allow writes; backup errors include the original failing path and OS error.
 - Linux: systemd user service `zreport.service`; run `sudo loginctl enable-linger $USER` once so it also survives logout.
 - Windows: a `.bat` in the Start Menu Startup folder (run the script from Git Bash); a console window appears at login — minimize it. Inside WSL2, use the Linux flow instead.
 

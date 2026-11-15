@@ -159,3 +159,11 @@
 - [x] 15.6 Run regression and OpenSpec checks, restart the service and verify live endpoints and frontend assets
 
 Validation (2026-11-15): `python3 -m unittest` — 208 tests passed; `npx --yes @fission-ai/openspec validate add-weekly-project-management-system` — valid, with pre-existing duplicate task ID warnings; `node --check static/app.js` and `git diff --check` passed. A temporary account on the LaunchAgent service verified XLSX upload, extracted preview, byte-identical download, cold-storage configuration, and fresh browser controls. Temporary data was removed. Service binding was temporarily changed to 127.0.0.1 for verification because the configured VPN address timed out; the original 10.200.200.3 binding was restored and confirmed listening.
+
+## 17. macOS backup permission diagnosis
+
+- [x] 17.1 Launch the actual framework Python executable from the macOS service instead of Apple's tool shim, and print the Python.app authorization path
+- [x] 17.2 Preserve the original failure path and errno in backup permission errors; present TCC as a possible cause and show the running interpreter
+- [x] 17.3 Cover generated service commands and permission diagnostics with regression tests
+
+Validation (2026-11-15): An isolated snapshot containing only this repair passed all 210 unit tests; the full working tree subsequently passed all 213 tests after concurrent image-upload tests were updated. OpenSpec validation passed with existing duplicate-task-ID warnings and a warning on the concurrent image-recognition requirement length. The LaunchAgent was reinstalled and confirmed running the framework executable on the original bind address. A background create/delete probe on the configured SMB backup target still returned EPERM; TCC attributed the denial to com.apple.python3. Full backup recovery remains unverified pending effective Python.app authorization. The configured VPN listener could not be reached by a local HTTP health check. Concurrent image-upload edits were kept separate from this repair.

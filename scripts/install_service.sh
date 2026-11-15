@@ -76,7 +76,7 @@ Darwin)
   fi
 
   SERVICE_PATH="${PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
-  python3 - "$PLIST" "$ROOT_DIR" "$PORT" "$FAKE_PROVIDER" "$SERVICE_PATH" "$HOST" "$TLS_PORT" <<'PY'
+  /usr/bin/python3 - "$PLIST" "$ROOT_DIR" "$PORT" "$FAKE_PROVIDER" "$SERVICE_PATH" "$HOST" "$TLS_PORT" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
@@ -88,6 +88,12 @@ fake_provider = sys.argv[4]
 service_path = sys.argv[5]
 host = sys.argv[6]
 tls_port = sys.argv[7]
+# Apple's /usr/bin/python3 is an xcode-select shim. Launch the framework's
+# actual executable so TCC attributes network-volume access to Python itself.
+interpreter = Path(sys.executable)
+framework_python = Path(sys.prefix) / "Resources/Python.app/Contents/MacOS/Python"
+if framework_python.is_file():
+    interpreter = framework_python
 environment = {
     "PORT": port,
     "REPORTS_FAKE_PROVIDER": fake_provider,
@@ -100,7 +106,7 @@ if tls_port:
     environment["REPORTS_TLS_PORT"] = tls_port
 data = {
     "Label": "com.cyberelf.zreport",
-    "ProgramArguments": ["/usr/bin/python3", "-u", str(root / "run.py")],
+    "ProgramArguments": [str(interpreter), "-u", str(root / "run.py")],
     "WorkingDirectory": str(root),
     "EnvironmentVariables": environment,
     "RunAtLoad": True,
@@ -110,6 +116,9 @@ data = {
 }
 with plist_path.open("wb") as fh:
     plistlib.dump(data, fh)
+print(f"Service Python: {interpreter}")
+if framework_python.is_file():
+    print(f"For protected backup volumes, grant Full Disk Access to: {framework_python.parents[2]}")
 PY
 
   launchctl bootstrap "gui/$(id -u)" "$PLIST"

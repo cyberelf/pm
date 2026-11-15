@@ -5590,7 +5590,8 @@ class BackupTest(unittest.TestCase):
         try:
             with self.assertRaises(ValidationError) as ctx:
                 verify_target_writable(str(locked))
-            self.assertIn("隐私保护", str(ctx.exception))
+            self.assertIn(str(locked), str(ctx.exception))
+            self.assertIn("Permission denied", str(ctx.exception))
         finally:
             locked.chmod(0o755)
         # 目标路径被普通文件顶住 → 普通 OSError → 原始错误信息
@@ -5599,6 +5600,24 @@ class BackupTest(unittest.TestCase):
         with self.assertRaises(ValidationError) as ctx:
             verify_target_writable(str(blocker))
         self.assertIn("备份目标目录不可写", str(ctx.exception))
+
+    def test_permission_diagnostic_retains_original_path_and_errno(self):
+        source = "/Volumes/archive/original.pdf"
+        error = PermissionError(1, "Operation not permitted", source)
+        with mock.patch("reports_app.backup.Path.mkdir", side_effect=error):
+            with mock.patch("reports_app.backup.sys.platform", "darwin"):
+                with self.assertRaises(ValidationError) as ctx:
+                    verify_target_writable(str(self.target))
+                message = str(ctx.exception)
+                self.assertIn(source, message)
+                self.assertIn("[Errno 1]", message)
+                self.assertIn("服务使用的 Python", message)
+                self.assertIn("若被隐私保护拦截", message)
+            with mock.patch("reports_app.backup.sys.platform", "linux"):
+                with self.assertRaises(ValidationError) as ctx:
+                    verify_target_writable(str(self.target))
+                self.assertIn(source, str(ctx.exception))
+                self.assertNotIn("macOS", str(ctx.exception))
 
     def test_backup_api_preflights_target_on_save(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

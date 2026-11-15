@@ -13,6 +13,7 @@ import re
 import json
 import shutil
 import sqlite3
+import sys
 import threading
 from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
@@ -56,15 +57,14 @@ def _int_setting(conn, key, default):
 
 
 def _writable_error(exc):
-    """目标目录写不进去时的可操作提示。macOS 对 LaunchAgent 后台进程访问
-    SMB 挂载/外接磁盘有隐私保护（TCC），报 EPERM 而普通权限错误报 EACCES，
-    两者都是 PermissionError，这里统一给出排查路径。"""
-    if isinstance(exc, PermissionError):
+    """保留失败路径和 errno；权限错误并不一定由 macOS TCC 引起。"""
+    detail = f"备份文件访问失败：{exc}"
+    if isinstance(exc, PermissionError) and sys.platform == "darwin":
         return (
-            "目标目录拒绝写入（macOS 隐私保护拦截了后台服务访问网络卷或外接磁盘）："
-            "在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 中添加服务使用的 Python"
-            "（如 /Library/Developer/CommandLineTools/usr/bin/python3）并重新触发备份，"
-            "或改选本机磁盘上的目录"
+            f"{detail}。请检查目录/共享权限及 macOS 隐私保护；"
+            f"服务使用的 Python：{sys.executable}。"
+            "若被隐私保护拦截，请在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 "
+            "中添加该解释器（位于 Python.app 内时添加 Python.app），重启服务后重试"
         )
     return f"备份目标目录不可写：{exc}"
 
