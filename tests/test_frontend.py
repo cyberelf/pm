@@ -231,8 +231,8 @@ class FrontendTest(unittest.TestCase):
     def test_material_upload_supports_multiple_files_and_summary_editing(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         html = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
-        self.assertIn('type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls" multiple', html)
-        self.assertIn("支持 Markdown、纯文本、HTML、PDF 和 Excel，可多选", source)
+        self.assertIn('type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls,.png,.jpg,.jpeg,.gif,.webp" multiple', html)
+        self.assertIn("支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选", source)
         self.assertIn('Array.from($("material-file").files || [])', source)
         self.assertIn('JSON.stringify({ files: payloads })', source)
         self.assertIn("updateMaterialSummary", source)

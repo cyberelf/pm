@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=61" />
+    <link rel="stylesheet" href="/styles.css?v=62" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -178,13 +178,19 @@
                 <label>API Key
                   <input id="llm-api-key-input" type="password" autocomplete="off" placeholder="sk-...">
                 </label>
+                <label class="full-row">图片识别模型（可选）
+                  <input id="llm-vision-model-input" placeholder="gpt-4o / claude-sonnet-5 / glm-4.6v；须支持图片输入，留空则图片资料不识别">
+                </label>
+                <label class="full-row">图片识别 API 地址（可选）
+                  <input id="llm-vision-base-url-input" placeholder="https://open.bigmodel.cn/api/coding/paas/v4；留空复用上面的 API 地址和协议">
+                </label>
                 <label class="full-row">Embedding 模型（可选）
                   <input id="llm-embedding-model-input" placeholder="text-embedding-3-small / bge-m3；留空则搜索仅用关键词">
                 </label>
                 <label class="full-row">Embedding API 地址（可选）
                   <input id="llm-embedding-base-url-input" placeholder="http://127.0.0.1:1234/v1；留空复用上面的 API 地址">
                 </label>
-                <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。Embedding 模型填了才启用 CLI/接口的向量检索，调用 Embedding API 地址（留空时为 API 地址）下的 /embeddings，需 OpenAI 兼容端点（Anthropic 官方无嵌入 API）——LLM 走远程网关、嵌入走本地服务时，把 Embedding API 地址单独指向本地。</small>
+                <small>API Key 只保存在本机数据库，接口不会回传；留空表示保持已保存的值。图片识别模型复用上面的 API Key，用于识别上传图片中的文字和内容；填了图片识别 API 地址时按 OpenAI 兼容协议调用该地址（部分 Anthropic 兼容网关会丢弃图片）。API 地址留空时，OpenAI 使用 https://api.openai.com/v1，Anthropic 使用 https://api.anthropic.com；也可以指向任何 OpenAI 兼容或 Anthropic 兼容的自建端点。Embedding 模型填了才启用 CLI/接口的向量检索，调用 Embedding API 地址（留空时为 API 地址）下的 /embeddings，需 OpenAI 兼容端点（Anthropic 官方无嵌入 API）——LLM 走远程网关、嵌入走本地服务时，把 Embedding API 地址单独指向本地。</small>
               </div>
             </div>
             <div class="panel admin-only hidden" id="voice-settings-panel">
@@ -423,7 +429,8 @@
           </div>
           <button id="close-material-preview" type="button" aria-label="关闭资料预览">关闭</button>
         </div>
-        <div class="preview-body">
+        <div id="material-preview-body" class="preview-body">
+          <img id="material-preview-image" class="preview-image hidden" alt="">
           <article id="material-preview-markdown" class="report preview-markdown hidden"></article>
           <iframe id="material-preview-pdf" class="preview-pdf hidden" title="PDF 资料预览"></iframe>
           <pre id="material-preview-content" class="preview-content hidden"></pre>
@@ -462,6 +469,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=65"></script>
+    <script src="/app.js?v=66"></script>
   </body>
 </html>

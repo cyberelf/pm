@@ -364,6 +364,8 @@ async function loadState() {
   state.llmModel = data.llm_model || "";
   state.llmEmbeddingModel = data.llm_embedding_model || "";
   state.llmEmbeddingBaseUrl = data.llm_embedding_base_url || "";
+  state.llmVisionModel = data.llm_vision_model || "";
+  state.llmVisionBaseUrl = data.llm_vision_base_url || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
   state.queueCapacity = data.queue_capacity || 5;
   state.queueParallelism = data.queue_parallelism || 2;
@@ -1421,6 +1423,10 @@ function renderLlmSettings() {
   if (baseUrl) baseUrl.value = state.llmBaseUrl || "";
   const model = $("llm-model-input");
   if (model) model.value = state.llmModel || "";
+  const visionModel = $("llm-vision-model-input");
+  if (visionModel) visionModel.value = state.llmVisionModel || "";
+  const visionBaseUrl = $("llm-vision-base-url-input");
+  if (visionBaseUrl) visionBaseUrl.value = state.llmVisionBaseUrl || "";
   const embeddingModel = $("llm-embedding-model-input");
   if (embeddingModel) embeddingModel.value = state.llmEmbeddingModel || "";
   const embeddingBaseUrl = $("llm-embedding-base-url-input");
@@ -1440,6 +1446,8 @@ async function saveLlmSettings() {
     llm_provider: select.value,
     llm_base_url: $("llm-base-url-input")?.value || "",
     llm_model: $("llm-model-input")?.value || "",
+    llm_vision_model: $("llm-vision-model-input")?.value || "",
+    llm_vision_base_url: $("llm-vision-base-url-input")?.value || "",
     llm_embedding_model: $("llm-embedding-model-input")?.value || "",
     llm_embedding_base_url: $("llm-embedding-base-url-input")?.value || "",
   };
@@ -1450,6 +1458,8 @@ async function saveLlmSettings() {
   state.llmBaseUrl = data.llm_base_url;
   state.llmModel = data.llm_model;
   state.llmEmbeddingModel = data.llm_embedding_model || "";
+  state.llmVisionModel = data.llm_vision_model || "";
+  state.llmVisionBaseUrl = data.llm_vision_base_url || "";
   state.llmApiKeySet = !!data.llm_api_key_set;
   // 自动保存中不能整块重绘（会打断输入），只刷新 Key 占位提示
   if (keyInput) {
@@ -2554,10 +2564,10 @@ function renderSources(ws) {
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
         ${writable ? `
         <label id="material-dropzone" class="upload-dropzone" for="material-file" role="button" tabindex="0">
-          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls" multiple>
+          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls,.png,.jpg,.jpeg,.gif,.webp" multiple>
           <span class="upload-icon" aria-hidden="true">↑</span>
           <strong>拖入文件，或点击选择</strong>
-          <span id="material-selection">支持 Markdown、纯文本、HTML、PDF 和 Excel，可多选</span>
+          <span id="material-selection">支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选</span>
         </label>
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
@@ -2638,7 +2648,7 @@ function updateMaterialSelection() {
   if (!label) return;
   label.textContent = files.length
     ? `已选择 ${files.length} 个文件：${files.map((file) => file.name).join("、")}`
-    : "支持 Markdown、纯文本、HTML、PDF 和 Excel，可多选";
+    : "支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选";
 }
 
 function downloadMaterial(id) {
@@ -2689,6 +2699,17 @@ async function previewMaterial(id) {
       const frame = $("material-preview-pdf");
       frame.src = `/api/projects/${state.projectId}/materials/${id}/content`;
       frame.classList.remove("hidden");
+    } else if (material.preview_kind === "image") {
+      const image = $("material-preview-image");
+      image.alt = material.filename;
+      image.src = `/api/projects/${state.projectId}/materials/${id}/content`;
+      image.classList.remove("hidden");
+      $("material-preview-body").classList.add("preview-body-stack");
+      if (material.content_html) {
+        const markdown = $("material-preview-markdown");
+        markdown.innerHTML = material.content_html;
+        markdown.classList.remove("hidden");
+      }
     } else if (material.preview_kind === "html") {
       // srcdoc keeps the server's X-Frame-Options: DENY out of the way, and the
       // empty sandbox blocks scripts, forms, and navigation inside the frame
@@ -2717,12 +2738,16 @@ function resetMaterialPreview() {
   const text = $("material-preview-content");
   const markdown = $("material-preview-markdown");
   const pdf = $("material-preview-pdf");
+  const image = $("material-preview-image");
   text.textContent = "";
   markdown.innerHTML = "";
+  $("material-preview-body").classList.remove("preview-body-stack");
   pdf.removeAttribute("src");
   pdf.removeAttribute("srcdoc");
   pdf.removeAttribute("sandbox");
-  [text, markdown, pdf].forEach((element) => element.classList.add("hidden"));
+  image.removeAttribute("src");
+  image.alt = "";
+  [text, markdown, pdf, image].forEach((element) => element.classList.add("hidden"));
 }
 
 async function uploadMaterial() {
