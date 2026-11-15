@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import zipfile
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -5448,19 +5449,75 @@ class BackupTest(unittest.TestCase):
             self.conn.commit()
         self.assertEqual(run["status"], "success")
         self.assertIn("zreport-backup-", run["backup_path"])
-        backup_dir = Path(run["backup_path"])
-        snapshot = backup_dir / "reports.sqlite3"
-        self.assertTrue(snapshot.exists())
+        archive_path = Path(run["backup_path"])
+        self.assertEqual(archive_path.suffix, ".zip")
+        restored = Path(self.tmp.name) / "restored"
+        with zipfile.ZipFile(archive_path) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertEqual(archive.read("uploads/project_1/note.md"), b"hello")
+            self.assertEqual(archive.getinfo("reports.sqlite3").compress_type, zipfile.ZIP_DEFLATED)
+            self.assertLess(archive_path.stat().st_size, sum(info.file_size for info in archive.infolist()))
+            archive.extract("reports.sqlite3", restored)
+        snapshot = restored / "reports.sqlite3"
         check = sqlite3.connect(str(snapshot))
         try:
             users = check.execute("SELECT COUNT(*) AS n FROM users").fetchone()[0]
         finally:
             check.close()
         self.assertGreaterEqual(users, 1)
-        copied = backup_dir / "uploads" / "project_1" / "note.md"
-        self.assertEqual(copied.read_text(encoding="utf-8"), "hello")
         self.assertEqual(run["file_count"], 1)
-        self.assertGreater(run["size_bytes"], 0)
+        self.assertEqual(run["size_bytes"], archive_path.stat().st_size)
+
+    def test_archive_failure_cleans_partial_files_and_local_staging(self):
+        staging = Path(self.tmp.name) / "staging"
+        staging.mkdir()
+        temporary_directory = tempfile.TemporaryDirectory
+        self.configure(target_dir=str(self.target))
+        with mock.patch("reports_app.backup.UPLOAD_DIR", self.uploads), mock.patch(
+            "reports_app.backup.tempfile.TemporaryDirectory",
+            side_effect=lambda **kwargs: temporary_directory(dir=staging, **kwargs),
+        ), mock.patch("reports_app.backup.zipfile.ZipFile.write", side_effect=OSError("disk full")):
+            run = run_backup(self.conn, self.db_path)
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("disk full", run["message"])
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual(list(staging.iterdir()), [])
+
+    def test_publish_failure_preserves_existing_backup_and_removes_partial_zip(self):
+        self.target.mkdir()
+        legacy = self.target / "zreport-backup-20260101-000000"
+        legacy.mkdir()
+        (legacy / "reports.sqlite3").write_bytes(b"existing")
+        self.configure(target_dir=str(self.target), keep="1")
+        with mock.patch("reports_app.backup.UPLOAD_DIR", self.uploads), mock.patch(
+            "reports_app.backup.Path.replace", side_effect=OSError("publish denied")
+        ):
+            run = run_backup(self.conn, self.db_path)
+        self.assertEqual(run["status"], "failed")
+        self.assertIn("publish denied", run["message"])
+        self.assertEqual(list(self.target.iterdir()), [legacy])
+        self.assertEqual((legacy / "reports.sqlite3").read_bytes(), b"existing")
+
+    def test_retention_includes_legacy_directories_and_numeric_collision_suffixes(self):
+        from reports_app.backup import _prune_old_backups, _unique_archive
+
+        self.target.mkdir()
+        legacy = self.target / "zreport-backup-20260101-000000"
+        legacy.mkdir()
+        (legacy / "reports.sqlite3").write_bytes(b"legacy")
+        for suffix in ("", "-2", "-9", "-10", "-11"):
+            (self.target / f"zreport-backup-20260102-000000{suffix}.zip").write_bytes(b"archive")
+        unrelated = self.target / "zreport-backup-not-a-backup.zip"
+        unrelated.write_bytes(b"keep")
+        link = self.target / "zreport-backup-19990101-000000"
+        link.symlink_to(self.uploads, target_is_directory=True)
+        self.assertEqual(_unique_archive(self.target, "20260101-000000").name, "zreport-backup-20260101-000000-2.zip")
+        self.assertEqual(_prune_old_backups(self.target, 2), 4)
+        self.assertEqual(
+            sorted(path.name for path in self.target.iterdir()),
+            [link.name, "zreport-backup-20260102-000000-10.zip", "zreport-backup-20260102-000000-11.zip", unrelated.name],
+        )
+        self.assertTrue((self.uploads / "project_1/note.md").exists())
 
     def test_run_backup_failure_is_recorded(self):
         # 用一个普通文件顶住目标目录路径，mkdir 必然失败

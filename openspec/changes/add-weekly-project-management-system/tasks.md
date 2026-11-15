@@ -174,3 +174,12 @@ Validation (2026-11-15): `python3 -m unittest` — 208 tests passed; `npx --yes 
 - [x] 17.3 Cover generated service commands and permission diagnostics with regression tests
 
 Validation (2026-11-15): The final working tree passed all 213 unit tests. OpenSpec validation passed with existing duplicate-task-ID warnings and a warning on the concurrent image-recognition requirement length. Comparing background probes showed that directly launching Python.app was denied, while /usr/bin/python3 succeeded after its Full Disk Access entry was removed and re-added. The service was restored to that authorized entry point and reinstalled. A one-time LaunchAgent using the same entry point ran the full backup successfully (run 16): 177 uploads, 8,219,305 bytes, zreport-backup-20261115-193622. The copied SQLite database passed PRAGMA quick_check and all 177 upload files were present. The service remains on the original bind address; local HTTP access to that VPN listener still timed out. Concurrent image-upload edits were kept separate from this repair.
+
+## 18. Compressed full backups
+
+- [x] 18.1 Create a ZIP with the consistent database snapshot, uploads and cold originals; publish only completed archives and record compressed size
+- [x] 18.2 Retain ZIPs and legacy directories together with numeric collision ordering and preserve unrelated files
+- [x] 18.3 Verify archive restoration, cold manifests, compression failures and mixed-format retention; document extraction before restore
+- [x] 18.4 Run regression and OpenSpec validation, restart and verify a live compressed backup, push changes and clean temporary environment
+
+Validation (2026-11-15): All 216 unit tests passed; OpenSpec validation passed with the existing duplicate-task-ID and image-requirement-length warnings. The normal LaunchAgent was reinstalled for platform 1.3.13. A one-time LaunchAgent using the same entry point completed and committed backup run 17: zreport-backup-20261115-200211.zip, 222 upload/cold-original files, 11,034,074 compressed bytes (16,338,165 uncompressed bytes). All ZIP CRC checks passed, file counts and cold manifest entries were checked, and the extracted database passed PRAGMA quick_check. The verification LaunchAgent, copied ZIP, restored database, test caches and logs were removed; the backup archive and application data were retained. Local HTTP health checks against the configured VPN listener still timed out, as before this change; backup API behavior was covered by the HTTP regression tests.

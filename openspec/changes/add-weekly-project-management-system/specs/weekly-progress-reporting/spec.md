@@ -201,3 +201,17 @@ The system SHALL allow administrators to configure and enable a local absolute c
 - **WHEN** a full backup is taken after files have been transferred
 - **THEN** it includes all referenced cold originals and a manifest of their original storage paths
 - **AND** a missing cold original fails the backup rather than producing an incomplete successful backup
+
+### Requirement: Compressed full backups
+The system SHALL produce full backups as DEFLATE-compressed ZIP archives named using China time. Each archive SHALL include a consistent SQLite snapshot, uploaded files and referenced cold originals with their restore manifest. The recorded backup size SHALL be the archive size in bytes.
+
+#### Scenario: Complete and restore a compressed backup
+- **WHEN** an administrator or the scheduler starts a full backup
+- **THEN** the system stages the snapshot locally and publishes one completed ZIP in the configured target
+- **AND** extracting that ZIP provides reports.sqlite3, uploads and any cold originals and manifest at their existing restore paths
+- **AND** a failed snapshot, copy, compression or publication leaves no completed archive or temporary files from that attempt
+
+#### Scenario: Retain backups across a format upgrade
+- **WHEN** a successful backup exceeds the configured retention count
+- **THEN** the newest backups are retained across ZIP archives and legacy directories together
+- **AND** timestamp collision suffixes are ordered numerically, with unrelated files and symbolic links untouched

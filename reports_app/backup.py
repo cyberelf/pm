@@ -1,8 +1,8 @@
 """数据备份：SQLite 数据库 + uploads 目录 → 管理员配置的目标目录。
 
 备份内容是数据库的在线快照（sqlite3 backup API，服务运行期间也能拿到一致
-副本，无需停机锁库）和上传文件的完整拷贝，写入目标目录下按北京时间命名的
-`zreport-backup-YYYYMMDD-HHMMSS` 子目录；超出保留份数的旧备份目录自动清理。
+副本，无需停机锁库）和上传文件的完整拷贝，压缩为目标目录下按北京时间命名的
+`zreport-backup-YYYYMMDD-HHMMSS.zip`；超出保留份数的归档及旧版目录自动清理。
 
 调度复用 server 的分钟级调度循环（scheduler_loop → evaluate_backup），配置
 存在 app_settings，修改即时生效。手动触发走 POST /api/backup/run。所有运行
@@ -15,7 +15,9 @@ import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 import threading
+import zipfile
 from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 
@@ -47,7 +49,9 @@ from .validation import ValidationError
 # 不排队也不并行拷贝两份
 _backup_lock = threading.Lock()
 
-_BACKUP_DIR_RE = re.compile(r"^" + re.escape(BACKUP_DIR_PREFIX) + r"\d{8}-\d{6}(?:-\d+)?$")
+_BACKUP_NAME_RE = re.compile(
+    r"^" + re.escape(BACKUP_DIR_PREFIX) + r"(?P<stamp>\d{8}-\d{6})(?:-(?P<counter>\d+))?(?P<zip>\.zip)?$"
+)
 
 
 def _int_setting(conn, key, default):
@@ -163,21 +167,18 @@ def _run_backup(conn, db_path, trigger, started_at):
             raise ValueError("备份目标目录未配置")
         target = Path(config["backup_target_dir"])
         target.mkdir(parents=True, exist_ok=True)
-        backup_dir = _unique_dir(target, datetime.now(get_zone(DEFAULT_TIMEZONE)).strftime("%Y%m%d-%H%M%S"))
-        backup_dir.mkdir(parents=True)
-        try:
-            size_bytes = _snapshot_database(Path(db_path), backup_dir)
-            upload_size, upload_count = _copy_uploads(backup_dir)
-            cold_size, cold_count = _copy_cold_uploads(backup_dir)
-            upload_size += cold_size
+        archive_path = _unique_archive(target, datetime.now(get_zone(DEFAULT_TIMEZONE)).strftime("%Y%m%d-%H%M%S"))
+        # Stage locally so SMB receives a single compressed file. TemporaryDirectory
+        # removes snapshots and copied originals on both success and failure.
+        with tempfile.TemporaryDirectory(prefix="zreport-backup-") as staging:
+            backup_dir = Path(staging)
+            _snapshot_database(Path(db_path), backup_dir)
+            _, upload_count = _copy_uploads(backup_dir)
+            _, cold_count = _copy_cold_uploads(backup_dir)
             upload_count += cold_count
-        except Exception:
-            # 快照或拷贝失败时清掉残缺目录，避免留下看似可用的半份备份
-            shutil.rmtree(backup_dir, ignore_errors=True)
-            raise
-        size_bytes += upload_size
+            size_bytes = _write_archive(backup_dir, archive_path)
         pruned = _prune_old_backups(target, config["backup_keep"])
-        message = f"已备份数据库与 {upload_count} 个上传文件"
+        message = f"已压缩备份数据库与 {upload_count} 个上传文件"
         if pruned:
             message += f"；清理 {pruned} 个旧备份"
         return _record_run(
@@ -185,7 +186,7 @@ def _run_backup(conn, db_path, trigger, started_at):
             trigger,
             "success",
             target_dir=str(target),
-            backup_path=str(backup_dir),
+            backup_path=str(archive_path),
             size_bytes=size_bytes,
             file_count=upload_count,
             message=message,
@@ -267,25 +268,49 @@ def _copy_cold_uploads(backup_dir):
     return size, len(manifest)
 
 
+def _write_archive(backup_dir, archive_path):
+    """Publish only a completely closed ZIP; remove any partial file on failure."""
+    with tempfile.NamedTemporaryFile(
+        dir=archive_path.parent, prefix=f".{archive_path.name}.", suffix=".tmp", delete=False
+    ) as partial:
+        partial_path = Path(partial.name)
+    try:
+        with zipfile.ZipFile(
+            partial_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, strict_timestamps=False
+        ) as archive:
+            for path in sorted(backup_dir.rglob("*")):
+                archive.write(path, path.relative_to(backup_dir).as_posix())
+        size = partial_path.stat().st_size
+        partial_path.replace(archive_path)
+        return size
+    finally:
+        partial_path.unlink(missing_ok=True)
+
+
 def _prune_old_backups(target, keep):
-    """按目录名（时间戳字典序即时间序）保留最新 keep 份备份，只动本应用
-    命名规则匹配的目录，目标目录里的其他内容不碰。"""
-    dirs = sorted(
-        (p for p in target.iterdir() if p.is_dir() and _BACKUP_DIR_RE.match(p.name)),
-        key=lambda p: p.name,
-        reverse=True,
-    )
+    """Retain newest ZIPs and legacy directories together; ignore unrelated files."""
+    backups = []
+    for path in target.iterdir():
+        match = _BACKUP_NAME_RE.fullmatch(path.name)
+        if not match or path.is_symlink():
+            continue
+        if (match["zip"] and path.is_file()) or (not match["zip"] and path.is_dir()):
+            backups.append((match["stamp"], int(match["counter"] or 1), path))
+    backups.sort(key=lambda item: (item[0], item[1], item[2].name), reverse=True)
     removed = 0
-    for path in dirs[max(int(keep), 0):]:
-        shutil.rmtree(path, ignore_errors=True)
+    for _, _, path in backups[max(int(keep), 0):]:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
         removed += 1
     return removed
 
 
-def _unique_dir(target, stamp):
-    candidate = target / f"{BACKUP_DIR_PREFIX}{stamp}"
+def _unique_archive(target, stamp):
+    candidate = target / f"{BACKUP_DIR_PREFIX}{stamp}.zip"
     counter = 2
-    while candidate.exists():
-        candidate = target / f"{BACKUP_DIR_PREFIX}{stamp}-{counter}"
+    while candidate.exists() or candidate.with_suffix("").exists():
+        candidate = target / f"{BACKUP_DIR_PREFIX}{stamp}-{counter}.zip"
         counter += 1
     return candidate

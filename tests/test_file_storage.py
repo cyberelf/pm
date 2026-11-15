@@ -284,10 +284,14 @@ class FileStorageTest(unittest.TestCase):
         self.conn.commit()
         run = run_backup(self.conn, self.db)
         self.assertEqual(run["status"], "success", run["message"])
-        folder = Path(run["backup_path"])
-        manifest = json.loads((folder / "cold_uploads.json").read_text())
-        self.assertEqual(manifest[0]["material_id"], material)
-        self.assertEqual((folder / manifest[0]["backup_path"]).read_bytes(), b"original content")
+        import zipfile
+
+        archive_path = Path(run["backup_path"])
+        with zipfile.ZipFile(archive_path) as archive:
+            manifest = json.loads(archive.read("cold_uploads.json"))
+            self.assertEqual(manifest[0]["material_id"], material)
+            self.assertEqual(archive.read(manifest[0]["backup_path"]), b"original content")
         Path(self.row(material)["storage_path"]).unlink()
         run = run_backup(self.conn, self.db)
         self.assertEqual(run["status"], "failed")
+        self.assertEqual(list(archive_path.parent.iterdir()), [archive_path])
