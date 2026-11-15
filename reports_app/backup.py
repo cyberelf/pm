@@ -11,6 +11,7 @@
 
 import re
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -60,11 +61,12 @@ def _writable_error(exc):
     """保留失败路径和 errno；权限错误并不一定由 macOS TCC 引起。"""
     detail = f"备份文件访问失败：{exc}"
     if isinstance(exc, PermissionError) and sys.platform == "darwin":
+        entry = os.environ.get("REPORTS_SERVICE_PYTHON", sys.executable)
         return (
             f"{detail}。请检查目录/共享权限及 macOS 隐私保护；"
-            f"服务使用的 Python：{sys.executable}。"
+            f"服务使用的 Python 启动入口：{entry}；实际解释器：{sys.executable}。"
             "若被隐私保护拦截，请在 系统设置 → 隐私与安全性 → 完全磁盘访问权限 "
-            "中添加该解释器（位于 Python.app 内时添加 Python.app），重启服务后重试"
+            "中添加该启动入口；若已有条目仍失败，移除该条目后重新添加并开启，重启服务后重试"
         )
     return f"备份目标目录不可写：{exc}"
 

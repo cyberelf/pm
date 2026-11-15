@@ -5605,13 +5605,16 @@ class BackupTest(unittest.TestCase):
         source = "/Volumes/archive/original.pdf"
         error = PermissionError(1, "Operation not permitted", source)
         with mock.patch("reports_app.backup.Path.mkdir", side_effect=error):
-            with mock.patch("reports_app.backup.sys.platform", "darwin"):
+            with mock.patch("reports_app.backup.sys.platform", "darwin"), mock.patch.dict(
+                os.environ, {"REPORTS_SERVICE_PYTHON": "/service/python3"}
+            ):
                 with self.assertRaises(ValidationError) as ctx:
                     verify_target_writable(str(self.target))
                 message = str(ctx.exception)
                 self.assertIn(source, message)
                 self.assertIn("[Errno 1]", message)
                 self.assertIn("服务使用的 Python", message)
+                self.assertIn("启动入口：/service/python3", message)
                 self.assertIn("若被隐私保护拦截", message)
             with mock.patch("reports_app.backup.sys.platform", "linux"):
                 with self.assertRaises(ValidationError) as ctx:

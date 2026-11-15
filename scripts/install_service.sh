@@ -88,17 +88,15 @@ fake_provider = sys.argv[4]
 service_path = sys.argv[5]
 host = sys.argv[6]
 tls_port = sys.argv[7]
-# Apple's /usr/bin/python3 is an xcode-select shim. Launch the framework's
-# actual executable so TCC attributes network-volume access to Python itself.
-interpreter = Path(sys.executable)
-framework_python = Path(sys.prefix) / "Resources/Python.app/Contents/MacOS/Python"
-if framework_python.is_file():
-    interpreter = framework_python
+# TCC grants are tied to the service entry point, which can differ from
+# sys.executable after Apple's launcher has selected a framework Python.
+interpreter = Path("/usr/bin/python3")
 environment = {
     "PORT": port,
     "REPORTS_FAKE_PROVIDER": fake_provider,
     "NO_PROXY": "127.0.0.1,localhost",
     "PATH": service_path,
+    "REPORTS_SERVICE_PYTHON": str(interpreter),
 }
 if host:
     environment["REPORTS_HOST"] = host
@@ -117,8 +115,7 @@ data = {
 with plist_path.open("wb") as fh:
     plistlib.dump(data, fh)
 print(f"Service Python: {interpreter}")
-if framework_python.is_file():
-    print(f"For protected backup volumes, grant Full Disk Access to: {framework_python.parents[2]}")
+print(f"For protected backup volumes, grant Full Disk Access to: {interpreter}")
 PY
 
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
