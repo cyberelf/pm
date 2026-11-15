@@ -165,6 +165,21 @@ The system SHALL accept XLSX and XLS uploads, extract worksheet names and cell t
 - **THEN** the system returns the original bytes with an attachment filename
 - **AND** accounts without project access cannot download it
 
+### Requirement: Image material recognition
+The system SHALL accept PNG, JPEG, GIF and WebP uploads whose file signature matches a supported raster format, store the sniffed media type rather than the client-declared one, and reject SVG or mismatched content before storing anything. The internal agent SHALL recognise images up to 5 MiB with an administrator-configured image recognition model that shares the LLM key and, unless an optional OpenAI-compatible image recognition endpoint is configured, the LLM provider and endpoint, producing Markdown with the image's visible text and an objective description as the extracted text for summaries and weekly report evidence. A recognition failure SHALL preserve the original and mark extraction failed. Image previews SHALL be served inline only with the stored image media type under project read access.
+
+#### Scenario: Upload a screenshot
+- **WHEN** a project writer uploads a supported image
+- **THEN** its recognised text and description appear in the preview below the image and feed summaries and report evidence
+
+#### Scenario: Reject a disguised file
+- **WHEN** an upload has an image extension but non-image content, or is an SVG
+- **THEN** the system rejects the upload and stores no file or material record
+
+#### Scenario: Recognition is unavailable
+- **WHEN** no image recognition model is configured, the image exceeds 5 MiB, or the model rejects image input
+- **THEN** the material is stored with failed extraction and stays previewable and downloadable
+
 ### Requirement: Local file cold storage
 The system SHALL allow administrators to configure and enable a local absolute cold-storage directory independently of full backups. The scheduler SHALL check hourly and transfer uploaded originals strictly older than one calendar month in Asia/Shanghai, clamping the day at month end. Administrators SHALL also be able to trigger a scan and view the latest scan time, transferred count and errors. Unconfigured cold storage SHALL be disabled by default.
 

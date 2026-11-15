@@ -118,6 +118,9 @@ Supported project material types:
 - PDF: `.pdf`
 - HTML: `.html`, `.htm`
 - Excel: `.xlsx`, `.xls`
+- Images: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`
+
+Image uploads are checked by file signature (a renamed non-image is rejected, SVG is never accepted) and stored with the sniffed media type. Recognition uses **全局设置 → 图片识别模型** (optional, image-capable, sharing the LLM API key, and by default the provider and API address). Set **图片识别 API 地址** to call an OpenAI-compatible endpoint instead: some Anthropic-compatible gateways silently drop image blocks (Zhipu's `/api/anthropic` does, so with a GLM Coding Plan key use `glm-4.6v` with `https://open.bigmodel.cn/api/coding/paas/v4`). It handles each image up to 5 MiB, transcribing visible text and describing the content, and that Markdown becomes the extracted text used for summaries and report evidence. It is separate from the report model because a text-only model answers "I cannot see the image", which would pollute report evidence. With no vision model configured, a larger image, or an endpoint that rejects the image, the material is marked failed while the original stays previewable and downloadable. The preview dialog shows the image above its recognised text.
 
 Excel uploads support `.xlsx` and `.xls` using openpyxl and xlrd. Text extraction preserves worksheet names, rows, numbers, dates and formulas where available (formulas are not executed). Extraction is limited to 200,000 cells and 2,000,000 text characters; XLSX expanded data is limited to 64 MiB. Empty, encrypted or corrupt workbooks are marked failed while their original files remain downloadable. Every uploaded file has a 下载 action, including historical and failed-extraction files, subject to project read access.
 

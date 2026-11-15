@@ -160,6 +160,13 @@
 
 Validation (2026-11-15): `python3 -m unittest` — 208 tests passed; `npx --yes @fission-ai/openspec validate add-weekly-project-management-system` — valid, with pre-existing duplicate task ID warnings; `node --check static/app.js` and `git diff --check` passed. A temporary account on the LaunchAgent service verified XLSX upload, extracted preview, byte-identical download, cold-storage configuration, and fresh browser controls. Temporary data was removed. Service binding was temporarily changed to 127.0.0.1 for verification because the configured VPN address timed out; the original 10.200.200.3 binding was restored and confirmed listening.
 
+## 16. Image material uploads
+
+- [x] 16.1 Accept PNG/JPEG/GIF/WebP uploads validated by file signature, storing the sniffed media type and rejecting SVG
+- [x] 16.2 Recognise images up to 5 MiB through the internal agent's vision call (OpenAI image_url / Anthropic image blocks) with the admin-only 图片识别模型 and optional OpenAI-compatible 图片识别 API 地址 settings as extracted Markdown; keep failed originals when it is unset or fails
+- [x] 16.3 Serve images inline for preview and show the image with its recognised text in the preview dialog
+- [x] 16.4 Add regression tests for recognition, spoofed content, oversize images and provider request shapes
+
 ## 17. macOS backup permission diagnosis
 
 - [x] 17.1 Record and print the service entry point separately from the framework interpreter so Full Disk Access guidance identifies the correct executable
