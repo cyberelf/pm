@@ -192,3 +192,10 @@ Validation (2026-11-15): All 216 unit tests passed; OpenSpec validation passed w
 - [x] 19.4 Complete regression, browser and OpenSpec checks, restart for the platform version bump and push
 
 Validation (2026-11-15): All 216 unit tests, node --check static/app.js and git diff --check passed. OpenSpec validation passed with existing warnings. A fresh isolated Chromium page loaded the actual static HTML/CSS/JS with authentication requests stubbed: all nine admin tabs selected exactly one linked panel, drafts survived switching, keyboard End/Right navigation worked, and regular-account fallback exposed only appearance/Git/password. Desktop rendering was inspected at 1440px; mobile emulation at 390px kept the 358px tab strip on one scrollable row with 863px of content and no page overflow. The platform version was bumped to 1.3.14 and the normal LaunchAgent reinstalled. The isolated page and temporary fixture, screenshots, test caches and logs were removed.
+
+## 20. Weekly report assistant Q&A
+
+- [x] 20.1 Store per-account, per-project-week assistant conversations and expose ask, list, clear and apply endpoints with read/write role checks
+- [x] 20.2 Answer through the internal agent with multi-turn history, the current report, cached bounded evidence, recent historical reports and active risk warnings
+- [x] 20.3 Parse marked revised reports, keep them unapplied until a writer confirms, and carry the latest unapplied revision into follow-up adjustments
+- [x] 20.4 Add the docked 助手问答 side panel with suggestions, loading states, revision preview and apply confirmation; cover backend and frontend behavior with tests

@@ -153,6 +153,31 @@ The system SHALL allow the workspace user to edit the Markdown body of the curre
 - **THEN** the system rejects the request and keeps the historical report unchanged
 
 
+### Requirement: Weekly report assistant Q&A
+The system SHALL provide a 助手问答 side panel in the weekly report workspace for free-form questions about the current week's report, progress, problem causes and conclusions. The internal agent SHALL answer only from the current report, the bounded current-week report evidence, recent historical reports and active risk warnings. Each account SHALL keep its own conversation per project week. Revised reports SHALL never replace the report without an explicit apply by a project writer.
+
+#### Scenario: Ask about this week's progress
+- **WHEN** a project reader asks the assistant a question about the current week
+- **THEN** the system answers from the report and current-week evidence, cites the evidence sources it relied on, and states when the evidence has no relevant record
+
+#### Scenario: Adjust a report conclusion
+- **WHEN** a user asks the assistant to change a conclusion of the current week report
+- **THEN** the answer explains the change and offers a revised report that leaves the stored report unchanged until applied
+- **AND** a follow-up adjustment builds on the latest unapplied revision
+
+#### Scenario: Apply a revision
+- **WHEN** a project writer applies a revision from their own current-week conversation
+- **THEN** the system replaces the current week report with the revision, marks it manually edited, and records the revision as applied
+- **AND** read-only collaborators, other accounts' revisions, and revisions from earlier weeks cannot be applied
+
+#### Scenario: Conversations stay private to the account and week
+- **WHEN** another collaborator opens the panel, or the project week changes
+- **THEN** the panel shows only that account's conversation for the current week
+
+#### Scenario: Assistant call fails
+- **WHEN** the internal agent is not configured or the call fails
+- **THEN** the system shows the failure and stores neither the question nor an answer
+
 ### Requirement: Excel material extraction and original downloads
 The system SHALL accept XLSX and XLS uploads, extract worksheet names and cell text without executing formulas, and retain original bytes. Extraction SHALL be bounded to 200000 cells and 2000000 text characters, with XLSX expanded data bounded to 64 MiB. A failed extraction SHALL preserve the original and display the failed file in the material list. Downloads SHALL require project read access and return an attachment with the original UTF-8 filename, including for historical and failed files.
 

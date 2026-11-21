@@ -130,6 +130,10 @@ The first release runs as a local personal web application: the browser provides
 
    Rationale: the mode switch should read as a sheet curling from the upper-right corner rather than as a conventional button. Its interactive wrapper remains keyboard accessible but has no visible button box; a soft-shadow triangular paper underside expands on hover/focus and reveals the destination. Pending, in-progress, and closed columns use blue, green, and neutral gray body colors respectively so workflow state is visible before reading labels.
 
+24. Answer weekly report questions through a grounded assistant conversation.
+
+   Rationale: the assistant is interactive, so a question is answered synchronously inside the request (the HTTP server is threaded) rather than through the report task queue. The internal agent receives the same bounded current-week evidence as report generation, reused from an in-process cache while project inputs stay unchanged for up to ten minutes so repeated questions do not refetch Git activity. Revisions travel between fixed markers as a complete report so applying one is a plain replacement through the existing manual-edit path; nothing is written to the report without explicit confirmation by a project writer.
+
 ## Risks / Trade-offs
 
 - CLI provider availability may vary by deployment environment -> Add provider health checks, command path configuration, timeout limits, and clear job failure states.
