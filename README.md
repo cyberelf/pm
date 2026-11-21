@@ -141,7 +141,7 @@ The prompt explicitly asks the model to use these as primary evidence and to say
 
 ## Report Assistant
 
-The 周报 workspace has a 助手问答 side panel (topbar button or 问助手 on the 当前周报 panel). Ask about this week's progress, the causes behind a problem, or ask it to adjust a conclusion. The internal agent starts from the current report and a local inventory, then calls read-only tools only when a question needs them. Tool names follow the CLI (`weekly_list`, `weekly_show`, `search`, `material_show`, `report_show`, `todo_list`, `todo_show`) plus project context the CLI does not expose (`materials_list`, `plan_show`, `weekly_update_show`, `risks_list`, `git_repos_list`, `git_commits`, `git_activity`). Each answer lists the tools it used. Git tools call the remote APIs and are cached for 10 minutes. Adjustment requests return a full revised report that only replaces the current week's report after you click 应用到周报 (requires write access; the report is then marked 已手工调整). Each account keeps its own conversation per project week.
+The 周报 workspace has a 助手问答 side panel (topbar button or 问助手 on the 当前周报 panel). Ask about this week's progress, the causes behind a problem, or ask it to adjust a conclusion. The internal agent starts from the current report and a local inventory, then calls read-only tools only when a question needs them. The tools are the read-only operations of the shared operation registry (see Operations), so they are exactly the CLI's read commands. Each answer lists the tools it used. Git operations call the remote APIs and are cached for 10 minutes. Adjustment requests return a full revised report that only replaces the current week's report after you click 应用到周报 (requires write access; the report is then marked 已手工调整). Each account keeps its own conversation per project week.
 
 ## Tests
 
@@ -149,6 +149,16 @@ The 周报 workspace has a 助手问答 side panel (topbar button or 问助手 o
 python3 -m unittest
 openspec validate "add-weekly-project-management-system"
 ```
+
+## Operations
+
+Project, material, report, TODO, search and Git read/write operations are defined once in `reports_app/operations.py`, in the shape MCP uses for tools: name, description, typed parameters rendered as JSON Schema, a `readOnlyHint` annotation, a CLI command path, a terminal render hint, and one handler. Three thin adapters expose the registry:
+
+- HTTP: `GET /api/ops` publishes the manifest (public, metadata only); `POST /api/ops/<name>` runs an operation as the signed-in account, with project access resolved from the `project` argument (ID or name) and the operation's role.
+- CLI: `zreport` builds its subcommands, flags and table/record rendering from the manifest at startup, so a new operation ships without a CLI release.
+- Assistant: operations marked `agent` (read-only only) become LLM tools bound to the current project with bounded output.
+
+To add a capability, add one `@operation` in `reports_app/operations.py`; do not hand-write a separate CLI command or assistant tool.
 
 ## CLI Client
 
@@ -170,6 +180,7 @@ zreport todo done 3 -p 周报系统 --reason "文档已合并"
 ```
 
 - The login exchanges a device code for a long-lived session token (365 days) stored in `<config>/zreport/cli.json` with `0600` permissions; `logout` revokes it server-side. Disabling or deleting a user revokes their CLI sessions too.
+- Commands other than login/logout/whoami/skill come from the server's operation manifest (see Operations) and are cached per server in `<config>/zreport/ops-cache.json`, so `--help` works offline.
 - Requests carry `Authorization: Bearer`, so every authenticated `/api` route works unchanged for CLI clients. The client always bypasses system proxy variables. The global flags `--server`, `--token`, `--insecure`, and `--config` allow scripting without touching the stored credentials.
 - An agent skill (a `SKILL.md` teaching coding agents how to drive the CLI for weekly-report work) ships inside the package: `zreport skill install` writes it to `./.agents/skills/zreport/SKILL.md`, and `zreport skill install --global` to `~/.agents/skills/zreport/SKILL.md`. Point your agent at the `.agents/skills` directory (for Claude Code, symlink it into `~/.claude/skills`).
 

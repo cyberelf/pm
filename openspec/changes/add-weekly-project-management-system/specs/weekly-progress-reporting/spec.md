@@ -183,6 +183,27 @@ The system SHALL provide a 助手问答 side panel in the weekly report workspac
 - **WHEN** the internal agent is not configured or the call fails
 - **THEN** the system shows the failure and stores neither the question nor an answer
 
+### Requirement: Shared operation registry
+The system SHALL define each project, material, report, TODO, search and Git operation once, with a name, description, JSON-Schema parameters, a read-only annotation and a single handler, and SHALL expose that definition through the HTTP API, the zreport CLI and the report assistant's tools without separate per-interface implementations.
+
+#### Scenario: Discover operations
+- **WHEN** a client requests the operation manifest
+- **THEN** the system returns every operation with its parameters, read-only annotation, CLI command path and rendering hint, without requiring a session
+
+#### Scenario: CLI follows the server
+- **WHEN** the zreport CLI starts
+- **THEN** it builds its server commands from the manifest, caches it per server for offline help, and runs commands through the operation endpoint
+- **AND** it reports clearly when no manifest is available instead of failing as an unknown command
+
+#### Scenario: Same result through every interface
+- **WHEN** the same read-only operation runs through the HTTP API, the CLI and the assistant for the same project
+- **THEN** each returns the same data, apart from agent-only output bounds
+
+#### Scenario: Access follows the operation
+- **WHEN** an operation names a project
+- **THEN** the system resolves it by ID or exact name among the caller's accessible projects and requires the operation's project role
+- **AND** assistant calls are pinned to the conversation's project, cannot reach other projects' records and can use only read-only operations
+
 ### Requirement: Excel material extraction and original downloads
 The system SHALL accept XLSX and XLS uploads, extract worksheet names and cell text without executing formulas, and retain original bytes. Extraction SHALL be bounded to 200000 cells and 2000000 text characters, with XLSX expanded data bounded to 64 MiB. A failed extraction SHALL preserve the original and display the failed file in the material list. Downloads SHALL require project read access and return an attachment with the original UTF-8 filename, including for historical and failed files.
 

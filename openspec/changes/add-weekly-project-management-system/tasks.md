@@ -210,3 +210,13 @@ Validation (2026-11-21): All 226 unit tests, node --check static/app.js and git 
 - [x] 21.4 Cover tool scoping, truncation, errors, caching and both provider loop formats with tests; verify against the live provider
 
 Validation (2026-11-21): All 230 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.16 was reinstalled and verified over HTTPS against the live Anthropic-compatible provider: questions answerable from the current report returned in 5–10s with no tool calls (previously about 45s for the first question); a history comparison called only weekly_show (17s), a material quote called search then material_show (21s), and a latest-commits question called git_commits for one repository (2.2s inside a 15s answer). The verification session and its messages were removed.
+
+## 22. Shared operation registry
+
+- [x] 22.1 Define project, material, report, TODO, search and Git operations once (MCP-style schema, read-only annotation, CLI path, render hint, handler) with project resolution by ID or name and per-operation roles
+- [x] 22.2 Publish GET /api/ops and POST /api/ops/<name>; keep existing REST routes for the web UI and older CLI clients
+- [x] 22.3 Rebuild the zreport CLI on the discovered manifest with a per-server cache, generic table/record/text/message rendering and stdin/file parameters; keep login/logout/whoami/skill native; bump CLI to 1.6.0
+- [x] 22.4 Replace the assistant's hand-written tools with the read-only agent operations bound to the conversation's project
+- [x] 22.5 Cover registry invariants, HTTP roles, agent binding, cross-interface parity and CLI cache fallback with tests; keep the existing CLI end-to-end tests passing unchanged
+
+Validation (2026-11-21): All 236 unit tests (including the unchanged CLI end-to-end suite), node --check and git diff --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.17 was reinstalled: GET /api/ops published 19 operations; the manifest-driven CLI listed projects, weekly reports, risks, repositories, search hits and 95 ai-defenders commits (3.3s) against the live service; the assistant answered a supplement-and-history question by calling supplement_show and weekly_show in one round (14s). Verification sessions and messages were removed. CLI 1.6.0 is not yet tagged for PyPI.
