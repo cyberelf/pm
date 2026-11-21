@@ -3075,11 +3075,39 @@ async function loadAssistant() {
   }
 }
 
+const ASSISTANT_TOOL_LABELS = {
+  weekly_list: "周报列表",
+  weekly_show: "周报",
+  search: "检索",
+  material_show: "资料",
+  report_show: "周报",
+  todo_list: "TODO 列表",
+  todo_show: "TODO",
+  materials_list: "资料列表",
+  weekly_update_show: "本周补充",
+  plan_show: "计划",
+  risks_list: "风险预警",
+  git_repos_list: "仓库列表",
+  git_commits: "提交记录",
+  git_activity: "PR/Issue",
+};
+
+function assistantToolsHtml(tools) {
+  if (!tools || !tools.length) return "";
+  const items = tools.map((tool) => {
+    const arg = Object.values(tool.args || {}).find((value) => value !== "" && value !== null && value !== undefined);
+    const label = `${ASSISTANT_TOOL_LABELS[tool.name] || tool.name}${arg !== undefined ? ` ${arg}` : ""}`;
+    const title = `${tool.name} · ${((tool.ms || 0) / 1000).toFixed(1)}s${tool.error ? " · 失败" : ""}`;
+    return `<span class="assistant-tool${tool.error ? " is-error" : ""}" title="${escapeAttr(title)}">${escapeHtml(label)}</span>`;
+  });
+  return `<div class="assistant-tools"><small>已查阅</small>${items.join("")}</div>`;
+}
+
 function assistantMessageHtml(message) {
   if (message.role === "user") {
     return `<div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(message.content)}</div></div>`;
   }
-  return `<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-md">${message.content_html}</div>${assistantProposalHtml(message)}</div>`;
+  return `<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-md">${message.content_html}</div>${assistantToolsHtml(message.tools)}${assistantProposalHtml(message)}</div>`;
 }
 
 function assistantProposalHtml(message) {
@@ -3124,7 +3152,7 @@ function renderAssistant() {
   const parts = a.messages.map(assistantMessageHtml);
   if (a.sending) {
     parts.push(`<div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(a.pendingQuestion)}</div></div>`);
-    parts.push(`<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-thinking"><span class="spinner small" aria-hidden="true"></span><span>正在结合周报与本周资料分析…</span></div></div>`);
+    parts.push(`<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-thinking"><span class="spinner small" aria-hidden="true"></span><span>正在按需查阅资料并分析…</span></div></div>`);
   }
   if (a.error) parts.push(`<div class="notice danger assistant-error"><span>${escapeHtml(a.error)}</span></div>`);
   if (!parts.length) {

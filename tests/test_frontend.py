@@ -1422,7 +1422,7 @@ globalThis.fetch = async (path, options) => {
 
   responses.push({ week_key: "2026-W47", has_report: true, messages: [
     { id: 1, role: "user", content: "把总结改短" },
-    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>", proposal: { content_md: "# 新", content_html: "<h1>新</h1>", applied_at: "" } },
+    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>", tools: [{ name: "weekly_show", args: { week_key: "2026-W46" }, ms: 12 }], proposal: { content_md: "# 新", content_html: "<h1>新</h1>", applied_at: "" } },
   ] });
   await sendAssistantQuestion("把总结改短");
   const call = fetchCalls[1];
@@ -1430,6 +1430,7 @@ globalThis.fetch = async (path, options) => {
     throw new Error(`unexpected ask request: ${JSON.stringify(call)}`);
   }
   const html = document.getElementById("assistant-messages").innerHTML;
+  if (!html.includes("已查阅") || !html.includes("周报 2026-W46")) throw new Error(`tool trace missing: ${html}`);
   if (!html.includes("周报修改稿") || !html.includes("applyAssistantProposal(2")) {
     throw new Error(`proposal was not rendered with an apply action: ${html}`);
   }

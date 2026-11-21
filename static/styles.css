@@ -1320,6 +1320,10 @@ body.assistant-open .toast { right: 418px; }
 .is-user .assistant-bubble { max-width: 88%; background: var(--accent); color: var(--accent-contrast); white-space: pre-wrap; }
 .is-assistant .assistant-bubble { border: 1px solid var(--hairline); background: var(--canvas); color: var(--body); }
 .assistant-thinking { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.assistant-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: -2px; }
+.assistant-tools small { color: var(--muted-soft); font-size: 11px; margin-right: 2px; }
+.assistant-tool { max-width: 100%; border-radius: 9999px; background: var(--surface-strong); color: var(--muted); padding: 2px 8px; font-size: 11px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-tool.is-error { background: var(--error-soft); color: var(--error-ink); }
 .assistant-md > :first-child { margin-top: 0; }
 .assistant-md > :last-child { margin-bottom: 0; }
 .assistant-md h1, .assistant-md h2, .assistant-md h3 { margin: 14px 0 6px; font-size: 15px; letter-spacing: 0; }
