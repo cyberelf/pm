@@ -220,3 +220,13 @@ Validation (2026-11-21): All 230 unit tests and node --check passed; OpenSpec va
 - [x] 22.5 Cover registry invariants, HTTP roles, agent binding, cross-interface parity and CLI cache fallback with tests; keep the existing CLI end-to-end tests passing unchanged
 
 Validation (2026-11-21): All 236 unit tests (including the unchanged CLI end-to-end suite), node --check and git diff --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.17 was reinstalled: GET /api/ops published 19 operations; the manifest-driven CLI listed projects, weekly reports, risks, repositories, search hits and 95 ai-defenders commits (3.3s) against the live service; the assistant answered a supplement-and-history question by calling supplement_show and weekly_show in one round (14s). Verification sessions and messages were removed. CLI 1.6.0 is not yet tagged for PyPI.
+
+## 23. Streaming assistant with concurrent tools
+
+- [x] 23.1 Stream both providers (OpenAI tool-call deltas, Anthropic messages.stream) with round/text events and cooperative cancellation
+- [x] 23.2 Run the tool calls of one round concurrently on per-call database connections and emit tool_start/tool_end
+- [x] 23.3 Answer questions as background runs with ordered event ids, an SSE endpoint resumable via Last-Event-ID, cancel, one active run per account and project, and reattachment after reload
+- [x] 23.4 Render live tool chips, streamed text with the revision block hidden, and a stop button in the panel; restore stopped or failed questions to the input
+- [x] 23.5 Cover streaming formats, concurrency, resume, busy/cancel/error runs and the EventSource UI with tests; verify in a browser and against the live provider
+
+Validation (2026-11-21): All 241 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. In headless Chromium against an isolated fake-provider instance, tool chips ran live, text streamed with the revision block hidden behind a progress note, a mid-answer reload reattached and completed, and stop restored the question without storing a turn. Platform 1.3.18 was reinstalled; on the live Anthropic-compatible provider one question started weekly_show and repos_commits together in the first round (1 ms and 4.6 s), then streamed 460 text deltas to completion at 35 s. The verification session and messages were removed.

@@ -165,6 +165,11 @@ The system SHALL provide a 助手问答 side panel in the weekly report workspac
 - **THEN** the assistant answers without calling tools or remote Git APIs
 - **AND** questions about history, materials, plans, supplements, risks, commits or PRs call only the matching tools (weekly list/show, search, material/report/TODO show, materials list, plan, weekly supplement, risks, Git repos/commits/activity), whose results are bounded and limited to the project and the asking account, and the answer lists the tools it consulted
 
+#### Scenario: Stream an answer
+- **WHEN** a user asks the assistant a question
+- **THEN** the answer runs in the background and streams to the panel as resumable server-sent events, showing each tool call as it starts and finishes and the answer text as it is generated
+- **AND** tools requested in the same model round run concurrently, the user can stop the run, a page reload reattaches to it, and a second question waits until the first run ends
+
 #### Scenario: Adjust a report conclusion
 - **WHEN** a user asks the assistant to change a conclusion of the current week report
 - **THEN** the answer explains the change and offers a revised report that leaves the stored report unchanged until applied
