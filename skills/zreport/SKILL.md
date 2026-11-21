@@ -24,8 +24,23 @@ command only — do not call the server's HTTP API directly.
 - `zreport todo list` and `zreport todo list --all` (`--all` includes closed
   TODOs; the PROJECT column shows which project a closed TODO was archived into)
 - `zreport project weekly list -p <project>` — generated weekly reports
-- `zreport project weekly show -p <project> [week_key]` — report body rendered
-  as text (default week: the current one)
+- `zreport project weekly show -p <project> [week_key]` — report body as
+  Markdown (default week: the current one)
+- `zreport project materials list -p <project> [--scope all]` — materials with
+  IDs and AI summaries (default: added this week)
+- `zreport project supplement show -p <project> [week_key]` — the weekly
+  supplement (本周补充: completed / in progress / blockers / next steps)
+- `zreport project plan show -p <project>` — profile, objectives, milestones,
+  deliverables
+- `zreport project risks list -p <project>` — this week's system risk warnings
+- `zreport project repos list -p <project>` — linked Git repositories;
+  `project repos commits|activity -p <project> [-r owner/name]` fetch this
+  week's commits or PRs/issues/boards from GitHub/GitLab (slower)
+
+Commands other than login/logout/whoami/skill are discovered from the server
+at startup, so `zreport --help` (and `--help` on any group) always lists what
+the connected server supports. Every server command accepts `--json` for the
+raw result.
 
 ## Search across reports and materials (read-only)
 
@@ -67,7 +82,7 @@ around the CLI.
 
 - Text material: `echo "..." | zreport project materials add -p <project> --text - --title "Title"`
 - Attachments: `zreport project materials add -p <project> --file a.md b.pdf`
-  (supported: .md .markdown .txt .html .htm .pdf)
+  (the server accepts Markdown, text, HTML, PDF, Excel and images)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then
   `zreport todo done <ID> -p <project> -r "closing note"` (done archives the

@@ -43,19 +43,29 @@ zreport search "query" [-p project] [-n N] [--type report|material] [--json]
                                        llm_embedding_model in 全局设置)
 zreport material show <ID>             show a material's full extracted text
                                        (ID from `search`)
-zreport report show <ID>               show a weekly report as text (ID from
-                                       `search`)
+zreport report show <ID>               show a weekly report (ID from `search`)
 zreport todo show <ID>                 show a TODO's details
 zreport project materials add -p <project> --text "..." [--title "..."]
                                        submit a text material
 echo "..." | zreport project materials add -p <project> --text -
                                        submit text material from stdin
 zreport project materials add -p <project> --file a.md b.pdf
-                                       upload attachments (.md .markdown .txt .html .htm .pdf)
+                                       upload attachments (Markdown, text, HTML,
+                                       PDF, Excel, images)
+zreport project materials list -p <project> [--scope all]
+                                       list materials (default: this week's)
+zreport project supplement show -p <project> [week_key]
+                                       show the weekly supplement (本周补充)
+zreport project plan show -p <project> show profile, objectives, milestones
+zreport project risks list -p <project>
+                                       this week's system risk warnings
+zreport project repos list|commits|activity -p <project> [-r owner/name]
+                                       linked repositories; this week's commits
+                                       or PRs/issues/boards (remote APIs)
 zreport project weekly list -p <project>
                                        list generated weekly reports
 zreport project weekly show -p <project> [week_key]
-                                       show a weekly report as text
+                                       show a weekly report (Markdown)
 zreport todo list [--all]              list TODOs (--all includes closed ones)
 zreport todo add "Title" -d "Details"  create a TODO
 zreport todo status <ID> doing|todo    change a TODO's status
@@ -64,6 +74,14 @@ zreport todo done <ID> -p <project> -r "closing note"
 zreport skill install [--global]       install the agent skill into .agents/skills
 zreport whoami | logout                session helpers
 ```
+
+Except for `login`, `logout`, `whoami` and `skill`, commands are discovered
+from the server at startup (`GET /api/ops`), so the list above is what a
+current server offers and `zreport --help` always shows the connected
+server's commands. They are the same operations the server's in-app report
+assistant calls as tools. The manifest is cached per server next to the
+credentials, so `--help` still works offline. Every server command accepts
+`--json` for the raw result.
 
 `<project>` accepts the project ID or its exact name. Global flags:
 `--server`, `--token`, `--insecure`, `--config` — handy for scripting

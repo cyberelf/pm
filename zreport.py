@@ -17,6 +17,12 @@ reports from the terminal:
     python3 zreport.py todo done 3 --project my-project --reason "merged"
     python3 zreport.py search "部署优化" -n 5
     python3 zreport.py search "GPU compose" --type material --json
+    python3 zreport.py project plan show -p my-project
+
+Apart from login/logout/whoami/skill, commands are not defined here: they
+come from the server's operation registry (GET /api/ops), the same
+definitions the in-app report assistant uses as tools. The manifest is
+cached per server next to the credentials so --help works offline.
 
 The token is stored in <config>/zreport/cli.json (0600). Self-signed
 TLS: log in with --insecure once and the choice is remembered.
@@ -34,17 +40,13 @@ import unicodedata
 import urllib.error
 import urllib.request
 import webbrowser
-from html import unescape
-from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 DEFAULT_SERVER = "http://127.0.0.1:8765"
 # CLI 版本号：仅 CLI（本文件）有实际变化时递增并发 PyPI，勿随平台版本联动
-__version__ = "1.5.0"
+__version__ = "1.6.0"
 LOGIN_TIMEOUT_SECONDS = 15 * 60
-MATERIAL_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain", ".html": "text/html", ".htm": "text/html", ".pdf": "application/pdf"}
-TODO_STATUSES = ("todo", "doing")
 # The editable copy lives at skills/zreport/SKILL.md in the repo; this
 # embedded copy ships inside the wheel (the package is a single module), and
 # a test asserts the two stay identical.
@@ -75,8 +77,23 @@ command only — do not call the server's HTTP API directly.
 - `zreport todo list` and `zreport todo list --all` (`--all` includes closed
   TODOs; the PROJECT column shows which project a closed TODO was archived into)
 - `zreport project weekly list -p <project>` — generated weekly reports
-- `zreport project weekly show -p <project> [week_key]` — report body rendered
-  as text (default week: the current one)
+- `zreport project weekly show -p <project> [week_key]` — report body as
+  Markdown (default week: the current one)
+- `zreport project materials list -p <project> [--scope all]` — materials with
+  IDs and AI summaries (default: added this week)
+- `zreport project supplement show -p <project> [week_key]` — the weekly
+  supplement (本周补充: completed / in progress / blockers / next steps)
+- `zreport project plan show -p <project>` — profile, objectives, milestones,
+  deliverables
+- `zreport project risks list -p <project>` — this week's system risk warnings
+- `zreport project repos list -p <project>` — linked Git repositories;
+  `project repos commits|activity -p <project> [-r owner/name]` fetch this
+  week's commits or PRs/issues/boards from GitHub/GitLab (slower)
+
+Commands other than login/logout/whoami/skill are discovered from the server
+at startup, so `zreport --help` (and `--help` on any group) always lists what
+the connected server supports. Every server command accepts `--json` for the
+raw result.
 
 ## Search across reports and materials (read-only)
 
@@ -118,7 +135,7 @@ around the CLI.
 
 - Text material: `echo "..." | zreport project materials add -p <project> --text - --title "Title"`
 - Attachments: `zreport project materials add -p <project> --file a.md b.pdf`
-  (supported: .md .markdown .txt .html .htm .pdf)
+  (the server accepts Markdown, text, HTML, PDF, Excel and images)
 - TODOs: `zreport todo add "Title" -d "Details"`, then
   `zreport todo status <ID> doing`, then
   `zreport todo done <ID> -p <project> -r "closing note"` (done archives the
@@ -244,48 +261,6 @@ def print_table(headers, rows):
         print(format_row(row))
 
 
-class _HTMLToText(HTMLParser):
-    """Render server-provided report HTML as readable terminal text."""
-    HEADINGS = {"h1": "# ", "h2": "## ", "h3": "### ", "h4": "#### ", "h5": "#### ", "h6": "#### "}
-    NEWLINE = {"p", "div", "br", "tr", "table", "ul", "ol", "section", "hr", "blockquote"}
-
-    def __init__(self):
-        super().__init__()
-        self.parts = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self.HEADINGS:
-            self.parts.append("\n\n" + self.HEADINGS[tag])
-        elif tag == "li":
-            self.parts.append("\n- ")
-        elif tag in self.NEWLINE:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in self.HEADINGS or tag in self.NEWLINE or tag == "li":
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        self.parts.append(unescape(data))
-
-
-def html_to_text(html):
-    parser = _HTMLToText()
-    parser.feed(html or "")
-    text = "".join(parser.parts)
-    lines = [line.rstrip() for line in text.splitlines()]
-    out, blank = [], 0
-    for line in lines:
-        if not line.strip():
-            blank += 1
-            if blank > 1:
-                continue
-        else:
-            blank = 0
-        out.append(line)
-    return "\n".join(out).strip()
-
-
 # ---------------------------------------------------------------- login
 
 
@@ -351,7 +326,16 @@ def cmd_whoami(args, config, config_path):
     return 0
 
 
-# ---------------------------------------------------------------- projects & materials
+# ---------------------------------------------------------------- server operations
+#
+# Every command except login/logout/whoami/skill is an operation from the
+# server's registry (the same one behind the report assistant's tools).
+# The CLI discovers the manifest from GET /api/ops at startup, caches it
+# per server next to the credentials, and builds subcommands, flags and
+# terminal rendering from it; POST /api/ops/<name> runs the operation.
+
+NATIVE_COMMANDS = {"login", "logout", "whoami", "skill"}
+MANIFEST_TIMEOUT_SECONDS = 5
 
 
 def require_login(config):
@@ -359,117 +343,151 @@ def require_login(config):
         raise CliError("not signed in: run the login command first")
 
 
-def fetch_projects(config):
-    state = api_request(config, "GET", "/api/state")
-    return state.get("projects") or []
+def manifest_cache_path(config_path):
+    return Path(config_path).with_name("ops-cache.json")
 
 
-def resolve_project(config, ref):
-    projects = fetch_projects(config)
-    for project in projects:
-        if str(project["id"]) == str(ref) or project["name"] == ref:
-            return project
-    raise CliError(f"project not found: {ref} (see the projects command)")
+def load_operations(config, config_path):
+    """(manifest, error): the server's live manifest, else the cached copy
+    for the same server, else None with the reason."""
+    cache_path = manifest_cache_path(config_path)
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    server = config["server"].rstrip("/")
+    try:
+        manifest = api_request(config, "GET", "/api/ops", timeout=MANIFEST_TIMEOUT_SECONDS)
+        if not isinstance(manifest.get("operations"), list):
+            raise CliError("server does not publish an operation manifest (upgrade the zreport server)")
+    except CliError as exc:
+        cached = cache.get(server)
+        if cached:
+            return cached, None
+        return None, str(exc)
+    if cache.get(server, {}).get("version") != manifest.get("version"):
+        cache[server] = manifest
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass  # the cache only speeds up offline --help
+    return manifest, None
 
 
-def cmd_project_list(args, config, config_path):
+def add_operation_arguments(parser, op):
+    for param in op["params"]:
+        cli = param.get("cli") or {}
+        kwargs = {"help": param["description"]}
+        if param.get("enum"):
+            kwargs["choices"] = param["enum"]
+        if param["type"] == "integer":
+            kwargs["type"] = int
+        if param.get("default") is not None:
+            kwargs["default"] = param["default"]
+            kwargs["help"] += f" (default: {param['default']})"
+        if cli.get("positional"):
+            if not param["required"]:
+                kwargs["nargs"] = "?"
+            elif cli.get("multiple"):
+                kwargs["nargs"] = "+"
+            parser.add_argument(param["name"], **kwargs)
+            continue
+        kwargs["dest"] = param["name"]
+        if param["type"] == "boolean":
+            kwargs.pop("type", None)
+            kwargs["action"] = "store_true"
+        else:
+            kwargs["required"] = bool(param["required"])
+            if cli.get("multiple"):
+                kwargs["nargs"] = "+"
+            if param["type"] == "file":
+                kwargs["metavar"] = "PATH"
+        parser.add_argument(*cli.get("flags") or [f"--{param['name']}"], **kwargs)
+    parser.add_argument("--json", dest="_json", action="store_true", help="print the raw JSON result")
+
+
+def add_operations(sub, manifest):
+    groups = manifest.get("groups") or {}
+    nodes = {(): sub}
+    parsers = {}
+    for op in manifest["operations"]:
+        command = op["command"]
+        for depth in range(1, len(command)):
+            path = tuple(command[:depth])
+            if path in nodes:
+                continue
+            group = nodes[path[:-1]].add_parser(path[-1], help=groups.get(" ".join(path), ""))
+            parsers[path] = group
+            nodes[path] = group.add_subparsers(dest="_".join(path) + "_command", required=True)
+        leaf = nodes[tuple(command[:-1])].add_parser(command[-1], help=op["summary"], description=op["description"])
+        add_operation_arguments(leaf, op)
+        leaf.set_defaults(func=cmd_operation, operation=op)
+
+
+def operation_payload(args, op):
+    payload = {}
+    for param in op["params"]:
+        value = getattr(args, param["name"], None)
+        if value is None or value is False:
+            continue
+        if param["type"] == "file":
+            files = []
+            for raw_path in value:
+                path = Path(raw_path).expanduser()
+                try:
+                    raw = path.read_bytes()
+                except OSError as exc:
+                    raise CliError(f"cannot read {path}: {exc}") from exc
+                files.append({"filename": path.name, "content_base64": base64.b64encode(raw).decode("ascii")})
+            value = files
+        elif (param.get("cli") or {}).get("stdin") and value == "-":
+            value = sys.stdin.read()
+        payload[param["name"]] = value
+    return payload
+
+
+def cmd_operation(args, config, config_path):
     require_login(config)
-    rows = [
-        (
-            project["id"],
-            project["name"],
-            project["status"],
-            project.get("timezone", ""),
-            (project.get("updated_at") or "")[:16].replace("T", " "),
-        )
-        for project in fetch_projects(config)
-    ]
-    print_table(["ID", "PROJECT", "STATUS", "TIMEZONE", "UPDATED"], rows)
-    return 0
-
-
-def cmd_materials_add(args, config, config_path):
-    require_login(config)
-    project = resolve_project(config, args.project)
-    if args.file:
-        files = []
-        for raw_path in args.file:
-            path = Path(raw_path).expanduser()
-            ext = path.suffix.lower()
-            if ext not in MATERIAL_EXTENSIONS:
-                raise CliError(f"unsupported file type: {path.name} (supported: {' '.join(sorted(MATERIAL_EXTENSIONS))})")
-            try:
-                raw = path.read_bytes()
-            except OSError as exc:
-                raise CliError(f"cannot read {path}: {exc}") from exc
-            files.append(
-                {
-                    "filename": path.name,
-                    "content_base64": base64.b64encode(raw).decode("ascii"),
-                    "content_type": MATERIAL_EXTENSIONS[ext],
-                }
-            )
-        result = api_request(
-            config,
-            "POST",
-            f"/api/projects/{project['id']}/materials",
-            payload={"files": files},
-            timeout=300,
-        )
-        print(f"Uploaded {len(files)} attachment(s) to '{project['name']}' (material IDs: {', '.join(str(i) for i in result.get('ids', []))})")
+    op = args.operation
+    result = api_request(config, "POST", f"/api/ops/{op['name']}", payload=operation_payload(args, op), timeout=300)
+    if args._json:
+        # warnings stay inside the JSON so stdout remains parseable
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    text = args.text
-    if text == "-":
-        text = sys.stdin.read()
-    text = (text or "").strip()
-    if not text:
-        raise CliError('provide content: --text "..." (or --text - to read stdin), or attach files with --file')
-    title = (args.title or "").strip() or "CLI note"
-    result = api_request(
-        config,
-        "POST",
-        f"/api/projects/{project['id']}/materials",
-        payload={"source_type": "manual", "title": title, "content": text},
-    )
-    print(f"Submitted text material to '{project['name']}' (material ID: {result.get('id')})")
+    render_result(op.get("render") or {"kind": "json"}, result)
+    for warning in result.get("warnings") or []:
+        print(f"note: {warning}", file=sys.stderr)
     return 0
 
 
-def cmd_weekly_list(args, config, config_path):
-    require_login(config)
-    project = resolve_project(config, args.project)
-    workspace = api_request(config, "GET", f"/api/projects/{project['id']}/workspace")
-    rows = [
-        (
-            item["week_key"],
-            "yes" if item.get("is_current_week") else "",
-            (item.get("updated_at") or "")[:16].replace("T", " "),
-        )
-        for item in workspace.get("report_history") or []
-    ]
-    print(f"Weekly reports of '{project['name']}':")
-    print_table(["WEEK", "CURRENT", "UPDATED"], rows)
-    return 0
+# ---------------------------------------------------------------- rendering
 
 
-def cmd_weekly_show(args, config, config_path):
-    require_login(config)
-    project = resolve_project(config, args.project)
-    if args.week_key:
-        report = api_request(config, "GET", f"/api/projects/{project['id']}/reports/{args.week_key}")
-    else:
-        workspace = api_request(config, "GET", f"/api/projects/{project['id']}/workspace")
-        report = workspace.get("report")
-        if not report:
-            raise CliError(
-                f"no weekly report for the current week of '{project['name']}' "
-                f"(weekly list shows the archived ones)"
-            )
-    print(html_to_text(report["content_html"]))
-    return 0
+def format_value(value, fmt=""):
+    if value is None or value == "":
+        return "-"
+    for step in filter(None, (fmt or "").split("|")):
+        name, _, arg = step.partition(":")
+        if name == "datetime":
+            value = str(value)[:16].replace("T", " ")
+        elif name == "yesno":
+            value = "yes" if value else ""
+        elif name == "float4":
+            value = f"{float(value or 0):.4f}"
+        elif name == "join":
+            value = ", ".join(map(str, value)) if isinstance(value, (list, tuple)) else value
+        elif name == "oneline":
+            value = re.sub(r"\s+", " ", str(value)).strip()
+        elif name == "clip":
+            value = clip_text(str(value), int(arg or 64))
+    return str(value)
 
 
-# ---------------------------------------------------------------- search
+def fill_template(template, data):
+    return re.sub(r"\{(\w+)\}", lambda m: str(data.get(m.group(1)) if data.get(m.group(1)) is not None else ""), template).strip()
 
 
 def clip_text(text, width=64):
@@ -484,159 +502,41 @@ def clip_text(text, width=64):
     return out
 
 
-def cmd_search(args, config, config_path):
-    require_login(config)
-    params = {"q": args.query, "limit": str(max(1, args.top))}
-    if args.type:
-        params["type"] = args.type
-    if args.project:
-        project = resolve_project(config, args.project)
-        params["project_id"] = str(project["id"])
-    # the first search after new content may index chunks server-side, so
-    # allow far more than the default 30s here
-    result = api_request(config, "GET", f"/api/search?{urlencode(params)}", timeout=120)
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-    hits = result.get("hits") or []
-    if not hits:
-        print("No matches.")
-    else:
+def render_result(render, result):
+    kind = render.get("kind")
+    if kind == "table":
+        items = result.get(render["items"]) or []
+        if render.get("title"):
+            print(fill_template(render["title"], result))
+        if not items and render.get("empty"):
+            print(render["empty"])
+            return
+        columns = render["columns"]
         rows = [
-            (
-                rank,
-                hit.get("type") or "",
-                hit.get("source_id") if hit.get("source_id") is not None else "-",
-                hit.get("project_name") or "-",
-                clip_text(hit.get("title") or "", 40),
-                hit.get("week_key") or "-",
-                clip_text(re.sub(r"\s+", " ", hit.get("snippet") or "").strip()),
-                f"{hit.get('score') or 0:.4f}",
-            )
-            for rank, hit in enumerate(hits, start=1)
+            [str(rank) if c["key"] == "@rank" else format_value(item.get(c["key"]), c.get("format")) for c in columns]
+            for rank, item in enumerate(items, start=1)
         ]
-        print_table(["#", "TYPE", "ID", "PROJECT", "TITLE", "WEEK", "SNIPPET", "SCORE"], rows)
-    if not result.get("embedding_configured"):
-        print("note: vector search is disabled — set an embedding model (llm_embedding_model) in 全局设置 for hybrid search", file=sys.stderr)
+        print_table([c["header"] for c in columns], rows)
+    elif kind == "record":
+        for field in render.get("fields") or []:
+            value = fill_template(field["template"], result) if "template" in field else result.get(field["key"])
+            if value not in (None, ""):
+                print(f"{field['label']}: {format_value(value, field.get('format'))}")
+        if "body" in render:
+            body = (result.get(render["body"]) or "").strip()
+            print("\n" + (body or render.get("empty_body", "")))
+        for field in render.get("after") or []:
+            value = (result.get(field["key"]) or "").strip()
+            if value:
+                print(f"\n{field['label']}: {value}")
+    elif kind == "text":
+        print((result.get(render["field"]) or "").strip())
+    elif kind == "message":
+        print(result.get("message") or "done")
     else:
-        error = (result.get("index") or {}).get("embedding_error")
-        if error:
-            print(f"note: vector search failed this time: {error}", file=sys.stderr)
-    return 0
-
-
-# ---------------------------------------------------------------- show by id
-
-
-def _print_kv(pairs):
-    for key, value in pairs:
-        if value not in (None, ""):
-            print(f"{key}: {value}")
-
-
-def cmd_material_show(args, config, config_path):
-    require_login(config)
-    material = api_request(config, "GET", f"/api/materials/{args.id}")
-    _print_kv(
-        [
-            ("Material", f"#{material.get('id')} {material.get('filename', '')}".strip()),
-            ("Project", material.get("project_name")),
-            ("Status", material.get("extraction_status")),
-            ("Summary", (material.get("summary") or "").strip()),
-            ("Created", (material.get("created_at") or "")[:16].replace("T", " ")),
-        ]
-    )
-    content = (material.get("content") or "").strip()
-    print("\n" + (content if content else "(no extracted text)"))
-    return 0
-
-
-def cmd_report_show(args, config, config_path):
-    require_login(config)
-    report = api_request(config, "GET", f"/api/reports/{args.id}")
-    _print_kv(
-        [
-            ("Report", f"#{report.get('id')}"),
-            ("Project", report.get("project_name")),
-            ("Week", report.get("week_key")),
-        ]
-    )
-    print()
-    print(html_to_text(report.get("content_html") or ""))
-    return 0
-
-
-def cmd_todo_show(args, config, config_path):
-    require_login(config)
-    todos = api_request(config, "GET", "/api/todos").get("todos") or []
-    todo = next((item for item in todos if item["id"] == args.id), None)
-    if not todo:
-        raise CliError(f"TODO #{args.id} not found (closed TODOs need `todo list --all`)")
-    _print_kv(
-        [
-            ("TODO", f"#{todo['id']} {todo.get('title', '')}".strip()),
-            ("Status", todo.get("status")),
-            ("Project", todo.get("project_name") or "-"),
-            ("Created", (todo.get("created_at") or "")[:16].replace("T", " ")),
-        ]
-    )
-    description = (todo.get("description") or "").strip()
-    if description:
-        print(f"\n{description}")
-    close_reason = (todo.get("close_reason") or "").strip()
-    if close_reason:
-        print(f"\nClose reason: {close_reason}")
-    return 0
-
-
-# ---------------------------------------------------------------- todos
-
-
-def cmd_todo_list(args, config, config_path):
-    require_login(config)
-    todos = api_request(config, "GET", "/api/todos").get("todos") or []
-    if not args.all:
-        todos = [todo for todo in todos if todo["status"] != "closed"]
-    rows = [
-        (
-            todo["id"],
-            todo["status"],
-            todo.get("project_name") or "-",
-            todo["title"],
-        )
-        for todo in todos
-    ]
-    print_table(["ID", "STATUS", "PROJECT", "TITLE"], rows)
-    return 0
-
-
-def cmd_todo_add(args, config, config_path):
-    require_login(config)
-    result = api_request(config, "POST", "/api/todos", payload={"title": args.title, "description": args.description or ""})
-    print(f"Created TODO #{result.get('id')}: {args.title}")
-    return 0
-
-
-def cmd_todo_status(args, config, config_path):
-    require_login(config)
-    api_request(config, "PUT", f"/api/todos/{args.id}", payload={"status": args.status})
-    print(f"TODO #{args.id} status set to {args.status}")
-    return 0
-
-
-def cmd_todo_done(args, config, config_path):
-    require_login(config)
-    project = resolve_project(config, args.project)
-    result = api_request(
-        config,
-        "POST",
-        f"/api/todos/{args.id}/close",
-        payload={"reason": args.reason, "project_id": project["id"]},
-    )
-    material_id = result.get("material_id")
-    archived = f", archived as material #{material_id} in '{project['name']}'" if material_id else ""
-    print(f"TODO #{args.id} done{archived}")
-    return 0
+        # warnings go to stderr below; keep them out of the rendered body
+        body = {k: v for k, v in result.items() if k != "warnings"}
+        print(json.dumps(body, ensure_ascii=False, indent=2))
 
 
 # ---------------------------------------------------------------- agent skill
@@ -655,12 +555,21 @@ def cmd_skill_install(args, config, config_path):
 # ---------------------------------------------------------------- parser
 
 
-def build_parser():
-    parser = argparse.ArgumentParser(prog="zreport", description="zreport (Zero Report) command-line client")
+def add_global_arguments(parser):
     parser.add_argument("--server", help=f"server URL (default {DEFAULT_SERVER}; from saved config after login)")
     parser.add_argument("--token", help="use this Bearer token (default: from saved config)")
     parser.add_argument("--insecure", action="store_true", help="skip TLS certificate verification (self-signed certs)")
     parser.add_argument("--config", help="credentials file path (default <config>/zreport/cli.json)")
+
+
+def build_parser(manifest=None):
+    parser = argparse.ArgumentParser(
+        prog="zreport",
+        description="zreport (Zero Report) command-line client",
+        epilog=None if manifest else "Project, TODO and search commands are discovered from the server; run `zreport --server URL --help` to list them.",
+    )
+    parser.add_argument("--version", action="version", version=f"zreport {__version__}")
+    add_global_arguments(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
     login = sub.add_parser("login", help="sign in with the device authorization flow")
@@ -674,76 +583,8 @@ def build_parser():
     whoami = sub.add_parser("whoami", help="show the signed-in user")
     whoami.set_defaults(func=cmd_whoami)
 
-    project = sub.add_parser("project", help="project operations")
-    project_sub = project.add_subparsers(dest="project_command", required=True)
-
-    project_list = project_sub.add_parser("list", help="list projects")
-    project_list.set_defaults(func=cmd_project_list)
-
-    project_materials = project_sub.add_parser("materials", help="project materials")
-    project_materials_sub = project_materials.add_subparsers(dest="project_materials_command", required=True)
-    materials_add = project_materials_sub.add_parser("add", help="add material (text or file attachment)")
-    materials_add.add_argument("-p", "--project", required=True, help="project ID or name")
-    materials_add.add_argument("--text", help="text content; pass - to read from stdin")
-    materials_add.add_argument("--title", help="text material title (default: CLI note)")
-    materials_add.add_argument("--file", nargs="+", metavar="PATH", help="file attachments (.md .markdown .txt .html .htm .pdf, multiple allowed)")
-    materials_add.set_defaults(func=cmd_materials_add)
-
-    project_weekly = project_sub.add_parser("weekly", help="weekly reports")
-    project_weekly_sub = project_weekly.add_subparsers(dest="project_weekly_command", required=True)
-    weekly_list = project_weekly_sub.add_parser("list", help="list generated weekly reports")
-    weekly_list.add_argument("-p", "--project", required=True, help="project ID or name")
-    weekly_list.set_defaults(func=cmd_weekly_list)
-    weekly_show = project_weekly_sub.add_parser("show", help="show a weekly report (default: current week)")
-    weekly_show.add_argument("week_key", nargs="?", help="week key like 2026-W37 (default: current week)")
-    weekly_show.add_argument("-p", "--project", required=True, help="project ID or name")
-    weekly_show.set_defaults(func=cmd_weekly_show)
-
-    todo = sub.add_parser("todo", help="TODO operations")
-    todo_sub = todo.add_subparsers(dest="todo_command", required=True)
-    todo_list = todo_sub.add_parser("list", help="list TODOs")
-    todo_list.add_argument("--all", action="store_true", help="include closed TODOs")
-    todo_list.set_defaults(func=cmd_todo_list)
-
-    todo_add = todo_sub.add_parser("add", help="create a TODO")
-    todo_add.add_argument("title", help="title")
-    todo_add.add_argument("-d", "--description", help="details")
-    todo_add.set_defaults(func=cmd_todo_add)
-
-    todo_status = todo_sub.add_parser("status", help="change a TODO's status")
-    todo_status.add_argument("id", type=int, help="TODO ID")
-    todo_status.add_argument("status", choices=TODO_STATUSES, help="target status")
-    todo_status.set_defaults(func=cmd_todo_status)
-
-    todo_done = todo_sub.add_parser("done", help="close a TODO and archive it to a project")
-    todo_done.add_argument("id", type=int, help="TODO ID")
-    todo_done.add_argument("-p", "--project", required=True, help="project to archive into (ID or name)")
-    todo_done.add_argument("-r", "--reason", default="done", help="closing reason (default: done)")
-    todo_done.set_defaults(func=cmd_todo_done)
-
-    search = sub.add_parser("search", help="hybrid keyword + vector search over weekly reports and materials")
-    search.add_argument("query", help="search text (Chinese or English)")
-    search.add_argument("-p", "--project", help="limit to one project (ID or name)")
-    search.add_argument("-n", "--top", type=int, default=10, help="max results (default 10)")
-    search.add_argument("--type", choices=("report", "material"), help="limit to weekly reports or materials")
-    search.add_argument("--json", action="store_true", help="print the raw JSON response")
-    search.set_defaults(func=cmd_search)
-
-    material = sub.add_parser("material", help="material operations")
-    material_sub = material.add_subparsers(dest="material_command", required=True)
-    material_show = material_sub.add_parser("show", help="show a material's full content by ID (from `search`)")
-    material_show.add_argument("id", type=int, help="material ID (the ID column of `search`)")
-    material_show.set_defaults(func=cmd_material_show)
-
-    report = sub.add_parser("report", help="weekly report operations")
-    report_sub = report.add_subparsers(dest="report_command", required=True)
-    report_show = report_sub.add_parser("show", help="show a weekly report by ID (from `search`)")
-    report_show.add_argument("id", type=int, help="weekly report ID (the ID column of `search`)")
-    report_show.set_defaults(func=cmd_report_show)
-
-    todo_show = todo_sub.add_parser("show", help="show a TODO's details by ID")
-    todo_show.add_argument("id", type=int, help="TODO ID")
-    todo_show.set_defaults(func=cmd_todo_show)
+    if manifest:
+        add_operations(sub, manifest)
 
     skill = sub.add_parser("skill", help="manage the agent skill for coding agents")
     skill_sub = skill.add_subparsers(dest="skill_command", required=True)
@@ -760,19 +601,51 @@ def build_parser():
     return parser
 
 
+def first_command(argv):
+    """The first positional token, skipping global options and their values."""
+    takes_value = {"--server", "--token", "--config"}
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+            continue
+        if token in takes_value:
+            skip = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
 def main(argv=None, config_file=None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    config_path = Path(args.config or config_file or default_config_path())
-    config = load_config(config_path)
-    if args.server:
-        config["server"] = args.server.rstrip("/")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    pre = argparse.ArgumentParser(add_help=False)
+    add_global_arguments(pre)
+    early, _ = pre.parse_known_args(argv)
+    config_path = Path(early.config or config_file or default_config_path())
+    try:
+        config = load_config(config_path)
+    except CliError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if early.server:
+        config["server"] = early.server.rstrip("/")
     elif not config.get("server"):
         config["server"] = DEFAULT_SERVER
-    if args.token:
-        config["token"] = args.token
-    if args.insecure:
+    if early.token:
+        config["token"] = early.token
+    if early.insecure:
         config["tls_verify"] = False
+    command = first_command(argv)
+    manifest, manifest_error = (None, None)
+    if command not in NATIVE_COMMANDS:
+        manifest, manifest_error = load_operations(config, config_path)
+        if manifest is None and command is not None:
+            print(f"error: cannot load the command list from {config['server']}: {manifest_error}", file=sys.stderr)
+            return 1
+    parser = build_parser(manifest)
+    args = parser.parse_args(argv)
     if not hasattr(args, "func"):
         parser.print_usage()
         return 2
