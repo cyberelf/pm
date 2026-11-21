@@ -3084,12 +3084,12 @@ const ASSISTANT_TOOL_LABELS = {
   todo_list: "TODO 列表",
   todo_show: "TODO",
   materials_list: "资料列表",
-  weekly_update_show: "本周补充",
+  supplement_show: "本周补充",
   plan_show: "计划",
   risks_list: "风险预警",
-  git_repos_list: "仓库列表",
-  git_commits: "提交记录",
-  git_activity: "PR/Issue",
+  repos_list: "仓库列表",
+  repos_commits: "提交记录",
+  repos_activity: "PR/Issue",
 };
 
 function assistantToolsHtml(tools) {
