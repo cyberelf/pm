@@ -1360,7 +1360,7 @@ globalThis.fetch = async (path, options) => {
         self.assertIn(".status.running {", styles)
 
 
-    def test_assistant_panel_asks_renders_proposal_and_applies(self):
+    def test_assistant_panel_streams_runs_and_applies(self):
         html = (ROOT_DIR / "static" / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="assistant-panel"', html)
         self.assertIn('id="open-assistant"', html)
@@ -1393,6 +1393,13 @@ globalThis.document = {
 };
 globalThis.setTimeout = () => 0;
 globalThis.window = { addEventListener() {}, removeEventListener() {}, confirm() { return true; } };
+const sources = [];
+globalThis.EventSource = class {
+  constructor(url) { this.url = url; this.listeners = {}; this.readyState = 1; this.closed = false; sources.push(this); }
+  addEventListener(type, fn) { this.listeners[type] = fn; }
+  close() { this.closed = true; this.readyState = 2; }
+  fire(type, data) { this.listeners[type]({ data: JSON.stringify(data) }); }
+};
 const responses = [];
 const fetchCalls = [];
 globalThis.fetch = async (path, options) => {
@@ -1411,43 +1418,75 @@ globalThis.fetch = async (path, options) => {
   state.projectId = 1;
   state.mode = "reports";
   state.workspace = { project: { id: 1, name: "Demo" }, week_key: "2026-W47", role: "owner", report: { week_key: "2026-W47" } };
+  const box = () => document.getElementById("assistant-messages").innerHTML;
 
-  responses.push({ week_key: "2026-W47", has_report: true, messages: [] });
+  // opening the panel reattaches to an answer still running server-side
+  responses.push({ week_key: "2026-W47", has_report: true, messages: [], active_run: { id: "r0", question: "旧问题" } });
   toggleAssistant(true);
   await new Promise((resolve) => setImmediate(resolve));
   if (fetchCalls[0].path !== "/api/projects/1/assistant") throw new Error("thread was not loaded on open");
-  if (!document.getElementById("assistant-messages").innerHTML.includes("data-assistant-suggestion")) {
-    throw new Error("empty thread should offer suggestions");
+  if (sources[0].url !== "/api/projects/1/assistant/runs/r0/events") throw new Error(`did not reattach: ${sources[0] && sources[0].url}`);
+  sources[0].fire("cancelled", {});
+  if (!sources[0].closed || state.assistant.run) throw new Error("terminal event must close the stream");
+
+  responses.push({ run: { id: "r1", question: "把总结改短", done: false } });
+  await sendAssistantQuestion("把总结改短");
+  if (fetchCalls[1].options.body !== JSON.stringify({ question: "把总结改短" })) throw new Error("bad ask body");
+  const es = sources[1];
+  if (es.url !== "/api/projects/1/assistant/runs/r1/events") throw new Error("stream not opened");
+  if (document.getElementById("assistant-send").textContent !== "停止") throw new Error("send should turn into stop");
+
+  es.fire("round", { round: 0 });
+  es.fire("text", { delta: "我先查一下" });
+  es.fire("tool_start", { id: "a", name: "weekly_show", args: { week_key: "2026-W46" } });
+  es.fire("tool_start", { id: "b", name: "plan_show", args: {} });
+  if (!box().includes("查阅中") || (box().match(/is-running/g) || []).length !== 2) throw new Error(`parallel tools not shown: ${box()}`);
+  es.fire("tool_end", { id: "a", name: "weekly_show", args: { week_key: "2026-W46" }, ms: 1200, error: false });
+  if ((box().match(/is-running/g) || []).length !== 1) throw new Error("finished tool still running");
+  es.fire("round", { round: 1 });
+  if (box().includes("我先查一下")) throw new Error("preamble text must reset on a new round");
+  es.fire("text", { delta: "已调整。\n<<<REPORT>>>\n# 新周报" });
+  if (!box().includes("已调整。") || box().includes("# 新周报") || !box().includes("正在生成周报修改稿")) {
+    throw new Error(`report draft must stay hidden while streaming: ${box()}`);
   }
 
-  responses.push({ week_key: "2026-W47", has_report: true, messages: [
+  es.fire("done", { week_key: "2026-W47", has_report: true, messages: [
     { id: 1, role: "user", content: "把总结改短" },
-    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>", tools: [{ name: "weekly_show", args: { week_key: "2026-W46" }, ms: 12 }], proposal: { content_md: "# 新", content_html: "<h1>新</h1>", applied_at: "" } },
+    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>", tools: [{ name: "weekly_show", args: { week_key: "2026-W46" }, ms: 12 }],
+      proposal: { content_md: "# 新", content_html: "<h1>新</h1>", applied_at: "" } },
   ] });
-  await sendAssistantQuestion("把总结改短");
-  const call = fetchCalls[1];
-  if (call.options.method !== "POST" || call.options.body !== JSON.stringify({ question: "把总结改短" })) {
-    throw new Error(`unexpected ask request: ${JSON.stringify(call)}`);
-  }
-  const html = document.getElementById("assistant-messages").innerHTML;
-  if (!html.includes("已查阅") || !html.includes("周报 2026-W46")) throw new Error(`tool trace missing: ${html}`);
-  if (!html.includes("周报修改稿") || !html.includes("applyAssistantProposal(2")) {
-    throw new Error(`proposal was not rendered with an apply action: ${html}`);
+  if (!es.closed || state.assistant.run) throw new Error("done must close the stream");
+  if (!box().includes("已查阅") || !box().includes("周报 2026-W46") || !box().includes("applyAssistantProposal(2")) {
+    throw new Error(`final thread not rendered: ${box()}`);
   }
 
   responses.push({ report: { edited_at: "2026-11-21T00:00:00+00:00" }, week_key: "2026-W47", has_report: true, messages: [] });
   responses.push({ project: { id: 1, name: "Demo" }, week_key: "2026-W47", role: "owner", jobs: [] });
   await applyAssistantProposal(2);
   if (fetchCalls[2].path !== "/api/projects/1/assistant/messages/2/apply") throw new Error("apply hit the wrong path");
-  if (fetchCalls[3].path !== "/api/projects/1/workspace") throw new Error("workspace was not refreshed after apply");
   if (!toasts.some((m) => m.includes("已应用"))) throw new Error("apply toast missing");
 
-  // a failed question keeps the text for retry and shows the error
-  responses.push(new Error("助手回答失败：provider down"));
+  // stop: cancel request, then the cancelled event ends the run
+  responses.push({ run: { id: "r2", question: "长问题", done: false } });
+  await sendAssistantQuestion("长问题");
+  responses.push({ run: { id: "r2", done: false } });
+  await stopAssistantRun();
+  if (fetchCalls[fetchCalls.length - 1].path !== "/api/projects/1/assistant/runs/r2/cancel") throw new Error("cancel not sent");
+  sources[2].fire("cancelled", {});
+  if (state.assistant.run || !toasts.some((m) => m.includes("已停止"))) throw new Error("stop did not finish");
+  if (document.getElementById("assistant-input").value !== "长问题") throw new Error("stopped question not restored");
+  document.getElementById("assistant-input").value = "";
+
+  // a failed run keeps the question for retry and shows the error
+  responses.push({ run: { id: "r3", question: "本周进展？", done: false } });
   await sendAssistantQuestion("本周进展？");
-  if (!document.getElementById("assistant-messages").innerHTML.includes("provider down")) throw new Error("error not shown");
+  sources[3].fire("error", { message: "助手回答失败：provider down" });
+  if (!box().includes("provider down")) throw new Error("error not shown");
   if (document.getElementById("assistant-input").value !== "本周进展？") throw new Error("question was not restored");
-  if (state.assistant.sending) throw new Error("sending flag stuck");
+  // a busy server (409) is surfaced too
+  responses.push(new Error("助手还在回答上一个问题"));
+  await sendAssistantQuestion("再问");
+  if (!box().includes("还在回答")) throw new Error("409 not shown");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

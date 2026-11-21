@@ -59,7 +59,7 @@ const state = {
   projectShares: [],
   shareCandidates: [],
   assistantOpen: localStorage.getItem("assistantOpen") === "1",
-  assistant: { projectId: null, weekKey: "", hasReport: false, messages: [], loading: false, sending: false, pendingQuestion: "", error: "" },
+  assistant: { projectId: null, weekKey: "", hasReport: false, messages: [], loading: false, sending: false, run: null, error: "" },
   busy: false,
 };
 
@@ -165,7 +165,8 @@ async function api(path, options = {}) {
 function showLoginView() {
   state.currentUser = null;
   state.isAdmin = false;
-  state.assistant = { ...state.assistant, projectId: null, messages: [], error: "" };
+  closeAssistantStream();
+  state.assistant = { ...state.assistant, projectId: null, messages: [], run: null, error: "" };
   $("login-view").classList.remove("hidden");
   document.body.classList.add("logged-out");
   const password = $("login-password");
@@ -3033,7 +3034,7 @@ function syncAssistantPanel() {
   if (!visible) return;
   const ws = state.workspace;
   const staleWeek = state.assistant.weekKey && state.assistant.weekKey !== ws.week_key;
-  if ((state.assistant.projectId !== ws.project.id || staleWeek) && !state.assistant.loading && !state.assistant.sending) {
+  if ((state.assistant.projectId !== ws.project.id || staleWeek) && !state.assistant.loading && !state.assistant.sending && !state.assistant.run) {
     loadAssistant();
     return;
   }
@@ -3061,12 +3062,15 @@ function setAssistantThread(projectId, data) {
 
 async function loadAssistant() {
   const projectId = state.projectId;
-  state.assistant = { ...state.assistant, projectId, messages: [], loading: true, error: "" };
+  closeAssistantStream();
+  state.assistant = { ...state.assistant, projectId, messages: [], loading: true, run: null, error: "" };
   renderAssistant();
   try {
     const data = await api(`/api/projects/${projectId}/assistant`);
     if (state.projectId !== projectId) return;
     setAssistantThread(projectId, data);
+    // an answer still running (e.g. after a reload) streams in from the start
+    if (data.active_run) startAssistantRun(projectId, data.active_run);
   } catch (err) {
     if (state.projectId === projectId) state.assistant.error = err.message;
   } finally {
@@ -3094,13 +3098,136 @@ const ASSISTANT_TOOL_LABELS = {
 
 function assistantToolsHtml(tools) {
   if (!tools || !tools.length) return "";
+  const running = tools.some((tool) => tool.running);
   const items = tools.map((tool) => {
     const arg = Object.values(tool.args || {}).find((value) => value !== "" && value !== null && value !== undefined);
     const label = `${ASSISTANT_TOOL_LABELS[tool.name] || tool.name}${arg !== undefined ? ` ${arg}` : ""}`;
-    const title = `${tool.name} · ${((tool.ms || 0) / 1000).toFixed(1)}s${tool.error ? " · 失败" : ""}`;
-    return `<span class="assistant-tool${tool.error ? " is-error" : ""}" title="${escapeAttr(title)}">${escapeHtml(label)}</span>`;
+    const timing = tool.running ? "进行中" : `${((tool.ms || 0) / 1000).toFixed(1)}s`;
+    const title = `${tool.name} · ${timing}${tool.error ? " · 失败" : ""}`;
+    const cls = `assistant-tool${tool.error ? " is-error" : ""}${tool.running ? " is-running" : ""}`;
+    return `<span class="${cls}" title="${escapeAttr(title)}">${escapeHtml(label)}</span>`;
   });
-  return `<div class="assistant-tools"><small>已查阅</small>${items.join("")}</div>`;
+  return `<div class="assistant-tools"><small>${running ? "查阅中" : "已查阅"}</small>${items.join("")}</div>`;
+}
+
+// 流式回答：提问创建后台 run，EventSource 订阅 round/text/tool_start/tool_end
+// 事件，断线由浏览器带 Last-Event-ID 自动续传；同一轮的多个工具在服务端并行执行
+const ASSISTANT_REPORT_MARKER = "<<<REPORT>>>";
+let assistantStream = null;
+
+function closeAssistantStream() {
+  if (assistantStream) assistantStream.close();
+  assistantStream = null;
+}
+
+function assistantLiveHtml(run) {
+  const marker = run.text.indexOf(ASSISTANT_REPORT_MARKER);
+  const visible = (marker >= 0 ? run.text.slice(0, marker) : run.text).trim();
+  const drafting = marker >= 0
+    ? `<div class="assistant-drafting"><span class="spinner small" aria-hidden="true"></span><span>正在生成周报修改稿…（${run.text.length - marker} 字）</span></div>`
+    : "";
+  const waiting = !visible && !drafting
+    ? `<div class="assistant-thinking"><span class="spinner small" aria-hidden="true"></span><span>${run.stopping ? "正在停止…" : run.tools.some((t) => t.running) ? "正在并行查阅资料…" : "正在思考…"}</span></div>`
+    : "";
+  const body = visible ? `<div class="assistant-stream">${escapeHtml(visible)}<span class="assistant-caret" aria-hidden="true"></span></div>` : "";
+  return `
+    <div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(run.question)}</div></div>
+    <div class="assistant-msg is-assistant" id="assistant-live">
+      ${assistantToolsHtml(run.tools)}
+      <div class="assistant-bubble">${waiting}${body}${drafting}</div>
+    </div>`;
+}
+
+let assistantLiveFrame = 0;
+
+function renderAssistantLive() {
+  // text deltas only touch the live bubble, batched per animation frame
+  if (assistantLiveFrame) return;
+  const paint = () => {
+    assistantLiveFrame = 0;
+    const run = state.assistant.run;
+    const live = $("assistant-live");
+    if (!run || !live || !live.parentElement) return renderAssistant();
+    const box = $("assistant-messages");
+    const pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    const holder = document.createElement("div");
+    holder.innerHTML = assistantLiveHtml(run);
+    live.replaceWith(holder.lastElementChild);
+    if (pinned) box.scrollTop = box.scrollHeight;
+  };
+  if (typeof window !== "undefined" && window.requestAnimationFrame) {
+    assistantLiveFrame = window.requestAnimationFrame(paint);
+  } else {
+    paint();
+  }
+}
+
+function startAssistantRun(projectId, run) {
+  closeAssistantStream();
+  const a = state.assistant;
+  a.run = { id: run.id, question: run.question, text: "", tools: [], stopping: false };
+  renderAssistant();
+  if (typeof EventSource === "undefined") {
+    a.error = "当前浏览器不支持流式输出";
+    a.run = null;
+    renderAssistant();
+    return;
+  }
+  const source = new EventSource(`/api/projects/${projectId}/assistant/runs/${run.id}/events`);
+  assistantStream = source;
+  const current = () => (assistantStream === source && state.projectId === projectId ? a.run : null);
+  const on = (type, handler) => source.addEventListener(type, (event) => {
+    const live = current();
+    if (!live) return;
+    handler(live, JSON.parse(event.data || "{}"));
+  });
+  on("round", (live) => { live.text = ""; renderAssistantLive(); });
+  on("text", (live, data) => { live.text += data.delta || ""; renderAssistantLive(); });
+  on("tool_start", (live, data) => {
+    live.tools.push({ ...data, running: true });
+    renderAssistantLive();
+  });
+  on("tool_end", (live, data) => {
+    const tool = live.tools.find((item) => item.id === data.id && item.running);
+    if (tool) Object.assign(tool, data, { running: false });
+    renderAssistantLive();
+  });
+  const finish = (live, message, restoreQuestion) => {
+    closeAssistantStream();
+    a.run = null;
+    if (message) a.error = message;
+    renderAssistant();
+    // a failed or stopped question goes back into the box for editing
+    const input = $("assistant-input");
+    if (restoreQuestion && input && !input.value) input.value = live.question;
+  };
+  on("done", (live, data) => {
+    setAssistantThread(projectId, data);
+    finish(live, "", false);
+  });
+  on("error", (live, data) => finish(live, data.message || "助手回答失败", true));
+  on("cancelled", (live) => { finish(live, "", true); toast("已停止回答"); });
+  source.onerror = () => {
+    // CONNECTING: the browser retries with Last-Event-ID; CLOSED: the run is
+    // gone (e.g. service restart), so resync the stored thread
+    if (source.readyState === 2 && current()) {
+      closeAssistantStream();
+      loadAssistant();
+    }
+  };
+}
+
+async function stopAssistantRun() {
+  const run = state.assistant.run;
+  if (!run || run.stopping) return;
+  run.stopping = true;
+  renderAssistantLive();
+  try {
+    await api(`/api/projects/${state.projectId}/assistant/runs/${run.id}/cancel`, { method: "POST", body: "{}" });
+  } catch (err) {
+    run.stopping = false;
+    toast(err.message);
+  }
 }
 
 function assistantMessageHtml(message) {
@@ -3137,23 +3264,23 @@ function renderAssistant() {
   const context = $("assistant-context");
   if (context) context.textContent = ws ? `${ws.project.name} · ${a.weekKey || ws.week_key}` : "";
   const clear = $("assistant-clear");
-  if (clear) clear.disabled = a.sending || a.loading || !a.messages.length;
+  const busy = a.sending || !!a.run;
+  if (clear) clear.disabled = busy || a.loading || !a.messages.length;
   const send = $("assistant-send");
   if (send) {
-    send.disabled = a.sending || a.loading;
-    send.textContent = a.sending ? "回答中…" : "发送";
+    send.disabled = a.sending || a.loading || !!(a.run && a.run.stopping);
+    send.textContent = a.run ? "停止" : a.sending ? "提交中…" : "发送";
+    send.classList.toggle("danger", !!a.run);
+    send.classList.toggle("primary", !a.run);
   }
   const input = $("assistant-input");
-  if (input) input.disabled = a.sending;
+  if (input) input.disabled = busy;
   if (a.loading) {
     box.innerHTML = `<div class="assistant-empty"><span class="spinner small" aria-hidden="true"></span><span>正在加载对话…</span></div>`;
     return;
   }
   const parts = a.messages.map(assistantMessageHtml);
-  if (a.sending) {
-    parts.push(`<div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(a.pendingQuestion)}</div></div>`);
-    parts.push(`<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-thinking"><span class="spinner small" aria-hidden="true"></span><span>正在按需查阅资料并分析…</span></div></div>`);
-  }
+  if (a.run) parts.push(assistantLiveHtml(a.run));
   if (a.error) parts.push(`<div class="notice danger assistant-error"><span>${escapeHtml(a.error)}</span></div>`);
   if (!parts.length) {
     const hint = a.hasReport || (ws && ws.report) ? "" : `<p class="assistant-hint">本周还没有生成周报，可以先就本周资料提问。</p>`;
@@ -3170,9 +3297,9 @@ function renderAssistant() {
 async function sendAssistantQuestion(question) {
   const text = String(question || "").trim();
   const a = state.assistant;
-  if (!text || a.sending || a.loading || !state.projectId) return;
+  if (!text || a.sending || a.run || a.loading || !state.projectId) return;
   const projectId = state.projectId;
-  Object.assign(a, { sending: true, pendingQuestion: text, error: "" });
+  Object.assign(a, { sending: true, error: "" });
   const input = $("assistant-input");
   if (input) input.value = "";
   renderAssistant();
@@ -3181,16 +3308,15 @@ async function sendAssistantQuestion(question) {
       method: "POST",
       body: JSON.stringify({ question: text }),
     });
-    if (state.projectId === projectId) setAssistantThread(projectId, data);
+    a.sending = false;
+    if (state.projectId === projectId) startAssistantRun(projectId, data.run);
   } catch (err) {
+    a.sending = false;
     if (state.projectId === projectId) {
       a.error = err.message;
       if (input && !input.value) input.value = text;
+      renderAssistant();
     }
-  } finally {
-    a.sending = false;
-    a.pendingQuestion = "";
-    if (state.projectId === projectId) renderAssistant();
   }
 }
 
@@ -3215,7 +3341,7 @@ async function applyAssistantProposal(messageId, button) {
 
 async function clearAssistant() {
   const a = state.assistant;
-  if (!state.projectId || a.sending || !a.messages.length) return;
+  if (!state.projectId || a.sending || a.run || !a.messages.length) return;
   if (!window.confirm("清空本周与助手的全部对话？")) return;
   const projectId = state.projectId;
   try {
@@ -3562,7 +3688,8 @@ $("assistant-close").onclick = () => toggleAssistant(false);
 $("assistant-clear").onclick = clearAssistant;
 $("assistant-form").onsubmit = (event) => {
   event.preventDefault();
-  sendAssistantQuestion($("assistant-input").value);
+  if (state.assistant.run) stopAssistantRun();
+  else sendAssistantQuestion($("assistant-input").value);
 };
 $("assistant-input").addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
