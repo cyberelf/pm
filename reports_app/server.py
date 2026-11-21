@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse, quote
 
 from . import auth
 from . import device_auth
+from .operations import http_invoke, manifest as operations_manifest
 from .assistant import ask_assistant, assistant_thread, clear_assistant_thread, mark_proposal_applied, proposal_for_apply
 from .cold_storage import cold_storage_config, evaluate_cold_storage, material_file_path, storage_lock, validate_cold_target
 from .config import (
@@ -161,6 +162,8 @@ from .validation import (
 
 PUBLIC_API_ROUTES = {
     ("GET", "/api/auth/state"),
+    # operation manifest: metadata only, lets the CLI build --help before login
+    ("GET", "/api/ops"),
     ("POST", "/api/auth/login"),
     # the OAuth-style device flow for CLI clients: start and poll run
     # without a session (the poll handshake itself is the credential);
@@ -752,6 +755,16 @@ class Handler(BaseHTTPRequestHandler):
                 project_id = create_project(conn, payload, user)
                 conn.commit()
                 self.json({"id": project_id}, HTTPStatus.CREATED)
+                return
+            if path == "/api/ops" and method == "GET":
+                self.json(operations_manifest())
+                return
+            if len(parts) == 3 and parts[:2] == ["api", "ops"] and method == "POST":
+                # one registry behind the CLI, this API and the assistant's tools
+                try:
+                    self.json(http_invoke(conn, user_id, parts[2], self.body_json()))
+                except LookupError as exc:
+                    self.error(HTTPStatus.NOT_FOUND, str(exc).strip("'\""))
                 return
             if path == "/api/todos" and method == "GET":
                 self.json({"todos": todo_rows(conn, user_id)})

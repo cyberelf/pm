@@ -3,7 +3,7 @@
 Each account keeps its own conversation per project and project week. The
 prompt carries only the current report and a cheap local inventory; the
 internal agent pulls everything else on demand through read-only tools that
-mirror the zreport CLI (assistant_tools.py), so simple questions never wait
+come from the shared operation registry (operations.py) that also backs the zreport CLI, so simple questions never wait
 for Git APIs. When the user asks to adjust the report the agent returns a
 complete revised report between fixed markers; the revision is stored with
 the answer and only replaces the report when a writer applies it explicitly.
@@ -12,7 +12,7 @@ the answer and only replaces the report when a writer applies it explicitly.
 import json
 import re
 
-from .assistant_tools import TOOL_SPECS, AssistantTools, inventory
+from .operations import AgentToolbox, agent_inventory
 from .markdown import render_markdown
 from .reports import fake_provider_enabled
 from .timeutil import current_week_key, iso_now
@@ -31,8 +31,8 @@ SYSTEM_PROMPT = f"""你是项目周报助手，帮助用户理解、追问和调
 
 取证方式：
 - 当前周报和项目概况已在下方；能直接根据它们回答的问题不要调用工具。
-- 需要更多依据时按需调用工具，只取回答所需的部分：历史周报用 weekly_list/weekly_show，资料用 materials_list/material_show 或 search，计划与里程碑用 plan_show，本周补充用 weekly_update_show，系统预警用 risks_list，仓库用 git_repos_list。
-- git_commits 和 git_activity 会访问远程 API、较慢，只在问题确实涉及代码提交、PR/Issue 或看板时调用，并尽量指定 repo。
+- 需要更多依据时按需调用工具，只取回答所需的部分：历史周报用 weekly_list/weekly_show，资料用 materials_list/material_show 或 search，计划与里程碑用 plan_show，本周补充用 supplement_show，系统预警用 risks_list，仓库用 repos_list。
+- repos_commits 和 repos_activity 会访问远程 API、较慢，只在问题确实涉及代码提交、PR/Issue 或看板时调用，并尽量指定 repo。
 - 能并行的工具调用请在同一轮一起发出。
 
 回答规则：
@@ -171,7 +171,7 @@ def ask_assistant(conn, project_id, user_id, question, timeout=180):
     rows = thread_rows(conn, project_id, user_id, week_key, limit=HISTORY_TURNS_FOR_LLM)
     if rows and rows[0]["role"] != "user":
         rows = rows[1:]
-    tools = AssistantTools(conn, project, user_id, week_key)
+    tools = AgentToolbox(conn, user_id, project_id)
     if fake_provider_enabled():
         # exercise the executor offline so traces and storage stay covered
         trace = [{"name": "weekly_list", "args": {}, "ms": 0, "chars": len(tools.run("weekly_list", {})), "error": False}]
@@ -180,7 +180,7 @@ def ask_assistant(conn, project_id, user_id, question, timeout=180):
         from .internal_agent import internal_tool_chat, resolve_llm_settings
 
         system = build_assistant_system_prompt(
-            project, week_key, report_md, inventory(conn, project, week_key), latest_pending_proposal(rows)
+            project, week_key, report_md, agent_inventory(conn, project, week_key), latest_pending_proposal(rows)
         )
         history = [
             {
@@ -191,7 +191,7 @@ def ask_assistant(conn, project_id, user_id, question, timeout=180):
         ]
         try:
             raw, trace = internal_tool_chat(
-                question, resolve_llm_settings(conn), TOOL_SPECS, tools.run,
+                question, resolve_llm_settings(conn), AgentToolbox.specs(), tools.run,
                 system=system, history=history, timeout=timeout, max_rounds=MAX_TOOL_ROUNDS,
             )
         except RuntimeError as exc:

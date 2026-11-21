@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from reports_app import assistant, assistant_tools, auth
-from reports_app.assistant_tools import AssistantTools
+from reports_app import assistant, auth, operations
+from reports_app.operations import AgentToolbox
 from reports_app.assistant import (
     REPORT_END,
     REPORT_START,
@@ -41,7 +41,7 @@ class AssistantTest(unittest.TestCase):
         )
         self.conn.commit()
         self.week_key = current_week_key("Asia/Shanghai")
-        assistant_tools.clear_git_cache()
+        operations.clear_git_cache()
         os.environ["REPORTS_FAKE_PROVIDER"] = "1"
         self.server = None
 
@@ -235,7 +235,7 @@ class AssistantTest(unittest.TestCase):
         self.assertIn("2020-W01", first["system"])
         self.assertNotIn("上周完成接口设计", first["system"])
         self.assertNotIn("接口联调完成", first["system"])
-        self.assertEqual({t["name"] for t in first["tools"]} >= {"weekly_show", "search", "material_show", "git_commits"}, True)
+        self.assertEqual({t["name"] for t in first["tools"]} >= {"weekly_show", "search", "material_show", "repos_commits"}, True)
         self.assertEqual(first["history"], [])
         self.assertEqual([h["role"] for h in second["history"]], ["user", "assistant"])
         self.assertIn("最近一次未应用的修改稿", third["system"])
@@ -262,8 +262,7 @@ class AssistantTest(unittest.TestCase):
         self.assertEqual(reply["tools"][0]["name"], "weekly_list")
 
     def tools(self, user_id=None):
-        project = self.conn.execute("SELECT * FROM projects WHERE id = ?", (self.project_id,)).fetchone()
-        return AssistantTools(self.conn, project, user_id or self.user_id, self.week_key)
+        return AgentToolbox(self.conn, user_id or self.user_id, self.project_id)
 
     def test_tools_are_scoped_bounded_and_report_errors(self):
         self.seed_report(content_md="# 本周")
@@ -297,7 +296,7 @@ class AssistantTest(unittest.TestCase):
         hits = json.loads(tools.run("search", {"query": "别的项目"}))["hits"]
         self.assertFalse(any(h["source_id"] == foreign for h in hits))
         self.assertIn("plan", json.loads(tools.run("plan_show", {})))
-        self.assertEqual(json.loads(tools.run("git_commits", {}))["repos"], [])
+        self.assertEqual(json.loads(tools.run("repos_commits", {}))["repos"], [])
         self.assertLessEqual(len(tools.run("material_show", {"id": material_id})), 12100)
 
     def test_git_tools_cache_and_survive_provider_errors(self):
@@ -310,15 +309,15 @@ class AssistantTest(unittest.TestCase):
         )
         self.conn.commit()
         tools = self.tools()
-        with mock.patch("reports_app.assistant_tools.repo_commit_context", return_value={"repo": "acme/app", "commits": [{"message": "fix"}]}) as fetch:
-            first = json.loads(tools.run("git_commits", {"repo": "acme/app"}))
-            tools.run("git_commits", {})
+        with mock.patch("reports_app.operations.repo_commit_context", return_value={"repo": "acme/app", "commits": [{"message": "fix"}]}) as fetch:
+            first = json.loads(tools.run("repos_commits", {"repo": "acme/app"}))
+            tools.run("repos_commits", {})
             self.assertEqual(first["repos"][0]["commits"][0]["message"], "fix")
             self.assertEqual(fetch.call_count, 1)
-        self.assertIn("error", json.loads(tools.run("git_commits", {"repo": "nope/nope"})))
-        assistant_tools.clear_git_cache()
-        with mock.patch("reports_app.assistant_tools.repo_commit_context", side_effect=RuntimeError("rate limited")):
-            self.assertIn("rate limited", json.loads(tools.run("git_commits", {}))["error"])
+        self.assertIn("error", json.loads(tools.run("repos_commits", {"repo": "nope/nope"})))
+        operations.clear_git_cache()
+        with mock.patch("reports_app.operations.repo_commit_context", side_effect=RuntimeError("rate limited")):
+            self.assertIn("rate limited", json.loads(tools.run("repos_commits", {}))["error"])
 
 
 class InternalChatHistoryTest(unittest.TestCase):
