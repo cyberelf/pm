@@ -201,3 +201,12 @@ Validation (2026-11-15): All 216 unit tests, node --check static/app.js and git 
 - [x] 20.4 Add the docked 助手问答 side panel with suggestions, loading states, revision preview and apply confirmation; cover backend and frontend behavior with tests
 
 Validation (2026-11-21): All 226 unit tests, node --check static/app.js and git diff --check passed; OpenSpec validation passed with only the existing duplicate-task-ID and image-requirement-length warnings. An isolated fake-provider instance was exercised in headless Chromium at 1440px (light and dark) and 390px: suggestion question, adjustment proposal, apply confirmation, 已手工调整 badge and clear all worked with no page errors. The topbar toggle was moved into the project heading because the page-corner hit area covers the topbar's right edge. The LaunchAgent was reinstalled for platform 1.3.15; over the HTTPS listener the live assistant answered a real-LLM question with cited materials and PRs in about 45s, a follow-up resolved its reference from history in about 4s via the evidence cache, and the verification session and messages were removed. Plain HTTP on the VPN listener still times out locally, as before.
+
+## 21. On-demand assistant tools
+
+- [x] 21.1 Replace upfront evidence assembly with the current report plus a local inventory in the assistant prompt
+- [x] 21.2 Add project-scoped, bounded read-only tools mirroring the zreport CLI read commands plus plan, supplement, risks, materials list and Git repos/commits/activity, with a ten-minute Git cache
+- [x] 21.3 Run an OpenAI/Anthropic tool-calling loop in the internal agent with a forced final answer after six rounds; record and show the consulted tools per answer
+- [x] 21.4 Cover tool scoping, truncation, errors, caching and both provider loop formats with tests; verify against the live provider
+
+Validation (2026-11-21): All 230 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.16 was reinstalled and verified over HTTPS against the live Anthropic-compatible provider: questions answerable from the current report returned in 5–10s with no tool calls (previously about 45s for the first question); a history comparison called only weekly_show (17s), a material quote called search then material_show (21s), and a latest-commits question called git_commits for one repository (2.2s inside a 15s answer). The verification session and its messages were removed.

@@ -154,11 +154,16 @@ The system SHALL allow the workspace user to edit the Markdown body of the curre
 
 
 ### Requirement: Weekly report assistant Q&A
-The system SHALL provide a 助手问答 side panel in the weekly report workspace for free-form questions about the current week's report, progress, problem causes and conclusions. The internal agent SHALL answer only from the current report, the bounded current-week report evidence, recent historical reports and active risk warnings. Each account SHALL keep its own conversation per project week. Revised reports SHALL never replace the report without an explicit apply by a project writer.
+The system SHALL provide a 助手问答 side panel in the weekly report workspace for free-form questions about the current week's report, progress, problem causes and conclusions. The internal agent SHALL start from the current report and fetch further evidence on demand through project-scoped read-only tools. Each account SHALL keep its own conversation per project week. Revised reports SHALL never replace the report without an explicit apply by a project writer.
 
 #### Scenario: Ask about this week's progress
 - **WHEN** a project reader asks the assistant a question about the current week
 - **THEN** the system answers from the report and current-week evidence, cites the evidence sources it relied on, and states when the evidence has no relevant record
+
+#### Scenario: Evidence is fetched on demand
+- **WHEN** a question can be answered from the current report
+- **THEN** the assistant answers without calling tools or remote Git APIs
+- **AND** questions about history, materials, plans, supplements, risks, commits or PRs call only the matching tools (weekly list/show, search, material/report/TODO show, materials list, plan, weekly supplement, risks, Git repos/commits/activity), whose results are bounded and limited to the project and the asking account, and the answer lists the tools it consulted
 
 #### Scenario: Adjust a report conclusion
 - **WHEN** a user asks the assistant to change a conclusion of the current week report
