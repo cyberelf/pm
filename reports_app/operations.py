@@ -24,9 +24,12 @@ import json
 import mimetypes
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
+from .db import connect
 from .git_sources import fetch_org_projects, git_auth_for_user
 from .materials import store_manual_material, store_material, summarize_uploaded_materials
 from .reports import repo_commit_context, repo_extras_context, repo_fetch_switches_on
@@ -854,10 +857,18 @@ def http_invoke(conn, user_id, name, args):
 
 
 class AgentToolbox:
-    """Read-only operations as LLM tools, bound to one project."""
+    """Read-only operations as LLM tools, bound to one project.
 
-    def __init__(self, conn, user_id, project_id):
-        self.ctx = OpContext(conn, user_id, bound_project_id=project_id, for_agent=True)
+    Given a database path, every call opens its own connection, so the
+    calls of one model round can run concurrently (``run_many``); given an
+    open connection, calls must stay sequential on the caller's thread."""
+
+    MAX_PARALLEL = 4
+
+    def __init__(self, db, user_id, project_id):
+        self.db = db
+        self.user_id = user_id
+        self.project_id = project_id
 
     @staticmethod
     def specs():
@@ -867,16 +878,59 @@ class AgentToolbox:
             if op.agent
         ]
 
+    def _invoke(self, conn, name, args):
+        ctx = OpContext(conn, self.user_id, bound_project_id=self.project_id, for_agent=True)
+        return invoke(ctx, name, args)
+
     def run(self, name, args):
         """Bounded JSON text; failures come back as {"error": ...} so the
         model can recover within the same turn."""
         try:
-            result = invoke(self.ctx, name, args)
+            if isinstance(self.db, (str, Path)):
+                conn = connect(self.db)
+                try:
+                    result = self._invoke(conn, name, args)
+                    conn.commit()
+                finally:
+                    conn.close()
+            else:
+                result = self._invoke(self.db, name, args)
         except (ValidationError, LookupError, PermissionError) as exc:
             result = {"error": str(exc).strip("'\"")}
         except Exception as exc:  # network or provider failures stay inside the turn
             result = {"error": f"{name} failed: {exc}"}
         return clip(json.dumps(result, ensure_ascii=False, default=str), AGENT_RESULT_MAX_CHARS)
+
+    def run_many(self, calls, on_event=None):
+        """Run one round's calls concurrently (database path only) and
+        return their results in call order. on_event receives tool_start /
+        tool_end as each call begins and finishes; the returned trace
+        lists the finished calls."""
+        emit = on_event or (lambda kind, data: None)
+        trace = [None] * len(calls)
+
+        def one(index, call):
+            emit("tool_start", {"id": call["id"], "name": call["name"], "args": call["args"]})
+            started = time.monotonic()
+            result = self.run(call["name"], call["args"])
+            entry = {
+                "id": call["id"],
+                "name": call["name"],
+                "args": call["args"],
+                "ms": int((time.monotonic() - started) * 1000),
+                "chars": len(result),
+                "error": result.startswith('{"error"'),
+            }
+            trace[index] = entry
+            emit("tool_end", entry)
+            return result
+
+        if len(calls) > 1 and isinstance(self.db, (str, Path)):
+            with ThreadPoolExecutor(max_workers=min(self.MAX_PARALLEL, len(calls))) as pool:
+                results = list(pool.map(one, range(len(calls)), calls))
+        else:
+            results = [one(i, c) for i, c in enumerate(calls)]
+        return results, trace
 
 
 def agent_inventory(conn, project, week_key):

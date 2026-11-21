@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlparse, quote
 from . import auth
 from . import device_auth
 from .operations import http_invoke, manifest as operations_manifest
-from .assistant import ask_assistant, assistant_thread, clear_assistant_thread, mark_proposal_applied, proposal_for_apply
+from .assistant import assistant_thread, clear_assistant_thread, find_run, mark_proposal_applied, proposal_for_apply, start_run
 from .cold_storage import cold_storage_config, evaluate_cold_storage, material_file_path, storage_lock, validate_cold_target
 from .config import (
     APP_VERSION,
@@ -1093,14 +1093,27 @@ class Handler(BaseHTTPRequestHandler):
                         self.json(assistant_thread(conn, project_id, user_id))
                         return
                     if method == "POST":
-                        ask_assistant(conn, project_id, user_id, str(self.body_json().get("question") or ""))
-                        conn.commit()
-                        self.json(assistant_thread(conn, project_id, user_id))
+                        # answers stream from a background run; see .../runs/<id>/events
+                        run = start_run(self.server.db_path, project_id, user_id, str(self.body_json().get("question") or ""))
+                        self.json({"run": run.public()}, HTTPStatus.ACCEPTED)
                         return
                     if method == "DELETE":
                         clear_assistant_thread(conn, project_id, user_id)
                         conn.commit()
                         self.json(assistant_thread(conn, project_id, user_id))
+                        return
+                if len(parts) >= 6 and parts[3] == "assistant" and parts[4] == "runs":
+                    run = find_run(parts[5], project_id, user_id)
+                    if not run:
+                        self.error(HTTPStatus.NOT_FOUND, "assistant run not found")
+                        return
+                    if len(parts) == 7 and parts[6] == "events" and method == "GET":
+                        raw_after = self.headers.get("Last-Event-ID") or query.get("after", ["0"])[0]
+                        self.stream_run_events(run, int(raw_after) if str(raw_after).isdigit() else 0)
+                        return
+                    if len(parts) == 7 and parts[6] == "cancel" and method == "POST":
+                        run.cancel_requested = True
+                        self.json({"run": run.public()})
                         return
                 if (
                     len(parts) == 7 and parts[3] == "assistant" and parts[4] == "messages"
@@ -1314,6 +1327,39 @@ class Handler(BaseHTTPRequestHandler):
             content_type = "text/css"
         data = file_path.read_bytes()
         self._send_bytes(data, content_type)
+
+    def stream_run_events(self, run, after, heartbeat=15):
+        """Server-sent events for an assistant run, resumable after any
+        event id (EventSource sends Last-Event-ID on reconnect). The stream
+        ends after the run's terminal event."""
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        seq = after
+        try:
+            self.wfile.write(b"retry: 2000\n\n")
+            self.wfile.flush()
+            while True:
+                events, done = run.events_after(seq, heartbeat)
+                if events:
+                    chunk = "".join(
+                        f"id: {n}\nevent: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                        for n, kind, data in events
+                    )
+                    self.wfile.write(chunk.encode("utf-8"))
+                    seq = events[-1][0]
+                elif not done:
+                    self.wfile.write(b": keep-alive\n\n")
+                self.wfile.flush()
+                if done and seq >= len(run.events):
+                    return
+        except OSError:
+            return  # the client went away; the run keeps going
 
     def json(self, payload, status=HTTPStatus.OK, extra_headers=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

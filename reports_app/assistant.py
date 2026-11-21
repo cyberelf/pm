@@ -11,10 +11,18 @@ the answer and only replaces the report when a writer applies it explicitly.
 
 import json
 import re
+import secrets
+import sys
+import threading
+import time
+import traceback
+from contextlib import closing
 
+from .db import connect
 from .operations import AgentToolbox, agent_inventory
 from .markdown import render_markdown
 from .reports import fake_provider_enabled
+from .task_queue import QueueFullError
 from .timeutil import current_week_key, iso_now
 from .validation import ValidationError
 
@@ -89,13 +97,17 @@ def thread_rows(conn, project_id, user_id, week_key, limit=THREAD_LIMIT):
     return list(reversed(rows))
 
 
-def assistant_thread(conn, project_id, user_id):
+def assistant_thread(conn, project_id, user_id, include_active=True):
     _, week_key = project_week(conn, project_id)
-    return {
+    thread = {
         "week_key": week_key,
         "has_report": current_report(conn, project_id, week_key) is not None,
         "messages": [message_public(row) for row in thread_rows(conn, project_id, user_id, week_key)],
     }
+    if include_active:
+        run = active_run(project_id, user_id)
+        thread["active_run"] = run.public() if run else None
+    return thread
 
 
 def clear_assistant_thread(conn, project_id, user_id):
@@ -156,43 +168,82 @@ def fake_assistant_reply(question, report_md):
     return answer
 
 
-def ask_assistant(conn, project_id, user_id, question, timeout=180):
-    """Answer one question in the caller's thread and persist both turns.
-    Failures raise before anything is stored, so the thread keeps
-    alternating user/assistant turns."""
+def validate_question(question):
     question = (question or "").strip()
     if not question:
         raise ValidationError("问题不能为空")
     if len(question) > QUESTION_MAX_CHARS:
         raise ValidationError(f"问题不能超过 {QUESTION_MAX_CHARS} 字")
-    project, week_key = project_week(conn, project_id)
-    report = current_report(conn, project_id, week_key)
-    report_md = (report["content_md"] or "") if report else ""
-    rows = thread_rows(conn, project_id, user_id, week_key, limit=HISTORY_TURNS_FOR_LLM)
-    if rows and rows[0]["role"] != "user":
-        rows = rows[1:]
-    tools = AgentToolbox(conn, user_id, project_id)
-    if fake_provider_enabled():
-        # exercise the executor offline so traces and storage stay covered
-        trace = [{"name": "weekly_list", "args": {}, "ms": 0, "chars": len(tools.run("weekly_list", {})), "error": False}]
-        raw = fake_assistant_reply(question, report_md)
-    else:
-        from .internal_agent import internal_tool_chat, resolve_llm_settings
+    return question
 
+
+def _open(db_path):
+    return closing(connect(db_path))
+
+
+def answer_question(db_path, project_id, user_id, question, emit=None, cancelled=None, timeout=180):
+    """Answer one question in the caller's thread and persist both turns.
+
+    emit(type, data) streams progress: "round", "text" deltas and
+    "tool_start"/"tool_end" as the tools of a round run concurrently.
+    cancelled() stops the run with ChatCancelled. Failures raise before
+    anything is stored, so the thread keeps alternating user/assistant
+    turns. Returns the stored answer's message id."""
+    from .internal_agent import ChatCancelled
+
+    emit = emit or (lambda kind, data: None)
+    cancelled = cancelled or (lambda: False)
+    question = validate_question(question)
+    with _open(db_path) as conn:
+        project, week_key = project_week(conn, project_id)
+        report = current_report(conn, project_id, week_key)
+        report_md = (report["content_md"] or "") if report else ""
+        rows = thread_rows(conn, project_id, user_id, week_key, limit=HISTORY_TURNS_FOR_LLM)
+        if rows and rows[0]["role"] != "user":
+            rows = rows[1:]
         system = build_assistant_system_prompt(
             project, week_key, report_md, agent_inventory(conn, project, week_key), latest_pending_proposal(rows)
         )
-        history = [
-            {
-                "role": row["role"],
-                "content": row["content"] + ("\n\n（已附修改稿）" if row["proposed_report_md"] else ""),
-            }
-            for row in rows
-        ]
+        settings = None
+        if not fake_provider_enabled():
+            from .internal_agent import resolve_llm_settings
+
+            settings = resolve_llm_settings(conn)
+    history = [
+        {"role": row["role"], "content": row["content"] + ("\n\n（已附修改稿）" if row["proposed_report_md"] else "")}
+        for row in rows
+    ]
+    tools = AgentToolbox(db_path, user_id, project_id)
+    trace = []
+
+    def run_tools(calls):
+        if cancelled():
+            raise ChatCancelled()
+        results, finished = tools.run_many(calls, emit)
+        trace.extend(finished)
+        if cancelled():
+            raise ChatCancelled()
+        return results
+
+    if settings is None:
+        # offline: exercise the tool executor and the text stream so the
+        # whole pipeline stays covered without an LLM
+        emit("round", {"round": 0})
+        run_tools([{"id": "fake-1", "name": "weekly_list", "args": {}}])
+        emit("round", {"round": 1})
+        raw = fake_assistant_reply(question, report_md)
+        for start in range(0, len(raw), 8):
+            if cancelled():
+                raise ChatCancelled()
+            emit("text", {"delta": raw[start:start + 8]})
+    else:
+        from .internal_agent import internal_tool_chat
+
         try:
-            raw, trace = internal_tool_chat(
-                question, resolve_llm_settings(conn), AgentToolbox.specs(), tools.run,
+            raw = internal_tool_chat(
+                question, settings, AgentToolbox.specs(), run_tools,
                 system=system, history=history, timeout=timeout, max_rounds=MAX_TOOL_ROUNDS,
+                on_event=emit, cancelled=cancelled,
             )
         except RuntimeError as exc:
             raise ValidationError(f"助手回答失败：{exc}") from exc
@@ -204,23 +255,135 @@ def ask_assistant(conn, project_id, user_id, question, timeout=180):
         raise ValidationError("助手没有返回内容，请重试")
     if not answer:
         answer = "已生成修改稿，确认后可应用到本周周报。"
-    now = iso_now()
-    conn.execute(
-        """
-        INSERT INTO assistant_messages (project_id, user_id, week_key, role, content, created_at)
-        VALUES (?, ?, ?, 'user', ?, ?)
-        """,
-        (project_id, user_id, week_key, question, now),
-    )
-    cur = conn.execute(
-        """
-        INSERT INTO assistant_messages
-        (project_id, user_id, week_key, role, content, proposed_report_md, tool_trace_json, created_at)
-        VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
-        """,
-        (project_id, user_id, week_key, answer, proposal, json.dumps(trace, ensure_ascii=False), iso_now()),
-    )
-    return cur.lastrowid
+    if cancelled():
+        raise ChatCancelled()
+    with _open(db_path) as conn:
+        now = iso_now()
+        conn.execute(
+            """
+            INSERT INTO assistant_messages (project_id, user_id, week_key, role, content, created_at)
+            VALUES (?, ?, ?, 'user', ?, ?)
+            """,
+            (project_id, user_id, week_key, question, now),
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO assistant_messages
+            (project_id, user_id, week_key, role, content, proposed_report_md, tool_trace_json, created_at)
+            VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
+            """,
+            (project_id, user_id, week_key, answer, proposal, json.dumps(trace, ensure_ascii=False), iso_now()),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+# ---------------------------------------------------------------- background runs
+
+
+RUN_RETENTION_SECONDS = 300
+TERMINAL_EVENTS = {"done", "error", "cancelled"}
+
+
+class AssistantBusy(QueueFullError):
+    """One run per account and project at a time (HTTP 409)."""
+
+
+class AssistantRun:
+    """An answer being produced in the background. Events are kept in
+    order with 1-based ids so a stream can resume after any id."""
+
+    def __init__(self, project_id, user_id, question):
+        self.id = secrets.token_hex(8)
+        self.project_id = project_id
+        self.user_id = user_id
+        self.question = question
+        self.events = []
+        self.cond = threading.Condition()
+        self.cancel_requested = False
+        self.finished_at = None
+
+    @property
+    def done(self):
+        return self.finished_at is not None
+
+    def emit(self, kind, data):
+        with self.cond:
+            if self.done:
+                return
+            self.events.append((len(self.events) + 1, kind, data))
+            if kind in TERMINAL_EVENTS:
+                self.finished_at = time.monotonic()
+            self.cond.notify_all()
+
+    def events_after(self, seq, timeout):
+        with self.cond:
+            if len(self.events) <= seq and not self.done:
+                self.cond.wait(timeout)
+            return self.events[seq:], self.done
+
+    def public(self):
+        return {"id": self.id, "question": self.question, "done": self.done}
+
+
+_runs = {}
+_runs_lock = threading.Lock()
+
+
+def _purge_runs():
+    now = time.monotonic()
+    for run_id in [k for k, r in _runs.items() if r.done and now - r.finished_at > RUN_RETENTION_SECONDS]:
+        del _runs[run_id]
+
+
+def active_run(project_id, user_id):
+    with _runs_lock:
+        return next(
+            (r for r in _runs.values() if r.project_id == project_id and r.user_id == user_id and not r.done),
+            None,
+        )
+
+
+def find_run(run_id, project_id, user_id):
+    with _runs_lock:
+        run = _runs.get(run_id)
+    if not run or run.project_id != project_id or run.user_id != user_id:
+        return None
+    return run
+
+
+def start_run(db_path, project_id, user_id, question):
+    """Validate and start answering in a background thread; progress and
+    the final thread arrive as run events."""
+    question = validate_question(question)
+    with _runs_lock:
+        _purge_runs()
+        if any(r.project_id == project_id and r.user_id == user_id and not r.done for r in _runs.values()):
+            raise AssistantBusy("助手还在回答上一个问题，请稍候或先停止")
+        run = AssistantRun(project_id, user_id, question)
+        _runs[run.id] = run
+    threading.Thread(target=_run_worker, args=(db_path, run), name=f"assistant-{run.id}", daemon=True).start()
+    return run
+
+
+def _run_worker(db_path, run):
+    from .internal_agent import ChatCancelled
+
+    try:
+        message_id = answer_question(
+            db_path, run.project_id, run.user_id, run.question,
+            emit=run.emit, cancelled=lambda: run.cancel_requested,
+        )
+        with _open(db_path) as conn:
+            thread = assistant_thread(conn, run.project_id, run.user_id, include_active=False)
+        run.emit("done", {"message_id": message_id, **thread})
+    except ChatCancelled:
+        run.emit("cancelled", {})
+    except (ValidationError, LookupError) as exc:
+        run.emit("error", {"message": str(exc).strip("'\"")})
+    except Exception as exc:
+        print(f"assistant run {run.id} failed: {exc}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+        run.emit("error", {"message": "助手内部错误，请重试"})
 
 
 def proposal_for_apply(conn, project_id, user_id, message_id):

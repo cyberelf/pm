@@ -12,7 +12,6 @@ installed.
 import base64
 import json
 import os
-import time
 
 from .config import (
     DEFAULT_LLM_BASE_URLS,
@@ -156,30 +155,68 @@ def _anthropic_block(block):
     return dict(block)
 
 
-def internal_tool_chat(prompt, settings, tools, run_tool, system=None, history=None, timeout=120,
-                       max_rounds=6, temperature=None):
-    """Chat with on-demand tool calls. tools are provider-neutral
-    {name, description, parameters} specs; run_tool(name, args) returns the
-    result text. The loop ends when the model answers without calling a
-    tool; the final round forbids tools so it always ends with text.
-    Returns (answer_text, trace) where trace lists each executed call."""
+class ChatCancelled(Exception):
+    """The caller stopped a streaming chat."""
+
+
+def _openai_stream_round(client, kwargs, on_text, cancelled):
+    """One streamed chat.completions round: (text, tool_calls)."""
+    text_parts = []
+    calls = {}
+    for chunk in client.chat.completions.create(stream=True, **kwargs):
+        if cancelled():
+            raise ChatCancelled()
+        if not getattr(chunk, "choices", None):
+            continue
+        delta = chunk.choices[0].delta
+        if getattr(delta, "content", None):
+            text_parts.append(delta.content)
+            on_text(delta.content)
+        for tc in getattr(delta, "tool_calls", None) or []:
+            slot = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+            if tc.id:
+                slot["id"] = tc.id
+            fn = getattr(tc, "function", None)
+            if fn is not None:
+                slot["name"] += fn.name or ""
+                slot["arguments"] += fn.arguments or ""
+    return "".join(text_parts), [calls[i] for i in sorted(calls)]
+
+
+def _anthropic_stream_round(client, kwargs, on_text, cancelled):
+    """One streamed Messages round: (text, tool_use blocks, content)."""
+    with client.messages.stream(**kwargs) as stream:
+        for text in stream.text_stream:
+            if cancelled():
+                raise ChatCancelled()
+            on_text(text)
+        final = stream.get_final_message()
+    text = "".join(b.text for b in final.content if getattr(b, "type", "") == "text")
+    calls = [b for b in final.content if getattr(b, "type", "") == "tool_use"]
+    return text, calls, final.content
+
+
+def internal_tool_chat(prompt, settings, tools, run_tools, system=None, history=None, timeout=120,
+                       max_rounds=6, temperature=None, on_event=None, cancelled=None):
+    """Streamed chat with on-demand tool calls.
+
+    tools are provider-neutral {name, description, parameters} specs.
+    run_tools(calls) receives every call the model made in one round as
+    [{"id", "name", "args"}] and returns the result texts in the same order,
+    so independent tools can run concurrently. on_event(type, data) receives
+    "round" (a new model turn begins; earlier streamed text was preamble),
+    "text" (a streamed delta). The final round forbids tools so the loop
+    always ends with an answer. cancelled() is polled while streaming and
+    raises ChatCancelled. Returns the final answer text."""
     validate_llm_settings(settings)
+    emit = on_event or (lambda kind, data: None)
+    cancelled = cancelled or (lambda: False)
     client = build_client(settings, timeout=timeout)
     messages = [{"role": item["role"], "content": item["content"]} for item in (history or [])]
     messages.append({"role": "user", "content": prompt})
-    trace = []
 
-    def execute(name, args):
-        started = time.monotonic()
-        result = run_tool(name, args)
-        trace.append({
-            "name": name,
-            "args": args,
-            "ms": int((time.monotonic() - started) * 1000),
-            "chars": len(result),
-            "error": result.startswith('{"error"'),
-        })
-        return result
+    def on_text(delta):
+        emit("text", {"delta": delta})
 
     try:
         if settings["provider"] == "openai":
@@ -187,32 +224,36 @@ def internal_tool_chat(prompt, settings, tools, run_tool, system=None, history=N
                 messages.insert(0, {"role": "system", "content": system})
             specs = [{"type": "function", "function": spec} for spec in tools]
             for round_index in range(max_rounds + 1):
+                emit("round", {"round": round_index})
                 kwargs = {"model": settings["model"], "messages": messages, "tools": specs}
                 if round_index == max_rounds:
                     kwargs["tool_choice"] = "none"
                 if temperature is not None:
                     kwargs["temperature"] = temperature
-                message = client.chat.completions.create(**kwargs).choices[0].message
-                calls = list(message.tool_calls or [])
+                text, calls = _openai_stream_round(client, kwargs, on_text, cancelled)
                 if not calls:
-                    return (message.content or "").strip(), trace
+                    return text.strip()
                 messages.append({
                     "role": "assistant",
-                    "content": message.content or "",
+                    "content": text,
                     "tool_calls": [
-                        {"id": c.id, "type": "function", "function": {"name": c.function.name, "arguments": c.function.arguments or "{}"}}
+                        {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
                         for c in calls
                     ],
                 })
-                for call in calls:
+                requests = []
+                for c in calls:
                     try:
-                        args = json.loads(call.function.arguments or "{}")
+                        args = json.loads(c["arguments"] or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    messages.append({"role": "tool", "tool_call_id": call.id, "content": execute(call.function.name, args)})
-            return "", trace
+                    requests.append({"id": c["id"], "name": c["name"], "args": args if isinstance(args, dict) else {}})
+                for call, result in zip(requests, run_tools(requests)):
+                    messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
+            return ""
         specs = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools]
         for round_index in range(max_rounds + 1):
+            emit("round", {"round": round_index})
             kwargs = {
                 "model": settings["model"],
                 "max_tokens": LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
@@ -225,20 +266,21 @@ def internal_tool_chat(prompt, settings, tools, run_tool, system=None, history=N
                 kwargs["system"] = system
             if temperature is not None:
                 kwargs["temperature"] = temperature
-            response = client.messages.create(**kwargs)
-            calls = [b for b in response.content if getattr(b, "type", "") == "tool_use"]
-            text = "".join(b.text for b in response.content if getattr(b, "type", "") == "text").strip()
+            text, calls, content = _anthropic_stream_round(client, kwargs, on_text, cancelled)
             if not calls:
-                return text, trace
-            messages.append({"role": "assistant", "content": [_anthropic_block(b) for b in response.content]})
+                return text.strip()
+            messages.append({"role": "assistant", "content": [_anthropic_block(b) for b in content]})
+            requests = [{"id": c.id, "name": c.name, "args": dict(c.input or {})} for c in calls]
             messages.append({
                 "role": "user",
                 "content": [
-                    {"type": "tool_result", "tool_use_id": c.id, "content": execute(c.name, dict(c.input or {}))}
-                    for c in calls
+                    {"type": "tool_result", "tool_use_id": call["id"], "content": result}
+                    for call, result in zip(requests, run_tools(requests))
                 ],
             })
-        return "", trace
+        return ""
+    except ChatCancelled:
+        raise
     except Exception as exc:
         raise RuntimeError(f"internal agent LLM call failed: {exc}") from exc
 
