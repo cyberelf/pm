@@ -103,18 +103,25 @@ def user_content(prompt, provider, image=None):
     ]
 
 
-def internal_chat(prompt, settings, timeout=120, temperature=None, image=None, max_tokens=None):
+def internal_chat(prompt, settings, timeout=120, temperature=None, image=None, max_tokens=None,
+                  system=None, history=None):
     """Run one chat completion through the configured provider and return
     the response text. The configured model must accept images when
-    image is given."""
+    image is given. history is an optional list of earlier
+    {"role": "user"|"assistant", "content": str} turns placed before the
+    prompt; system rides in the provider's own system slot."""
     validate_llm_settings(settings)
     client = build_client(settings, timeout=timeout)
     content = user_content(prompt, settings["provider"], image)
+    messages = [{"role": item["role"], "content": item["content"]} for item in (history or [])]
+    messages.append({"role": "user", "content": content})
     try:
         if settings["provider"] == "openai":
             # No max_tokens cap: reasoning models spend part of a capped
             # budget on hidden thinking blocks and can come back empty.
-            kwargs = {"model": settings["model"], "messages": [{"role": "user", "content": content}]}
+            if system:
+                messages.insert(0, {"role": "system", "content": system})
+            kwargs = {"model": settings["model"], "messages": messages}
             if temperature is not None:
                 kwargs["temperature"] = temperature
             response = client.chat.completions.create(**kwargs)
@@ -124,8 +131,10 @@ def internal_chat(prompt, settings, timeout=120, temperature=None, image=None, m
             # The Messages API mandates max_tokens; keep it far above the
             # report so thinking models retain budget for the visible answer.
             "max_tokens": max_tokens or LLM_ANTHROPIC_MAX_OUTPUT_TOKENS,
-            "messages": [{"role": "user", "content": content}],
+            "messages": messages,
         }
+        if system:
+            kwargs["system"] = system
         if temperature is not None:
             kwargs["temperature"] = temperature
         response = client.messages.create(**kwargs)

@@ -277,6 +277,19 @@ CREATE TABLE IF NOT EXISTS project_shares (
     UNIQUE(project_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_project_shares_user ON project_shares(user_id);
+
+CREATE TABLE IF NOT EXISTS assistant_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    week_key TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    proposed_report_md TEXT NOT NULL DEFAULT '',
+    applied_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(project_id, user_id, week_key, id);
 """
 
 

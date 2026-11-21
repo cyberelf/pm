@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse, quote
 
 from . import auth
 from . import device_auth
+from .assistant import ask_assistant, assistant_thread, clear_assistant_thread, mark_proposal_applied, proposal_for_apply
 from .cold_storage import cold_storage_config, evaluate_cold_storage, material_file_path, storage_lock, validate_cold_target
 from .config import (
     APP_VERSION,
@@ -1071,6 +1072,42 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 6 and parts[3] == "reports" and parts[5] == "pdf" and method == "GET":
                     self.report_pdf(conn, project_id, parts[4])
+                    return
+                if len(parts) == 4 and parts[3] == "assistant":
+                    # per-account Q&A thread over the current week's report;
+                    # any project role may ask, applying a revision needs write
+                    if method == "GET":
+                        self.json(assistant_thread(conn, project_id, user_id))
+                        return
+                    if method == "POST":
+                        ask_assistant(conn, project_id, user_id, str(self.body_json().get("question") or ""))
+                        conn.commit()
+                        self.json(assistant_thread(conn, project_id, user_id))
+                        return
+                    if method == "DELETE":
+                        clear_assistant_thread(conn, project_id, user_id)
+                        conn.commit()
+                        self.json(assistant_thread(conn, project_id, user_id))
+                        return
+                if (
+                    len(parts) == 7 and parts[3] == "assistant" and parts[4] == "messages"
+                    and parts[5].isdigit() and parts[6] == "apply" and method == "POST"
+                ):
+                    require_role(role, "write")
+                    try:
+                        proposal = proposal_for_apply(conn, project_id, user_id, int(parts[5]))
+                    except LookupError as exc:
+                        self.error(HTTPStatus.NOT_FOUND, str(exc))
+                        return
+                    updated = save_report_edit(
+                        conn, project_id, proposal["week_key"], {"content_md": proposal["proposed_report_md"]}
+                    )
+                    if not updated:
+                        self.error(HTTPStatus.NOT_FOUND, "weekly report not found")
+                        return
+                    mark_proposal_applied(conn, proposal["id"], updated["edited_at"])
+                    conn.commit()
+                    self.json({"report": updated, **assistant_thread(conn, project_id, user_id)})
                     return
                 if len(parts) == 4 and parts[3] == "status" and method == "POST":
                     require_role(role, "manage")
