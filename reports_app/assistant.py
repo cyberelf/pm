@@ -74,8 +74,9 @@ def message_public(row):
         "content_html": render_markdown(row["content"]) if row["role"] == "assistant" else "",
         "created_at": row["created_at"],
         "proposal": None,
-        "tools": json.loads(row["tool_trace_json"]) if row["tool_trace_json"] else [],
+        "work": stored_work_log(row["tool_trace_json"]),
     }
+    item["tools"] = [entry for entry in item["work"]["items"] if entry["kind"] == "tool"]
     if row["proposed_report_md"]:
         item["proposal"] = {
             "content_md": row["proposed_report_md"],
@@ -83,6 +84,76 @@ def message_public(row):
             "applied_at": row["applied_at"],
         }
     return item
+
+
+def stored_work_log(raw):
+    """The persisted work log; rows from before the log existed stored a
+    bare list of tool calls."""
+    data = json.loads(raw) if raw else None
+    if isinstance(data, list):
+        return {"elapsed_ms": None, "items": [{"kind": "tool", **entry} for entry in data]}
+    return data or {"elapsed_ms": None, "items": []}
+
+
+class WorkRecorder:
+    """Builds the answer's work log from run events, T3 Code style: thinking
+    segments, tool calls and interim text in order, each with a duration.
+    Every event gets "t", seconds since the run started, so live views and
+    replays agree on timing."""
+
+    PREAMBLE_MAX_CHARS = 600
+
+    def __init__(self, forward=None):
+        self.started = time.monotonic()
+        self.forward = forward or (lambda kind, data: None)
+        self.items = []
+        self._thinking = None
+        self._text = None
+
+    def now(self):
+        return round(time.monotonic() - self.started, 3)
+
+    def _close_thinking(self, t):
+        if self._thinking is not None:
+            self._thinking["ms"] = int((t - self._thinking["t"]) * 1000)
+            self._thinking = None
+
+    def __call__(self, kind, data):
+        t = self.now()
+        data = {**data, "t": t}
+        if kind == "round":
+            self._close_thinking(t)
+            self._text = None
+            self._thinking = {"kind": "thinking", "t": t}
+            self.items.append(self._thinking)
+        elif kind == "text":
+            self._close_thinking(t)
+            if self._text is None:
+                self._text = {"kind": "text", "t": t, "text": ""}
+                self.items.append(self._text)
+            self._text["text"] += data.get("delta", "")
+        elif kind == "tool_start":
+            self._close_thinking(t)
+            self._text = None
+            self.items.append({"kind": "tool", "t": t, "id": data["id"], "name": data["name"], "args": data["args"]})
+        elif kind == "tool_end":
+            for item in self.items:
+                if item["kind"] == "tool" and item["id"] == data["id"] and "ms" not in item:
+                    item.update({k: data[k] for k in ("ms", "chars", "error", "preview") if k in data})
+                    break
+        self.forward(kind, data)
+
+    def finish(self):
+        """The log to store: the final round's text is the answer itself."""
+        self._close_thinking(self.now())
+        items = list(self.items)
+        if items and items[-1]["kind"] == "text":
+            items.pop()
+        for item in items:
+            if item["kind"] == "text":
+                item["text"] = item["text"].strip()[: self.PREAMBLE_MAX_CHARS]
+        items = [item for item in items if item["kind"] != "text" or item["text"]]
+        return {"elapsed_ms": int(self.now() * 1000), "items": items}
 
 
 def thread_rows(conn, project_id, user_id, week_key, limit=THREAD_LIMIT):
@@ -191,7 +262,7 @@ def answer_question(db_path, project_id, user_id, question, emit=None, cancelled
     turns. Returns the stored answer's message id."""
     from .internal_agent import ChatCancelled
 
-    emit = emit or (lambda kind, data: None)
+    emit = WorkRecorder(emit)
     cancelled = cancelled or (lambda: False)
     question = validate_question(question)
     with _open(db_path) as conn:
@@ -214,13 +285,11 @@ def answer_question(db_path, project_id, user_id, question, emit=None, cancelled
         for row in rows
     ]
     tools = AgentToolbox(db_path, user_id, project_id)
-    trace = []
 
     def run_tools(calls):
         if cancelled():
             raise ChatCancelled()
-        results, finished = tools.run_many(calls, emit)
-        trace.extend(finished)
+        results, _ = tools.run_many(calls, emit)
         if cancelled():
             raise ChatCancelled()
         return results
@@ -272,7 +341,7 @@ def answer_question(db_path, project_id, user_id, question, emit=None, cancelled
             (project_id, user_id, week_key, role, content, proposed_report_md, tool_trace_json, created_at)
             VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
             """,
-            (project_id, user_id, week_key, answer, proposal, json.dumps(trace, ensure_ascii=False), iso_now()),
+            (project_id, user_id, week_key, answer, proposal, json.dumps(emit.finish(), ensure_ascii=False), iso_now()),
         )
         conn.commit()
         return cur.lastrowid
@@ -302,6 +371,7 @@ class AssistantRun:
         self.cond = threading.Condition()
         self.cancel_requested = False
         self.finished_at = None
+        self.created = time.monotonic()
 
     @property
     def done(self):
@@ -323,7 +393,12 @@ class AssistantRun:
             return self.events[seq:], self.done
 
     def public(self):
-        return {"id": self.id, "question": self.question, "done": self.done}
+        return {
+            "id": self.id,
+            "question": self.question,
+            "done": self.done,
+            "elapsed": round(time.monotonic() - self.created, 3),
+        }
 
 
 _runs = {}

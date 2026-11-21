@@ -42,6 +42,7 @@ from .validation import ValidationError
 
 AGENT_RESULT_MAX_CHARS = 12000
 AGENT_CONTENT_MAX_CHARS = 10000
+TOOL_PREVIEW_CHARS = 1500  # result excerpt shown in the assistant's work log
 GIT_CACHE_SECONDS = 600
 
 
@@ -920,6 +921,7 @@ class AgentToolbox:
                 "ms": int((time.monotonic() - started) * 1000),
                 "chars": len(result),
                 "error": result.startswith('{"error"'),
+                "preview": result[:TOOL_PREVIEW_CHARS],
             }
             trace[index] = entry
             emit("tool_end", entry)

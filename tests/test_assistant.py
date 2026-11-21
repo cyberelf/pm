@@ -416,6 +416,43 @@ class AssistantTest(unittest.TestCase):
         self.assertIn("provider down", payload["message"])
         self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM assistant_messages").fetchone()["n"], 0)
 
+    def test_work_log_is_recorded_with_timings_and_stored(self):
+        seen = []
+        clock = iter([0.0, 0.0, 0.5, 0.6, 0.6, 2.0, 2.1, 9.0, 9.4, 9.5])
+        with mock.patch("reports_app.assistant.time.monotonic", side_effect=lambda: next(clock)):
+            recorder = assistant.WorkRecorder(lambda kind, data: seen.append((kind, data)))
+            recorder("round", {"round": 0})
+            recorder("text", {"delta": "我先查一下"})
+            recorder("tool_start", {"id": "a", "name": "weekly_show", "args": {"week_key": "2026-W46"}})
+            recorder("tool_end", {"id": "a", "ms": 1400, "chars": 9, "error": False, "preview": "{}"})
+            recorder("round", {"round": 1})
+            recorder("text", {"delta": "最终答案"})
+            recorder("text", {"delta": "。"})
+            work = recorder.finish()
+        self.assertEqual([d["t"] for _, d in seen], [0.0, 0.5, 0.6, 0.6, 2.0, 2.1, 9.0])
+        self.assertEqual([i["kind"] for i in work["items"]], ["thinking", "text", "tool", "thinking"])
+        thinking, note, tool, second = work["items"]
+        self.assertEqual(thinking["ms"], 500)
+        self.assertEqual(note["text"], "我先查一下")
+        self.assertEqual((tool["name"], tool["ms"], tool["preview"]), ("weekly_show", 1400, "{}"))
+        self.assertEqual(second["ms"], 100)  # closed by the first answer delta
+        self.assertEqual(work["elapsed_ms"], 9500)
+
+        self.seed_report()
+        answer_question(self.db_path, self.project_id, self.user_id, "本周进展？")
+        reply = assistant_thread(self.conn, self.project_id, self.user_id)["messages"][-1]
+        kinds = [i["kind"] for i in reply["work"]["items"]]
+        self.assertEqual(kinds, ["thinking", "tool", "thinking"])
+        self.assertIn("preview", reply["work"]["items"][1])
+        self.assertIsInstance(reply["work"]["elapsed_ms"], int)
+        self.assertEqual(reply["tools"][0]["name"], "weekly_list")
+        # rows stored before the log existed still render their tool calls
+        self.conn.execute("UPDATE assistant_messages SET tool_trace_json = ? WHERE id = ?",
+                          (json.dumps([{"name": "search", "args": {}, "ms": 5}]), reply["id"]))
+        self.conn.commit()
+        legacy = assistant_thread(self.conn, self.project_id, self.user_id)["messages"][-1]
+        self.assertEqual(legacy["work"]["items"][0], {"kind": "tool", "name": "search", "args": {}, "ms": 5})
+
     def test_round_tools_run_concurrently(self):
         barrier = threading.Barrier(2, timeout=3)
         events = []
