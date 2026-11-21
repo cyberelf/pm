@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=63" />
+    <link rel="stylesheet" href="/styles.css?v=64" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -75,6 +75,7 @@
                 <h1 id="project-title">周报工作台</h1>
                 <span id="project-status-dot" class="status-dot is-neutral" role="img" aria-label="项目状态" title="项目状态"></span>
                 <p id="project-meta">本地个人项目管理</p>
+                <button id="open-assistant" class="assistant-toggle hidden" type="button" aria-controls="assistant-panel" aria-expanded="false">助手问答</button>
               </div>
             </div>
           </header>
@@ -304,6 +305,27 @@
       </div>
     </div>
 
+    <aside id="assistant-panel" class="assistant-panel hidden" aria-label="周报助手问答">
+      <header class="assistant-head">
+        <div class="assistant-title">
+          <strong>助手问答</strong>
+          <span id="assistant-context"></span>
+        </div>
+        <div class="assistant-head-actions">
+          <button id="assistant-clear" type="button">清空</button>
+          <button id="assistant-close" type="button" aria-label="关闭助手问答">关闭</button>
+        </div>
+      </header>
+      <div id="assistant-messages" class="assistant-messages" aria-live="polite"></div>
+      <form id="assistant-form" class="assistant-form">
+        <textarea id="assistant-input" rows="3" maxlength="4000" placeholder="问本周进展、问题原因，或让助手调整周报结论"></textarea>
+        <div class="assistant-form-row">
+          <small>Enter 发送 · Shift+Enter 换行</small>
+          <button id="assistant-send" class="primary" type="submit">发送</button>
+        </div>
+      </form>
+    </aside>
+
     <dialog id="project-dialog">
       <form method="dialog" id="project-form" class="modal-form">
         <h2>新建项目</h2>
@@ -480,6 +502,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=67"></script>
+    <script src="/app.js?v=68"></script>
   </body>
 </html>

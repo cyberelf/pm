@@ -58,6 +58,8 @@ const state = {
   settingsSubTab: "project",
   projectShares: [],
   shareCandidates: [],
+  assistantOpen: localStorage.getItem("assistantOpen") === "1",
+  assistant: { projectId: null, weekKey: "", hasReport: false, messages: [], loading: false, sending: false, pendingQuestion: "", error: "" },
   busy: false,
 };
 
@@ -163,6 +165,7 @@ async function api(path, options = {}) {
 function showLoginView() {
   state.currentUser = null;
   state.isAdmin = false;
+  state.assistant = { ...state.assistant, projectId: null, messages: [], error: "" };
   $("login-view").classList.remove("hidden");
   document.body.classList.add("logged-out");
   const password = $("login-password");
@@ -442,6 +445,7 @@ function syncWorkspaceView() {
   document.querySelectorAll("[data-mode-tab]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.modeTab === (settings ? "settings" : state.mode));
   });
+  syncAssistantPanel();
 }
 
 function switchGlobalSettingsTab(tab) {
@@ -1943,6 +1947,7 @@ function render() {
   renderReport(ws);
   ensureTableScrollContainers();
   switchTab(state.tab);
+  syncAssistantPanel();
 }
 
 function ensureTableScrollContainers() {
@@ -2903,7 +2908,7 @@ function renderReport(ws) {
     <div class="panel">
       <div class="panel-head">
         <div class="panel-title"><h2>当前周报</h2>${ws.report && ws.report.edited_at ? '<span class="status edited">已手工调整</span>' : ""}<span>最近一次成功生成的 Markdown</span></div>
-        <div class="panel-actions">${ws.report ? `${canWriteWorkspace() ? `<button onclick="openReportEditor()">编辑</button>` : ""}<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
+        <div class="panel-actions"><button type="button" onclick="toggleAssistant(true)">问助手</button>${ws.report ? `${canWriteWorkspace() ? `<button onclick="openReportEditor()">编辑</button>` : ""}<button onclick="exportReportPdf('${escapeAttr(ws.report.week_key)}')">导出 PDF</button>` : ""}</div>
       </div>
       ${jobNotice}
       ${ws.report ? `<article class="report">${ws.report.content_html}</article>` : "<p>当前项目周还没有生成周报。</p>"}
@@ -2998,6 +3003,201 @@ async function submitReportEdit(event) {
     error.classList.remove("hidden");
   } finally {
     submit.disabled = false;
+  }
+}
+
+// —— 周报助手问答：每个账号在每个项目周一条对话，修改稿需确认后才写入周报 ——
+const ASSISTANT_SUGGESTIONS = [
+  "本周主要进展是什么？",
+  "当前最大的风险是什么，原因是什么？",
+  "周报里哪些结论缺少证据支撑？",
+  "把本周总结改得更简洁",
+];
+
+function assistantVisible() {
+  return state.assistantOpen && !state.settingsView && state.mode === "reports" && !!state.workspace;
+}
+
+function syncAssistantPanel() {
+  const panel = $("assistant-panel");
+  if (!panel) return;
+  const visible = assistantVisible();
+  panel.classList.toggle("hidden", !visible);
+  if (document.body) document.body.classList.toggle("assistant-open", visible);
+  const toggle = $("open-assistant");
+  if (toggle) {
+    toggle.classList.toggle("hidden", !state.workspace);
+    toggle.classList.toggle("active", visible);
+    if (toggle.setAttribute) toggle.setAttribute("aria-expanded", String(visible));
+  }
+  if (!visible) return;
+  const ws = state.workspace;
+  const staleWeek = state.assistant.weekKey && state.assistant.weekKey !== ws.week_key;
+  if ((state.assistant.projectId !== ws.project.id || staleWeek) && !state.assistant.loading && !state.assistant.sending) {
+    loadAssistant();
+    return;
+  }
+  renderAssistant();
+}
+
+function toggleAssistant(force) {
+  state.assistantOpen = typeof force === "boolean" ? force : !state.assistantOpen;
+  localStorage.setItem("assistantOpen", state.assistantOpen ? "1" : "0");
+  syncAssistantPanel();
+  if (state.assistantOpen) {
+    const input = $("assistant-input");
+    if (input && input.focus) input.focus();
+  }
+}
+
+function setAssistantThread(projectId, data) {
+  Object.assign(state.assistant, {
+    projectId,
+    weekKey: data.week_key || "",
+    hasReport: !!data.has_report,
+    messages: data.messages || [],
+  });
+}
+
+async function loadAssistant() {
+  const projectId = state.projectId;
+  state.assistant = { ...state.assistant, projectId, messages: [], loading: true, error: "" };
+  renderAssistant();
+  try {
+    const data = await api(`/api/projects/${projectId}/assistant`);
+    if (state.projectId !== projectId) return;
+    setAssistantThread(projectId, data);
+  } catch (err) {
+    if (state.projectId === projectId) state.assistant.error = err.message;
+  } finally {
+    if (state.assistant.projectId === projectId) state.assistant.loading = false;
+    if (state.projectId === projectId) renderAssistant();
+  }
+}
+
+function assistantMessageHtml(message) {
+  if (message.role === "user") {
+    return `<div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(message.content)}</div></div>`;
+  }
+  return `<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-md">${message.content_html}</div>${assistantProposalHtml(message)}</div>`;
+}
+
+function assistantProposalHtml(message) {
+  const proposal = message.proposal;
+  if (!proposal) return "";
+  const applied = !!proposal.applied_at;
+  const action = applied
+    ? `<span class="assistant-proposal-note">已于 ${escapeHtml(formatChinaTime(proposal.applied_at))} 应用</span>`
+    : canWriteWorkspace()
+      ? `<button type="button" class="primary" onclick="applyAssistantProposal(${message.id}, this)">应用到周报</button>`
+      : `<span class="assistant-proposal-note">只读权限，无法应用</span>`;
+  return `
+    <div class="assistant-proposal">
+      <details>
+        <summary><strong>周报修改稿</strong><span class="status ${applied ? "success" : "edited"}">${applied ? "已应用" : "待确认"}</span></summary>
+        <article class="report assistant-md">${proposal.content_html}</article>
+      </details>
+      <div class="assistant-proposal-actions">${action}</div>
+    </div>`;
+}
+
+function renderAssistant() {
+  const box = $("assistant-messages");
+  if (!box) return;
+  const a = state.assistant;
+  const ws = state.workspace;
+  const context = $("assistant-context");
+  if (context) context.textContent = ws ? `${ws.project.name} · ${a.weekKey || ws.week_key}` : "";
+  const clear = $("assistant-clear");
+  if (clear) clear.disabled = a.sending || a.loading || !a.messages.length;
+  const send = $("assistant-send");
+  if (send) {
+    send.disabled = a.sending || a.loading;
+    send.textContent = a.sending ? "回答中…" : "发送";
+  }
+  const input = $("assistant-input");
+  if (input) input.disabled = a.sending;
+  if (a.loading) {
+    box.innerHTML = `<div class="assistant-empty"><span class="spinner small" aria-hidden="true"></span><span>正在加载对话…</span></div>`;
+    return;
+  }
+  const parts = a.messages.map(assistantMessageHtml);
+  if (a.sending) {
+    parts.push(`<div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(a.pendingQuestion)}</div></div>`);
+    parts.push(`<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-thinking"><span class="spinner small" aria-hidden="true"></span><span>正在结合周报与本周资料分析…</span></div></div>`);
+  }
+  if (a.error) parts.push(`<div class="notice danger assistant-error"><span>${escapeHtml(a.error)}</span></div>`);
+  if (!parts.length) {
+    const hint = a.hasReport || (ws && ws.report) ? "" : `<p class="assistant-hint">本周还没有生成周报，可以先就本周资料提问。</p>`;
+    parts.push(`
+      <div class="assistant-empty">
+        ${hint}
+        <div class="assistant-suggestions">${ASSISTANT_SUGGESTIONS.map((q) => `<button type="button" data-assistant-suggestion="${escapeAttr(q)}">${escapeHtml(q)}</button>`).join("")}</div>
+      </div>`);
+  }
+  box.innerHTML = parts.join("");
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendAssistantQuestion(question) {
+  const text = String(question || "").trim();
+  const a = state.assistant;
+  if (!text || a.sending || a.loading || !state.projectId) return;
+  const projectId = state.projectId;
+  Object.assign(a, { sending: true, pendingQuestion: text, error: "" });
+  const input = $("assistant-input");
+  if (input) input.value = "";
+  renderAssistant();
+  try {
+    const data = await api(`/api/projects/${projectId}/assistant`, {
+      method: "POST",
+      body: JSON.stringify({ question: text }),
+    });
+    if (state.projectId === projectId) setAssistantThread(projectId, data);
+  } catch (err) {
+    if (state.projectId === projectId) {
+      a.error = err.message;
+      if (input && !input.value) input.value = text;
+    }
+  } finally {
+    a.sending = false;
+    a.pendingQuestion = "";
+    if (state.projectId === projectId) renderAssistant();
+  }
+}
+
+async function applyAssistantProposal(messageId, button) {
+  const ws = state.workspace;
+  if (!ws) return;
+  const warning = ws.report && ws.report.edited_at ? "当前周报已有手工修改，" : "";
+  if (!window.confirm(`${warning}应用后将用这份修改稿替换本周周报正文，确定应用？`)) return;
+  if (button) button.disabled = true;
+  const projectId = state.projectId;
+  try {
+    const data = await api(`/api/projects/${projectId}/assistant/messages/${messageId}/apply`, { method: "POST", body: "{}" });
+    if (state.projectId !== projectId) return;
+    setAssistantThread(projectId, data);
+    toast("修改稿已应用到周报");
+    await loadWorkspace();
+  } catch (err) {
+    toast(err.message);
+    if (button) button.disabled = false;
+  }
+}
+
+async function clearAssistant() {
+  const a = state.assistant;
+  if (!state.projectId || a.sending || !a.messages.length) return;
+  if (!window.confirm("清空本周与助手的全部对话？")) return;
+  const projectId = state.projectId;
+  try {
+    const data = await api(`/api/projects/${projectId}/assistant`, { method: "DELETE" });
+    if (state.projectId !== projectId) return;
+    setAssistantThread(projectId, data);
+    a.error = "";
+    renderAssistant();
+  } catch (err) {
+    toast(err.message);
   }
 }
 
@@ -3329,6 +3529,25 @@ function openNewProjectDialog() {
   $("project-dialog").showModal();
 }
 $("new-project").onclick = openNewProjectDialog;
+$("open-assistant").onclick = () => toggleAssistant();
+$("assistant-close").onclick = () => toggleAssistant(false);
+$("assistant-clear").onclick = clearAssistant;
+$("assistant-form").onsubmit = (event) => {
+  event.preventDefault();
+  sendAssistantQuestion($("assistant-input").value);
+};
+$("assistant-input").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  sendAssistantQuestion(event.target.value);
+});
+$("assistant-messages").addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-assistant-suggestion]");
+  if (chip) sendAssistantQuestion(chip.dataset.assistantSuggestion);
+});
+$("assistant-panel").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") toggleAssistant(false);
+});
 $("open-project-bar").onclick = () => $("project-sheet").showModal();
 $("close-project-sheet").onclick = () => $("project-sheet").close();
 const workspacePagerQuery = window.matchMedia("(max-width: 767px)");

@@ -1360,5 +1360,107 @@ globalThis.fetch = async (path, options) => {
         self.assertIn(".status.running {", styles)
 
 
+    def test_assistant_panel_asks_renders_proposal_and_applies(self):
+        html = (ROOT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="assistant-panel"', html)
+        self.assertIn('id="open-assistant"', html)
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+const testElements = new Map();
+function testElement() {
+  return {
+    textContent: "",
+    innerHTML: "",
+    value: "",
+    disabled: false,
+    dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    setAttribute() {},
+  };
+}
+globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+globalThis.document = {
+  body: testElement(),
+  getElementById(id) {
+    if (!testElements.has(id)) testElements.set(id, testElement());
+    return testElements.get(id);
+  },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  removeEventListener() {},
+};
+globalThis.setTimeout = () => 0;
+globalThis.window = { addEventListener() {}, removeEventListener() {}, confirm() { return true; } };
+const responses = [];
+const fetchCalls = [];
+globalThis.fetch = async (path, options) => {
+  fetchCalls.push({ path, options });
+  const body = responses.shift();
+  if (body === undefined) throw new Error(`unexpected fetch: ${path}`);
+  if (body instanceof Error) return { ok: false, status: 400, text: async () => JSON.stringify({ error: body.message }) };
+  return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+};
+"""
+        assertions = r"""
+(async () => {
+  render = () => {};
+  const toasts = [];
+  toast = (message) => { toasts.push(message); };
+  state.projectId = 1;
+  state.mode = "reports";
+  state.workspace = { project: { id: 1, name: "Demo" }, week_key: "2026-W47", role: "owner", report: { week_key: "2026-W47" } };
+
+  responses.push({ week_key: "2026-W47", has_report: true, messages: [] });
+  toggleAssistant(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  if (fetchCalls[0].path !== "/api/projects/1/assistant") throw new Error("thread was not loaded on open");
+  if (!document.getElementById("assistant-messages").innerHTML.includes("data-assistant-suggestion")) {
+    throw new Error("empty thread should offer suggestions");
+  }
+
+  responses.push({ week_key: "2026-W47", has_report: true, messages: [
+    { id: 1, role: "user", content: "把总结改短" },
+    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>", proposal: { content_md: "# 新", content_html: "<h1>新</h1>", applied_at: "" } },
+  ] });
+  await sendAssistantQuestion("把总结改短");
+  const call = fetchCalls[1];
+  if (call.options.method !== "POST" || call.options.body !== JSON.stringify({ question: "把总结改短" })) {
+    throw new Error(`unexpected ask request: ${JSON.stringify(call)}`);
+  }
+  const html = document.getElementById("assistant-messages").innerHTML;
+  if (!html.includes("周报修改稿") || !html.includes("applyAssistantProposal(2")) {
+    throw new Error(`proposal was not rendered with an apply action: ${html}`);
+  }
+
+  responses.push({ report: { edited_at: "2026-11-21T00:00:00+00:00" }, week_key: "2026-W47", has_report: true, messages: [] });
+  responses.push({ project: { id: 1, name: "Demo" }, week_key: "2026-W47", role: "owner", jobs: [] });
+  await applyAssistantProposal(2);
+  if (fetchCalls[2].path !== "/api/projects/1/assistant/messages/2/apply") throw new Error("apply hit the wrong path");
+  if (fetchCalls[3].path !== "/api/projects/1/workspace") throw new Error("workspace was not refreshed after apply");
+  if (!toasts.some((m) => m.includes("已应用"))) throw new Error("apply toast missing");
+
+  // a failed question keeps the text for retry and shows the error
+  responses.push(new Error("助手回答失败：provider down"));
+  await sendAssistantQuestion("本周进展？");
+  if (!document.getElementById("assistant-messages").innerHTML.includes("provider down")) throw new Error("error not shown");
+  if (document.getElementById("assistant-input").value !== "本周进展？") throw new Error("question was not restored");
+  if (state.assistant.sending) throw new Error("sending flag stuck");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+        result = subprocess.run(
+            ["node"],
+            input=f"{harness}\n{source}\n{assertions}",
+            cwd=ROOT_DIR,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
 if __name__ == "__main__":
     unittest.main()
