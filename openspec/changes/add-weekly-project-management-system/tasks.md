@@ -230,3 +230,10 @@ Validation (2026-11-21): All 236 unit tests (including the unchanged CLI end-to-
 - [x] 23.5 Cover streaming formats, concurrency, resume, busy/cancel/error runs and the EventSource UI with tests; verify in a browser and against the live provider
 
 Validation (2026-11-21): All 241 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. In headless Chromium against an isolated fake-provider instance, tool chips ran live, text streamed with the revision block hidden behind a progress note, a mid-answer reload reattached and completed, and stop restored the question without storing a turn. Platform 1.3.18 was reinstalled; on the live Anthropic-compatible provider one question started weekly_show and repos_commits together in the first round (1 ms and 4.6 s), then streamed 460 text deltas to completion at 35 s. The verification session and messages were removed.
+
+## 24. Assistant work log
+
+- [x] 24.1 Record thinking segments, tool calls (with result excerpts) and interim text with run-relative timestamps and durations; store the log with each answer and read older tool-only traces
+- [x] 24.2 Render the log T3 Code-style: raw tool calls, live shimmer and ticking timers, durations, failure marks, expandable input/result, folded summary on stored answers; disable the input while a thread loads
+
+Validation (2026-11-21): All 242 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.19 was reinstalled. In headless Chromium against the live service and provider, one question showed 思考中 at 0.4s, then 思考 7.5s and four parallel tool rows (weekly_show 3ms, supplement_show 3ms, materials_list 12ms, repos_commits ticking to 4.1s), a second 思考 19s segment and the streamed answer, stored as 已工作 36s · 4 次工具调用. The verification messages and session were removed; the account's existing conversation was left untouched.

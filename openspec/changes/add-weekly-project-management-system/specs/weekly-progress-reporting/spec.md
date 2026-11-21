@@ -170,6 +170,10 @@ The system SHALL provide a 助手问答 side panel in the weekly report workspac
 - **THEN** the answer runs in the background and streams to the panel as resumable server-sent events, showing each tool call as it starts and finishes and the answer text as it is generated
 - **AND** tools requested in the same model round run concurrently, the user can stop the run, a page reload reattaches to it, and a second question waits until the first run ends
 
+#### Scenario: Show the work log
+- **WHEN** the assistant thinks or calls tools while answering
+- **THEN** the panel lists thinking segments, raw tool calls and interim notes in order with live timers and final durations, marks failed calls, lets each tool call expand to its input and a result excerpt, and keeps the log with the stored answer
+
 #### Scenario: Adjust a report conclusion
 - **WHEN** a user asks the assistant to change a conclusion of the current week report
 - **THEN** the answer explains the change and offers a revised report that leaves the stored report unchanged until applied
