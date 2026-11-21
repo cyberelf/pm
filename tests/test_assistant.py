@@ -9,7 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from reports_app import assistant, auth
+from reports_app import assistant, assistant_tools, auth
+from reports_app.assistant_tools import AssistantTools
 from reports_app.assistant import (
     REPORT_END,
     REPORT_START,
@@ -18,7 +19,7 @@ from reports_app.assistant import (
     split_report_proposal,
 )
 from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db
-from reports_app.internal_agent import internal_chat
+from reports_app.internal_agent import internal_chat, internal_tool_chat
 from reports_app.server import Handler
 from reports_app.sharing import set_share
 from reports_app.timeutil import current_week_key, iso_now
@@ -40,7 +41,7 @@ class AssistantTest(unittest.TestCase):
         )
         self.conn.commit()
         self.week_key = current_week_key("Asia/Shanghai")
-        assistant.clear_evidence_cache()
+        assistant_tools.clear_git_cache()
         os.environ["REPORTS_FAKE_PROVIDER"] = "1"
         self.server = None
 
@@ -190,48 +191,63 @@ class AssistantTest(unittest.TestCase):
         # last week's thread is not shown in this week's panel
         self.assertEqual(assistant_thread(self.conn, self.project_id, self.user_id)["messages"], [])
 
-    def test_real_path_sends_grounded_system_prompt_and_history(self):
-        self.seed_report(content_md="# 当前周报\n\n结论：按计划推进。")
-        self.seed_report(week_key="2020-W01", content_md="# 旧周报\n\n上周完成接口设计。")
-        self.conn.execute(
+    def add_material(self, filename="notes.md", text="接口联调完成", summary="联调记录"):
+        cur = self.conn.execute(
             """
             INSERT INTO materials (project_id, filename, storage_path, content_type, size_bytes, checksum,
-                                   extracted_text, extraction_status, created_at, updated_at)
-            VALUES (?, 'notes.md', '', 'text/markdown', 18, 'x', '接口联调完成', 'complete', ?, ?)
+                                   extracted_text, extraction_status, summary, created_at, updated_at)
+            VALUES (?, ?, '', 'text/markdown', 18, 'x', ?, 'complete', ?, ?, ?)
             """,
-            (self.project_id, iso_now(), iso_now()),
+            (self.project_id, filename, text, summary, iso_now(), iso_now()),
         )
         self.conn.commit()
+        return cur.lastrowid
+
+    def test_real_path_prompt_is_light_and_tools_run_on_demand(self):
+        self.seed_report(content_md="# 当前周报\n\n结论：按计划推进。")
+        self.seed_report(week_key="2020-W01", content_md="# 旧周报\n\n上周完成接口设计。")
+        self.add_material()
         calls = []
 
-        def fake_chat(prompt, settings, timeout=120, system=None, history=None, **kwargs):
-            calls.append({"prompt": prompt, "system": system, "history": history})
+        def fake_tool_chat(prompt, settings, tools, run_tool, system=None, history=None, **kwargs):
+            calls.append({"prompt": prompt, "system": system, "history": history, "tools": tools})
+            trace = []
+            if len(calls) == 1:
+                result = run_tool("weekly_show", {"week_key": "2020-W01"})
+                trace.append({"name": "weekly_show", "args": {"week_key": "2020-W01"}, "ms": 1, "chars": len(result), "error": False})
+                self.assertIn("上周完成接口设计", result)
+                return "依据 2020-W01 周报，上周完成接口设计。", trace
             if len(calls) == 2:
-                return f"已调整。\n{REPORT_START}\n# 当前周报\n\n结论：存在延期风险。\n{REPORT_END}"
-            return "依据 notes.md，接口联调完成。"
+                return f"已调整。\n{REPORT_START}\n# 当前周报\n\n结论：存在延期风险。\n{REPORT_END}", trace
+            return "已精简。", trace
 
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}), \
-                mock.patch("reports_app.internal_agent.internal_chat", side_effect=fake_chat), \
-                mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value={}):
-            ask_assistant(self.conn, self.project_id, self.user_id, "本周做了什么？")
+                mock.patch("reports_app.internal_agent.internal_tool_chat", side_effect=fake_tool_chat), \
+                mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value={}), \
+                mock.patch("reports_app.reports.assemble_context", side_effect=AssertionError("no upfront evidence")):
+            ask_assistant(self.conn, self.project_id, self.user_id, "上周做了什么？")
             ask_assistant(self.conn, self.project_id, self.user_id, "把结论改成有延期风险")
             ask_assistant(self.conn, self.project_id, self.user_id, "再精简一点")
         first, second, third = calls
+        # the prompt carries the report and a cheap inventory, not the evidence itself
         self.assertIn("结论：按计划推进", first["system"])
+        self.assertIn('"materials_this_week": 1', first["system"])
         self.assertIn("2020-W01", first["system"])
-        self.assertIn("接口联调完成", first["system"])
+        self.assertNotIn("上周完成接口设计", first["system"])
+        self.assertNotIn("接口联调完成", first["system"])
+        self.assertEqual({t["name"] for t in first["tools"]} >= {"weekly_show", "search", "material_show", "git_commits"}, True)
         self.assertEqual(first["history"], [])
-        self.assertEqual(first["prompt"], "本周做了什么？")
         self.assertEqual([h["role"] for h in second["history"]], ["user", "assistant"])
-        # an unapplied revision is carried forward for iterative edits
         self.assertIn("最近一次未应用的修改稿", third["system"])
         self.assertIn("存在延期风险", third["system"])
         self.assertIn("（已附修改稿）", third["history"][-1]["content"])
+        thread = assistant_thread(self.conn, self.project_id, self.user_id)
+        self.assertEqual(thread["messages"][1]["tools"][0]["name"], "weekly_show")
 
     def test_llm_failure_stores_nothing(self):
         self.seed_report()
         with mock.patch.dict(os.environ, {"REPORTS_FAKE_PROVIDER": "0"}), \
-                mock.patch("reports_app.internal_agent.internal_chat", side_effect=RuntimeError("boom")), \
+                mock.patch("reports_app.internal_agent.internal_tool_chat", side_effect=RuntimeError("boom")), \
                 mock.patch("reports_app.internal_agent.resolve_llm_settings", return_value={}):
             with self.assertRaises(ValidationError) as ctx:
                 ask_assistant(self.conn, self.project_id, self.user_id, "本周进展？")
@@ -239,16 +255,70 @@ class AssistantTest(unittest.TestCase):
         count = self.conn.execute("SELECT COUNT(*) AS n FROM assistant_messages").fetchone()["n"]
         self.assertEqual(count, 0)
 
-    def test_evidence_is_cached_until_inputs_change(self):
-        with mock.patch("reports_app.assistant.assemble_context", return_value=({"week_key": self.week_key}, "h")) as assemble:
-            assistant.current_week_evidence(self.conn, self.project_id, self.week_key)
-            assistant.current_week_evidence(self.conn, self.project_id, self.week_key)
-            self.assertEqual(assemble.call_count, 1)
-            self.conn.execute(
-                "UPDATE projects SET updated_at = '2099-01-01T00:00:00+00:00' WHERE id = ?", (self.project_id,)
-            )
-            assistant.current_week_evidence(self.conn, self.project_id, self.week_key)
-            self.assertEqual(assemble.call_count, 2)
+    def test_fake_path_records_tool_trace(self):
+        self.seed_report()
+        ask_assistant(self.conn, self.project_id, self.user_id, "本周进展？")
+        reply = assistant_thread(self.conn, self.project_id, self.user_id)["messages"][-1]
+        self.assertEqual(reply["tools"][0]["name"], "weekly_list")
+
+    def tools(self, user_id=None):
+        project = self.conn.execute("SELECT * FROM projects WHERE id = ?", (self.project_id,)).fetchone()
+        return AssistantTools(self.conn, project, user_id or self.user_id, self.week_key)
+
+    def test_tools_are_scoped_bounded_and_report_errors(self):
+        self.seed_report(content_md="# 本周")
+        material_id = self.add_material(text="长" * 20000)
+        other = create_project(
+            self.conn,
+            {"name": "Other", "start_date": "2026-06-27", "timezone": "Asia/Shanghai", "report_provider": "internal"},
+            self.user,
+        )
+        foreign = self.conn.execute(
+            """
+            INSERT INTO materials (project_id, filename, storage_path, content_type, size_bytes, checksum,
+                                   extracted_text, extraction_status, created_at, updated_at)
+            VALUES (?, 'secret.md', '', 'text/markdown', 1, 'x', '别的项目', 'complete', ?, ?)
+            """,
+            (other, iso_now(), iso_now()),
+        ).lastrowid
+        self.conn.commit()
+        tools = self.tools()
+        listed = json.loads(tools.run("weekly_list", {}))
+        self.assertEqual(listed["reports"][0]["week_key"], self.week_key)
+        shown = json.loads(tools.run("material_show", {"id": material_id}))
+        self.assertIn("已截断", shown["content"])
+        self.assertIn("error", json.loads(tools.run("material_show", {"id": foreign})))
+        self.assertIn("error", json.loads(tools.run("weekly_show", {"week_key": "1999-W01"})))
+        self.assertIn("error", json.loads(tools.run("material_show", {"id": "abc"})))
+        self.assertIn("error", json.loads(tools.run("material_show", {})))
+        self.assertIn("error", json.loads(tools.run("rm_rf", {})))
+        this_week = json.loads(tools.run("materials_list", {}))
+        self.assertEqual([m["id"] for m in this_week["materials"]], [material_id])
+        hits = json.loads(tools.run("search", {"query": "别的项目"}))["hits"]
+        self.assertFalse(any(h["source_id"] == foreign for h in hits))
+        self.assertIn("plan", json.loads(tools.run("plan_show", {})))
+        self.assertEqual(json.loads(tools.run("git_commits", {}))["repos"], [])
+        self.assertLessEqual(len(tools.run("material_show", {"id": material_id})), 12100)
+
+    def test_git_tools_cache_and_survive_provider_errors(self):
+        self.conn.execute(
+            """
+            INSERT INTO github_repos (project_id, repo, status, created_at, updated_at)
+            VALUES (?, 'acme/app', 'connected', ?, ?)
+            """,
+            (self.project_id, iso_now(), iso_now()),
+        )
+        self.conn.commit()
+        tools = self.tools()
+        with mock.patch("reports_app.assistant_tools.repo_commit_context", return_value={"repo": "acme/app", "commits": [{"message": "fix"}]}) as fetch:
+            first = json.loads(tools.run("git_commits", {"repo": "acme/app"}))
+            tools.run("git_commits", {})
+            self.assertEqual(first["repos"][0]["commits"][0]["message"], "fix")
+            self.assertEqual(fetch.call_count, 1)
+        self.assertIn("error", json.loads(tools.run("git_commits", {"repo": "nope/nope"})))
+        assistant_tools.clear_git_cache()
+        with mock.patch("reports_app.assistant_tools.repo_commit_context", side_effect=RuntimeError("rate limited")):
+            self.assertIn("rate limited", json.loads(tools.run("git_commits", {}))["error"])
 
 
 class InternalChatHistoryTest(unittest.TestCase):
@@ -274,6 +344,51 @@ class InternalChatHistoryTest(unittest.TestCase):
         kwargs = anthropic_client.messages.create.call_args.kwargs
         self.assertEqual(kwargs["system"], "sys")
         self.assertEqual([m["role"] for m in kwargs["messages"]], ["user", "assistant", "user"])
+
+
+class InternalToolChatTest(unittest.TestCase):
+    SPECS = [{"name": "weekly_show", "description": "d", "parameters": {"type": "object", "properties": {}}}]
+
+    def test_openai_tool_loop(self):
+        client = mock.Mock()
+        call = SimpleNamespace(id="c1", function=SimpleNamespace(name="weekly_show", arguments='{"week_key": "2026-W46"}'))
+        client.chat.completions.create.side_effect = [
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[call]))]),
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="答案", tool_calls=None))]),
+        ]
+        ran = []
+        settings = {"provider": "openai", "model": "m", "api_key": "k", "base_url": "http://x"}
+        with mock.patch("reports_app.internal_agent.build_client", return_value=client):
+            text, trace = internal_tool_chat("q", settings, self.SPECS, lambda n, a: ran.append((n, a)) or '{"ok": 1}', system="sys")
+        self.assertEqual(text, "答案")
+        self.assertEqual(ran, [("weekly_show", {"week_key": "2026-W46"})])
+        self.assertEqual(trace[0]["name"], "weekly_show")
+        second = client.chat.completions.create.call_args_list[1].kwargs
+        self.assertEqual(second["tools"][0]["function"]["name"], "weekly_show")
+        roles = [m["role"] for m in second["messages"]]
+        self.assertEqual(roles, ["system", "user", "assistant", "tool"])
+        self.assertEqual(second["messages"][3]["tool_call_id"], "c1")
+
+    def test_anthropic_tool_loop_and_final_round_forbids_tools(self):
+        client = mock.Mock()
+        use = SimpleNamespace(type="tool_use", id="t1", name="weekly_show", input={})
+        use.model_dump = lambda exclude_none=True: {"type": "tool_use", "id": "t1", "name": "weekly_show", "input": {}}
+        looping = SimpleNamespace(content=[use], stop_reason="tool_use")
+        final = SimpleNamespace(content=[SimpleNamespace(type="text", text="最终")], stop_reason="end_turn")
+        client.messages.create.side_effect = [looping, looping, final]
+        settings = {"provider": "anthropic", "model": "m", "api_key": "k", "base_url": "http://x"}
+        with mock.patch("reports_app.internal_agent.build_client", return_value=client):
+            text, trace = internal_tool_chat("q", settings, self.SPECS, lambda n, a: "{}", system="sys", max_rounds=2)
+        self.assertEqual(text, "最终")
+        self.assertEqual(len(trace), 2)
+        calls = client.messages.create.call_args_list
+        self.assertEqual(calls[0].kwargs["tools"][0]["input_schema"], {"type": "object", "properties": {}})
+        self.assertEqual(calls[0].kwargs["system"], "sys")
+        self.assertNotIn("tool_choice", calls[0].kwargs)
+        self.assertEqual(calls[2].kwargs["tool_choice"], {"type": "none"})
+        followup = calls[1].kwargs["messages"]
+        self.assertEqual(followup[1]["content"][0]["type"], "tool_use")
+        self.assertEqual(followup[2]["content"][0], {"type": "tool_result", "tool_use_id": "t1", "content": "{}"})
 
 
 if __name__ == "__main__":

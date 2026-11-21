@@ -287,6 +287,7 @@ CREATE TABLE IF NOT EXISTS assistant_messages (
     content TEXT NOT NULL,
     proposed_report_md TEXT NOT NULL DEFAULT '',
     applied_at TEXT NOT NULL DEFAULT '',
+    tool_trace_json TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(project_id, user_id, week_key, id);
@@ -399,6 +400,9 @@ def migrate_schema(conn):
         conn.execute("ALTER TABLE todos ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
     if "starred" not in table_columns["todos"]:
         conn.execute("ALTER TABLE todos ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    assistant_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_messages)")}
+    if "tool_trace_json" not in assistant_columns:
+        conn.execute("ALTER TABLE assistant_messages ADD COLUMN tool_trace_json TEXT NOT NULL DEFAULT ''")
     conn.execute(
         "UPDATE projects SET owner = ? WHERE owner = ?",
         (admin["username"], "local-user"),
