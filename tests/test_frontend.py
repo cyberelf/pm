@@ -1436,27 +1436,38 @@ globalThis.fetch = async (path, options) => {
   if (es.url !== "/api/projects/1/assistant/runs/r1/events") throw new Error("stream not opened");
   if (document.getElementById("assistant-send").textContent !== "停止") throw new Error("send should turn into stop");
 
-  es.fire("round", { round: 0 });
-  es.fire("text", { delta: "我先查一下" });
-  es.fire("tool_start", { id: "a", name: "weekly_show", args: { week_key: "2026-W46" } });
-  es.fire("tool_start", { id: "b", name: "plan_show", args: {} });
-  if (!box().includes("查阅中") || (box().match(/is-running/g) || []).length !== 2) throw new Error(`parallel tools not shown: ${box()}`);
-  es.fire("tool_end", { id: "a", name: "weekly_show", args: { week_key: "2026-W46" }, ms: 1200, error: false });
-  if ((box().match(/is-running/g) || []).length !== 1) throw new Error("finished tool still running");
-  es.fire("round", { round: 1 });
-  if (box().includes("我先查一下")) throw new Error("preamble text must reset on a new round");
-  es.fire("text", { delta: "已调整。\n<<<REPORT>>>\n# 新周报" });
+  es.fire("round", { round: 0, t: 0.1 });
+  if (!box().includes("工作中") || !box().includes("思考中")) throw new Error(`thinking row missing: ${box()}`);
+  es.fire("text", { delta: "我先查一下", t: 0.5 });
+  es.fire("tool_start", { id: "a", name: "weekly_show", args: { week_key: "2026-W46" }, t: 8.9 });
+  es.fire("tool_start", { id: "b", name: "plan_show", args: {}, t: 9.0 });
+  if (!box().includes("<code>weekly_show</code>") || !box().includes("{&quot;week_key&quot;:&quot;2026-W46&quot;}")) {
+    throw new Error(`raw tool call row missing: ${box()}`);
+  }
+  if ((box().match(/work-row is-tool is-live/g) || []).length !== 2) throw new Error(`both tools should be live: ${box()}`);
+  if (!box().includes("思考</span>") || !box().includes("0.4s")) throw new Error(`finished thinking row needs its duration: ${box()}`);
+  if (!box().includes("我先查一下")) throw new Error("interim text should stay as a note row");
+  es.fire("tool_end", { id: "a", name: "weekly_show", args: { week_key: "2026-W46" }, ms: 1200, error: false, chars: 30, preview: '{"id": 1}', t: 10.1 });
+  if ((box().match(/work-row is-tool is-live/g) || []).length !== 1) throw new Error("finished tool still live");
+  if (!box().includes("1.2s") || !box().includes("{&quot;id&quot;: 1}")) throw new Error(`tool duration/result missing: ${box()}`);
+  es.fire("tool_end", { id: "b", name: "plan_show", args: {}, ms: 30, error: true, chars: 20, preview: '{"error": "x"}', t: 10.2 });
+  if (!box().includes("work-fail")) throw new Error("failed tool needs a failure mark");
+  if (!box().includes(">30ms<")) throw new Error(`sub-100ms durations show in ms: ${box()}`);
+  es.fire("round", { round: 1, t: 10.3 });
+  es.fire("text", { delta: "已调整。\n<<<REPORT>>>\n# 新周报", t: 27.0 });
   if (!box().includes("已调整。") || box().includes("# 新周报") || !box().includes("正在生成周报修改稿")) {
     throw new Error(`report draft must stay hidden while streaming: ${box()}`);
   }
+  if (!box().includes("16s")) throw new Error(`second thinking segment should last ~16.7s: ${box()}`);
 
   es.fire("done", { week_key: "2026-W47", has_report: true, messages: [
     { id: 1, role: "user", content: "把总结改短" },
-    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>", tools: [{ name: "weekly_show", args: { week_key: "2026-W46" }, ms: 12 }],
+    { id: 2, role: "assistant", content: "已调整", content_html: "<p>已调整</p>",
+      work: { elapsed_ms: 35100, items: [{ kind: "thinking", t: 0.1, ms: 400 }, { kind: "tool", id: "a", name: "weekly_show", args: { week_key: "2026-W46" }, ms: 1200, preview: "{}" }] },
       proposal: { content_md: "# 新", content_html: "<h1>新</h1>", applied_at: "" } },
   ] });
   if (!es.closed || state.assistant.run) throw new Error("done must close the stream");
-  if (!box().includes("已查阅") || !box().includes("周报 2026-W46") || !box().includes("applyAssistantProposal(2")) {
+  if (!box().includes("已工作 35s · 1 次工具调用") || !box().includes("<code>weekly_show</code>") || !box().includes("applyAssistantProposal(2")) {
     throw new Error(`final thread not rendered: ${box()}`);
   }
 

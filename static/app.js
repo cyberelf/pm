@@ -3079,35 +3079,71 @@ async function loadAssistant() {
   }
 }
 
-const ASSISTANT_TOOL_LABELS = {
-  weekly_list: "周报列表",
-  weekly_show: "周报",
-  search: "检索",
-  material_show: "资料",
-  report_show: "周报",
-  todo_list: "TODO 列表",
-  todo_show: "TODO",
-  materials_list: "资料列表",
-  supplement_show: "本周补充",
-  plan_show: "计划",
-  risks_list: "风险预警",
-  repos_list: "仓库列表",
-  repos_commits: "提交记录",
-  repos_activity: "PR/Issue",
+// —— 工作日志：参照 T3 Code 的时间线，思考 / 工具调用 / 中间说明按发生顺序一行一条，
+// 运行中的行带微光和实时计时，完成后显示耗时；工具行可展开看原始参数与结果摘要 ——
+const WORK_ICONS = {
+  thinking: '<path d="M9.5 4.5a3 3 0 0 0-3 3v.2A3 3 0 0 0 4.5 10.5a3 3 0 0 0 1.2 2.4A3 3 0 0 0 8.5 17h1V4.5zM14.5 4.5a3 3 0 0 1 3 3v.2a3 3 0 0 1 2 2.8 3 3 0 0 1-1.2 2.4 3 3 0 0 1-2.8 4.1h-1V4.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+  tool: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.1l-5 5a1.5 1.5 0 0 0 2.1 2.1l5-5a4 4 0 0 0 5.1-5.4l-2.3 2.3-2.1-.6-.6-2.1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+  text: '<path d="M5 6.5h14M5 11h14M5 15.5h9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  working: '<circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+  chevron: '<path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
-function assistantToolsHtml(tools) {
-  if (!tools || !tools.length) return "";
-  const running = tools.some((tool) => tool.running);
-  const items = tools.map((tool) => {
-    const arg = Object.values(tool.args || {}).find((value) => value !== "" && value !== null && value !== undefined);
-    const label = `${ASSISTANT_TOOL_LABELS[tool.name] || tool.name}${arg !== undefined ? ` ${arg}` : ""}`;
-    const timing = tool.running ? "进行中" : `${((tool.ms || 0) / 1000).toFixed(1)}s`;
-    const title = `${tool.name} · ${timing}${tool.error ? " · 失败" : ""}`;
-    const cls = `assistant-tool${tool.error ? " is-error" : ""}${tool.running ? " is-running" : ""}`;
-    return `<span class="${cls}" title="${escapeAttr(title)}">${escapeHtml(label)}</span>`;
-  });
-  return `<div class="assistant-tools"><small>${running ? "查阅中" : "已查阅"}</small>${items.join("")}</div>`;
+function workIcon(name) {
+  return `<svg class="work-icon" viewBox="0 0 24 24" aria-hidden="true">${WORK_ICONS[name]}</svg>`;
+}
+
+function formatWorkDuration(ms) {
+  if (ms === null || ms === undefined) return "";
+  if (ms < 100) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  return `${Math.floor(seconds / 60)}m ${String(Math.floor(seconds % 60)).padStart(2, "0")}s`;
+}
+
+function workArgsText(args) {
+  const text = JSON.stringify(args || {});
+  return text === "{}" ? "" : text;
+}
+
+// a running row shows a ticking timer measured from its server-side start t
+function workTimer(item, live, extraClass = "") {
+  if (!live) return `<span class="work-time ${extraClass}">${escapeHtml(formatWorkDuration(item.ms))}</span>`;
+  return `<span class="work-time ${extraClass}" data-work-since="${item.t}">${escapeHtml(formatWorkDuration(assistantLiveMs(item.t)))}</span>`;
+}
+
+function workRowHtml(item, live) {
+  if (item.kind === "thinking") {
+    const running = live && item.ms === undefined;
+    return `<div class="work-row${running ? " is-live" : ""}">${workIcon("thinking")}<span class="work-label">${running ? "思考中" : "思考"}</span>${workTimer(item, running)}</div>`;
+  }
+  if (item.kind === "text") {
+    return `<div class="work-row is-note">${workIcon("text")}<span class="work-label">${escapeHtml(item.text)}</span></div>`;
+  }
+  const running = live && item.ms === undefined;
+  const args = workArgsText(item.args);
+  const status = item.error ? '<span class="work-fail" aria-label="工具调用失败">✕</span>' : "";
+  const detail = `<pre class="work-detail">${escapeHtml(`${item.name} ${args || "{}"}`)}${item.preview !== undefined ? `\n\n${escapeHtml(item.preview)}${(item.chars || 0) > (item.preview || "").length ? "\n…" : ""}` : ""}</pre>`;
+  return `
+    <details class="work-row is-tool${running ? " is-live" : ""}${item.error ? " is-error" : ""}" data-key="${escapeAttr(item.id || "")}">
+      <summary>${workIcon("tool")}<span class="work-label"><code>${escapeHtml(item.name)}</code>${args ? ` <span class="work-args">${escapeHtml(args)}</span>` : ""}</span>${status}${workTimer(item, running)}${workIcon("chevron")}</summary>
+      ${detail}
+    </details>`;
+}
+
+function workLogHtml(work, options = {}) {
+  const items = (work && work.items) || [];
+  const live = !!options.live;
+  if (!items.length && !live) return "";
+  const tools = items.filter((item) => item.kind === "tool").length;
+  const count = tools ? ` · ${tools} 次工具调用` : "";
+  const head = live
+    ? `${workIcon("working")}<span class="work-label">工作中</span><span class="work-time" data-work-since="0">${escapeHtml(formatWorkDuration(assistantLiveMs(0)))}</span>`
+    : `${workIcon("working")}<span class="work-label">已工作 ${escapeHtml(formatWorkDuration(work.elapsed_ms) || "")}${count}</span>${workIcon("chevron")}`;
+  const rows = items.map((item) => workRowHtml(item, live)).join("");
+  if (live) return `<div class="work-log is-live"><div class="work-head">${head}</div><div class="work-rows">${rows}</div></div>`;
+  return `<details class="work-log"><summary class="work-head">${head}</summary><div class="work-rows">${rows}</div></details>`;
 }
 
 // 流式回答：提问创建后台 run，EventSource 订阅 round/text/tool_start/tool_end
@@ -3118,24 +3154,55 @@ let assistantStream = null;
 function closeAssistantStream() {
   if (assistantStream) assistantStream.close();
   assistantStream = null;
+  setAssistantTicker(false);
+}
+
+// server time (seconds since the run began) estimated from the last event
+function assistantLiveMs(since) {
+  const run = state.assistant.run;
+  if (!run || run.clockOffset === undefined) return 0;
+  return Math.max(0, (Date.now() / 1000 - run.clockOffset - since) * 1000);
 }
 
 function assistantLiveHtml(run) {
-  const marker = run.text.indexOf(ASSISTANT_REPORT_MARKER);
-  const visible = (marker >= 0 ? run.text.slice(0, marker) : run.text).trim();
+  // the trailing text item is the answer streaming in; earlier text became
+  // interim notes when a tool call followed it
+  const items = run.items.slice();
+  const tail = items.length && items[items.length - 1].kind === "text" ? items.pop() : null;
+  const text = tail ? tail.text : "";
+  const marker = text.indexOf(ASSISTANT_REPORT_MARKER);
+  const visible = (marker >= 0 ? text.slice(0, marker) : text).trim();
   const drafting = marker >= 0
-    ? `<div class="assistant-drafting"><span class="spinner small" aria-hidden="true"></span><span>正在生成周报修改稿…（${run.text.length - marker} 字）</span></div>`
+    ? `<div class="assistant-drafting"><span class="spinner small" aria-hidden="true"></span><span>正在生成周报修改稿…（${text.length - marker} 字）</span></div>`
     : "";
-  const waiting = !visible && !drafting
-    ? `<div class="assistant-thinking"><span class="spinner small" aria-hidden="true"></span><span>${run.stopping ? "正在停止…" : run.tools.some((t) => t.running) ? "正在并行查阅资料…" : "正在思考…"}</span></div>`
+  const stopping = run.stopping ? `<div class="assistant-drafting">正在停止…</div>` : "";
+  const answer = visible || drafting || stopping
+    ? `<div class="assistant-bubble">${visible ? `<div class="assistant-stream">${escapeHtml(visible)}<span class="assistant-caret" aria-hidden="true"></span></div>` : ""}${drafting}${stopping}</div>`
     : "";
-  const body = visible ? `<div class="assistant-stream">${escapeHtml(visible)}<span class="assistant-caret" aria-hidden="true"></span></div>` : "";
   return `
     <div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(run.question)}</div></div>
     <div class="assistant-msg is-assistant" id="assistant-live">
-      ${assistantToolsHtml(run.tools)}
-      <div class="assistant-bubble">${waiting}${body}${drafting}</div>
+      ${workLogHtml({ items }, { live: true })}
+      ${answer}
     </div>`;
+}
+
+function tickAssistantTimers() {
+  if (!state.assistant.run || !document.querySelectorAll) return;
+  document.querySelectorAll("[data-work-since]").forEach((el) => {
+    el.textContent = formatWorkDuration(assistantLiveMs(Number(el.dataset.workSince)));
+  });
+}
+
+let assistantTicker = 0;
+
+function setAssistantTicker(on) {
+  if (typeof window === "undefined" || !window.setInterval) return;
+  if (on && !assistantTicker) assistantTicker = window.setInterval(tickAssistantTimers, 500);
+  if (!on && assistantTicker) {
+    window.clearInterval(assistantTicker);
+    assistantTicker = 0;
+  }
 }
 
 let assistantLiveFrame = 0;
@@ -3150,9 +3217,13 @@ function renderAssistantLive() {
     if (!run || !live || !live.parentElement) return renderAssistant();
     const box = $("assistant-messages");
     const pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    // keep expanded tool rows open across repaints
+    const open = new Set([...live.querySelectorAll("details[open]")].map((el) => el.dataset.key));
     const holder = document.createElement("div");
     holder.innerHTML = assistantLiveHtml(run);
-    live.replaceWith(holder.lastElementChild);
+    const next = holder.lastElementChild;
+    next.querySelectorAll("details").forEach((el) => { if (open.has(el.dataset.key)) el.open = true; });
+    live.replaceWith(next);
     if (pinned) box.scrollTop = box.scrollHeight;
   };
   if (typeof window !== "undefined" && window.requestAnimationFrame) {
@@ -3165,7 +3236,8 @@ function renderAssistantLive() {
 function startAssistantRun(projectId, run) {
   closeAssistantStream();
   const a = state.assistant;
-  a.run = { id: run.id, question: run.question, text: "", tools: [], stopping: false };
+  a.run = { id: run.id, question: run.question, items: [], stopping: false, clockOffset: Date.now() / 1000 - (run.elapsed || 0) };
+  setAssistantTicker(true);
   renderAssistant();
   if (typeof EventSource === "undefined") {
     a.error = "当前浏览器不支持流式输出";
@@ -3179,21 +3251,43 @@ function startAssistantRun(projectId, run) {
   const on = (type, handler) => source.addEventListener(type, (event) => {
     const live = current();
     if (!live) return;
-    handler(live, JSON.parse(event.data || "{}"));
+    const data = JSON.parse(event.data || "{}");
+    // keep the clock aligned with the server's run-relative timestamps
+    if (typeof data.t === "number") live.clockOffset = Date.now() / 1000 - data.t;
+    handler(live, data);
   });
-  on("round", (live) => { live.text = ""; renderAssistantLive(); });
-  on("text", (live, data) => { live.text += data.delta || ""; renderAssistantLive(); });
+  // mirror of the server's WorkRecorder: the same events build the same log
+  const closeThinking = (live, t) => {
+    const last = live.items[live.items.length - 1];
+    if (last && last.kind === "thinking" && last.ms === undefined) last.ms = Math.max(0, (t - last.t) * 1000);
+  };
+  on("round", (live, data) => {
+    closeThinking(live, data.t);
+    live.items.push({ kind: "thinking", t: data.t });
+    renderAssistantLive();
+  });
+  on("text", (live, data) => {
+    closeThinking(live, data.t);
+    const last = live.items[live.items.length - 1];
+    if (last && last.kind === "text") last.text += data.delta || "";
+    else live.items.push({ kind: "text", t: data.t, text: data.delta || "" });
+    renderAssistantLive();
+  });
   on("tool_start", (live, data) => {
-    live.tools.push({ ...data, running: true });
+    closeThinking(live, data.t);
+    const last = live.items[live.items.length - 1];
+    if (last && last.kind === "text") last.text = last.text.trim();
+    live.items.push({ kind: "tool", t: data.t, id: data.id, name: data.name, args: data.args });
     renderAssistantLive();
   });
   on("tool_end", (live, data) => {
-    const tool = live.tools.find((item) => item.id === data.id && item.running);
-    if (tool) Object.assign(tool, data, { running: false });
+    const tool = live.items.find((item) => item.kind === "tool" && item.id === data.id && item.ms === undefined);
+    if (tool) Object.assign(tool, { ms: data.ms, error: data.error, chars: data.chars, preview: data.preview });
     renderAssistantLive();
   });
   const finish = (live, message, restoreQuestion) => {
     closeAssistantStream();
+    setAssistantTicker(false);
     a.run = null;
     if (message) a.error = message;
     renderAssistant();
@@ -3234,7 +3328,7 @@ function assistantMessageHtml(message) {
   if (message.role === "user") {
     return `<div class="assistant-msg is-user"><div class="assistant-bubble">${escapeHtml(message.content)}</div></div>`;
   }
-  return `<div class="assistant-msg is-assistant"><div class="assistant-bubble assistant-md">${message.content_html}</div>${assistantToolsHtml(message.tools)}${assistantProposalHtml(message)}</div>`;
+  return `<div class="assistant-msg is-assistant">${workLogHtml(message.work)}<div class="assistant-bubble assistant-md">${message.content_html}</div>${assistantProposalHtml(message)}</div>`;
 }
 
 function assistantProposalHtml(message) {
@@ -3274,7 +3368,7 @@ function renderAssistant() {
     send.classList.toggle("primary", !a.run);
   }
   const input = $("assistant-input");
-  if (input) input.disabled = busy;
+  if (input) input.disabled = busy || a.loading;
   if (a.loading) {
     box.innerHTML = `<div class="assistant-empty"><span class="spinner small" aria-hidden="true"></span><span>正在加载对话…</span></div>`;
     return;
