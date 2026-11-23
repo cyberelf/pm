@@ -39,7 +39,7 @@ SYSTEM_PROMPT = f"""你是项目周报助手，帮助用户理解、追问和调
 
 取证方式：
 - 当前周报和项目概况已在下方；能直接根据它们回答的问题不要调用工具。
-- 需要更多依据时按需调用工具，只取回答所需的部分：历史周报用 weekly_list/weekly_show，资料用 materials_list/material_show 或 search，计划与里程碑用 plan_show，本周补充用 supplement_show，系统预警用 risks_list，仓库用 repos_list。
+- 需要更多依据时按需调用工具，只取回答所需的部分：历史周报用 weekly_list/weekly_show，资料用 materials_list/material_show 或 search，计划与里程碑用 plan_show，本周补充用 supplement_show，系统预警用 risks_list，仓库用 repos_list，工作线（项目内并行的长线）的跨周进展用 workstream_list/workstream_show。
 - repos_commits 和 repos_activity 会访问远程 API、较慢，只在问题确实涉及代码提交、PR/Issue 或看板时调用，并尽量指定 repo。
 - 能并行的工具调用请在同一轮一起发出。
 

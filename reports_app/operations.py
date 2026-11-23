@@ -39,6 +39,13 @@ from .sharing import ACCESSIBLE_PROJECTS_SQL, project_role, require_role
 from .timeutil import current_week_key, parse_iso, week_bounds, week_key_for
 from .todos import OPEN_STATUSES, close_todo, create_todo, update_todo
 from .validation import ValidationError
+from .workstreams import (
+    material_links_map,
+    resolve_workstream,
+    set_material_links,
+    workstream_detail,
+    workstream_overview,
+)
 
 AGENT_RESULT_MAX_CHARS = 12000
 AGENT_CONTENT_MAX_CHARS = 10000
@@ -157,6 +164,7 @@ GROUPS = {
     "project plan": "project plan and milestones",
     "project risks": "system risk warnings",
     "project repos": "linked Git repositories",
+    "project workstreams": "workstreams (工作线) inside a project",
     "todo": "TODO operations",
     "material": "material operations",
     "report": "weekly report operations",
@@ -493,6 +501,7 @@ def todo_show(ctx, id):
     agent=True,
     render={"kind": "table", "items": "materials",
             "columns": [col("ID", "id"), col("CREATED", "created_at", "datetime"), col("SOURCE", "source_type"),
+                        col("WORKSTREAM", "workstream", "clip:16"),
                         col("FILENAME", "filename", "clip:40"), col("SUMMARY", "summary", "oneline|clip:60")]},
 )
 def materials_list(ctx, project, scope="this_week"):
@@ -503,7 +512,12 @@ def materials_list(ctx, project, scope="this_week"):
     week = current_week_key(project["timezone"])
     if scope != "all":
         rows = [r for r in rows if parse_iso(r["created_at"]) and week_key_for(parse_iso(r["created_at"]), project["timezone"]) == week]
-    items = [dict(r) for r in rows]
+    names = {
+        r["id"]: r["name"]
+        for r in ctx.conn.execute("SELECT id, name FROM workstreams WHERE project_id = ?", (project["id"],))
+    }
+    links = material_links_map(ctx.conn, project["id"])
+    items = [{**dict(r), "workstream": names.get((links.get(r["id"]) or {}).get("primary"), "")} for r in rows]
     if ctx.for_agent:
         items = [{**r, "summary": (r["summary"] or "")[:400]} for r in items[:80]]
     return {"project_name": project["name"], "scope": scope, "week_key": week, "materials": items}
@@ -575,6 +589,64 @@ def risks_list(ctx, project):
         (project["id"], week),
     ).fetchall()
     return {"week_key": week, "risks": [dict(r) for r in rows]}
+
+
+@operation(
+    name="workstream_list",
+    command=("project", "workstreams", "list"),
+    summary="list the project's workstreams with health and latest snapshot",
+    description="List the project's workstreams (工作线, parallel long-running lines of work) with status, health from "
+                "deterministic rules, linked material counts and each one's latest weekly snapshot.",
+    params=(PROJECT,),
+    agent=True,
+    render={"kind": "table", "items": "workstreams", "empty": "No workstreams.",
+            "columns": [col("ID", "id"), col("WORKSTREAM", "name", "clip:24"), col("STATUS", "status"),
+                        col("HEALTH", "health"), col("OWNER", "owner_label", "clip:12"), col("MATERIALS", "material_total"),
+                        col("LATEST", "latest", "oneline|clip:60")]},
+)
+def workstream_list(ctx, project):
+    data = workstream_overview(ctx.conn, project["id"], project["timezone"])
+    items = []
+    for item in data["workstreams"]:
+        latest = next((c for c in reversed(item["cells"]) if c["snapshot"]), None)
+        items.append({
+            **{k: item[k] for k in ("id", "name", "goal", "owner_label", "status", "target_date", "health",
+                                     "overdue_reasons", "material_total", "last_material_at")},
+            "latest": f"{latest['week_key']} {latest['snapshot']['summary']}" if latest else "",
+        })
+    return {"project_name": project["name"], "week_key": data["current_week"], "workstreams": items,
+            "unassigned_materials": data["unassigned_materials"]}
+
+
+@operation(
+    name="workstream_show",
+    command=("project", "workstreams", "show"),
+    summary="show one workstream: goal, milestones, weekly snapshots and linked materials",
+    description="Read one workstream (by ID or exact name) with its goal, milestones, weekly snapshots across weeks "
+                "and linked materials (newest first); use it for questions about one line of work over time.",
+    params=(Param("workstream", "string", "workstream ID or exact name", required=True, positional=True), PROJECT),
+    agent=True,
+    render={
+        "kind": "record",
+        "fields": [{"label": "Workstream", "template": "#{id} {name}"}, {"label": "Status", "key": "status"},
+                   {"label": "Health", "key": "health"}, {"label": "Owner", "key": "owner_label"},
+                   {"label": "Target", "key": "target_date"}],
+        "body": "goal",
+        "after": [{"label": "Timeline", "key": "timeline"}],
+    },
+)
+def workstream_show(ctx, workstream, project):
+    row = resolve_workstream(ctx.conn, project["id"], workstream)
+    item = workstream_detail(ctx.conn, project["id"], row["id"], project["timezone"], ctx.user_id,
+                             material_limit=60 if ctx.for_agent else 200)
+    if ctx.for_agent:
+        item["materials"] = [{**m, "summary": (m["summary"] or "")[:300]} for m in item["materials"]]
+        item["snapshots"] = item["snapshots"][:26]
+    item["timeline"] = "\n".join(
+        f"{s['week_key']} [{s['status']}] {s['summary']}" + (f" → {s['next_step']}" if s["next_step"] else "")
+        for s in item["snapshots"]
+    )
+    return item
 
 
 def _repos(ctx, project, repo=None):
@@ -699,13 +771,15 @@ def repos_activity(ctx, project, repo=None):
         PROJECT,
         Param("text", "text", "text content; pass - to read from stdin", stdin=True),
         Param("title", "string", "text material title (default: CLI note)"),
-        Param("file", "file", "file attachments (Markdown, text, HTML, PDF, Excel, images)", multiple=True),
+        Param("file", "file", "file attachments (Markdown, text, HTML, PDF, Excel, Word, images)", multiple=True),
+        Param("workstream", "string", "workstream ID or exact name to file the material under"),
     ),
     read_only=False,
     role="write",
     render={"kind": "message"},
 )
-def materials_add(ctx, project, text=None, title=None, file=None):
+def materials_add(ctx, project, text=None, title=None, file=None, workstream=None):
+    chosen = resolve_workstream(ctx.conn, project["id"], workstream)["id"] if workstream else None
     if file:
         uploads = []
         for item in file:
@@ -716,6 +790,8 @@ def materials_add(ctx, project, text=None, title=None, file=None):
                 "content_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
             })
         ids = [store_material(ctx.conn, project["id"], item) for item in uploads]
+        for material_id in ids if chosen else []:
+            set_material_links(ctx.conn, project["id"], material_id, chosen)
         summarize_uploaded_materials(ctx.conn, project["id"], ids)
         evaluate_risks(ctx.conn, project["id"])
         return {
@@ -728,6 +804,8 @@ def materials_add(ctx, project, text=None, title=None, file=None):
     material_id = store_manual_material(
         ctx.conn, project["id"], {"title": (title or "").strip() or "CLI note", "content": content}
     )
+    if chosen:
+        set_material_links(ctx.conn, project["id"], material_id, chosen)
     evaluate_risks(ctx.conn, project["id"])
     return {"id": material_id, "message": f"Submitted text material to '{project['name']}' (material ID: {material_id})"}
 
@@ -961,5 +1039,10 @@ def agent_inventory(conn, project, week_key):
         "materials_this_week": this_week,
         "weekly_supplement_this_week": bool(update),
         "repos": [f"{r['repo']} ({r['status']})" for r in repos],
+        "workstreams": [
+            r["name"] for r in conn.execute(
+                "SELECT name FROM workstreams WHERE project_id = ? AND status = 'active' ORDER BY position, id", (pid,)
+            )
+        ],
         "active_risks": risks,
     }

@@ -291,6 +291,58 @@ CREATE TABLE IF NOT EXISTS assistant_messages (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(project_id, user_id, week_key, id);
+
+-- 工作线 (workstreams.py): one flat level of long-running lines inside a
+-- project. Materials and the owner's TODOs link to them (one primary plus
+-- related); weekly snapshots keep the per-line view across weeks.
+CREATE TABLE IF NOT EXISTS workstreams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    goal TEXT NOT NULL DEFAULT '',
+    owner_label TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    target_date TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(project_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS material_workstreams (
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (material_id, workstream_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_material_workstreams_primary ON material_workstreams(material_id) WHERE is_primary = 1;
+CREATE INDEX IF NOT EXISTS idx_material_workstreams_ws ON material_workstreams(workstream_id);
+
+CREATE TABLE IF NOT EXISTS todo_workstreams (
+    todo_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
+    workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (todo_id, workstream_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_workstreams_primary ON todo_workstreams(todo_id) WHERE is_primary = 1;
+CREATE INDEX IF NOT EXISTS idx_todo_workstreams_ws ON todo_workstreams(workstream_id);
+
+CREATE TABLE IF NOT EXISTS workstream_weekly (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+    week_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'steady',
+    summary TEXT NOT NULL DEFAULT '',
+    next_step TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'generated',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(workstream_id, week_key)
+);
 """
 
 

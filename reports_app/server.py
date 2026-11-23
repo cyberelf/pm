@@ -105,7 +105,7 @@ from .materials import (
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
 from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report, repo_extras_context
-from .task_queue import enqueue_template_generation
+from .task_queue import enqueue_template_generation, enqueue_workstream_job
 from .risks import evaluate_risks, progress_status
 from .search_index import search
 from .sharing import (
@@ -128,6 +128,20 @@ from .task_queue import (
 from .timeutil import current_week_key, iso_now, week_bounds
 from .timeutil import get_zone, parse_iso
 from .todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
+from .workstreams import (
+    create_workstream,
+    delete_workstream,
+    material_links_map,
+    reorder_workstreams,
+    save_manual_snapshot,
+    seed_from_objectives,
+    set_material_links,
+    set_todo_links,
+    todo_workstream_options,
+    update_workstream,
+    workstream_detail,
+    workstream_overview,
+)
 from .asr import normalize_asr_endpoint
 from .voice_todos import (
     cancel_voice_job,
@@ -487,6 +501,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.serve_static(parsed.path)
         except PermissionError as exc:
             self.error(HTTPStatus.FORBIDDEN, str(exc))
+        except LookupError as exc:
+            self.error(HTTPStatus.NOT_FOUND, str(exc))
+        except ValidationError as exc:
+            self.error(HTTPStatus.BAD_REQUEST, str(exc))
         except PayloadTooLarge as exc:
             self.error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
         except Exception as exc:
@@ -559,6 +577,8 @@ class Handler(BaseHTTPRequestHandler):
             self.error(HTTPStatus.CONFLICT, str(exc))
         except PermissionError as exc:
             self.error(HTTPStatus.FORBIDDEN, str(exc))
+        except LookupError as exc:
+            self.error(HTTPStatus.NOT_FOUND, str(exc))
         except ValidationError as exc:
             self.error(HTTPStatus.BAD_REQUEST, str(exc))
         except PayloadTooLarge as exc:
@@ -767,6 +787,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.error(HTTPStatus.NOT_FOUND, str(exc).strip("'\""))
                 return
             if path == "/api/todos" and method == "GET":
+                self.json({"todos": todo_rows(conn, user_id), "workstream_options": todo_workstream_options(conn, user_id)})
+                return
+            if len(parts) == 4 and parts[:2] == ["api", "todos"] and parts[3] == "workstreams" and method == "PUT":
+                payload = self.body_json()
+                set_todo_links(conn, user_id, int(parts[2]), payload.get("primary"), payload.get("related") or [])
+                conn.commit()
                 self.json({"todos": todo_rows(conn, user_id)})
                 return
             if path == "/api/todos" and method == "POST":
@@ -1183,17 +1209,36 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     self.json({"shares": shares})
                     return
+                if len(parts) >= 4 and parts[3] == "workstreams":
+                    if self.workstream_route(conn, method, parts, project_id, role, user_id):
+                        return
+                if len(parts) == 6 and parts[3] == "materials" and parts[5] == "workstreams" and method == "PUT":
+                    require_role(role, "write")
+                    payload = self.body_json()
+                    set_material_links(conn, project_id, int(parts[4]), payload.get("primary"), payload.get("related") or [])
+                    evaluate_risks(conn, project_id)
+                    conn.commit()
+                    self.json(workspace(conn, project_id, role))
+                    return
                 if len(parts) == 4 and parts[3] == "materials" and method == "POST":
                     require_role(role, "write")
                     payload = self.body_json()
+                    chosen = payload.get("workstream_id")
                     if payload.get("source_type") == "manual":
                         material_id = store_manual_material(conn, project_id, payload)
                         material_ids = [material_id]
+                        if chosen:
+                            set_material_links(conn, project_id, material_id, chosen)
                     else:
                         files = payload.get("files") if "files" in payload else [payload]
                         if not isinstance(files, list) or not files:
                             raise ValidationError("at least one material file is required")
                         material_ids = [store_material(conn, project_id, item) for item in files]
+                        if chosen:
+                            # an explicit choice is manual and wins over the
+                            # agent's suggestion in the summary call below
+                            for material_id in material_ids:
+                                set_material_links(conn, project_id, material_id, chosen)
                         summarize_uploaded_materials(conn, project_id, material_ids)
                     evaluate_risks(conn, project_id)
                     conn.commit()
@@ -1361,6 +1406,63 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return  # the client went away; the run keeps going
 
+    def workstream_route(self, conn, method, parts, project_id, role, user_id):
+        """/api/projects/{id}/workstreams[...]; returns False when no route
+        matched so the caller can fall through to 404."""
+        timezone = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
+
+        def overview(status=HTTPStatus.OK, **extra):
+            evaluate_risks(conn, project_id)
+            conn.commit()
+            self.json({**workstream_overview(conn, project_id, timezone), **extra}, status)
+
+        tail = parts[4:]
+        if not tail and method == "GET":
+            self.json(workstream_overview(conn, project_id, timezone))
+            return True
+        if not tail and method == "POST":
+            require_role(role, "write")
+            workstream_id = create_workstream(conn, project_id, self.body_json())
+            overview(HTTPStatus.CREATED, id=workstream_id)
+            return True
+        if tail == ["seed"] and method == "POST":
+            require_role(role, "write")
+            created = seed_from_objectives(conn, project_id)
+            overview(created=len(created))
+            return True
+        if tail == ["reorder"] and method == "POST":
+            require_role(role, "write")
+            reorder_workstreams(conn, project_id, self.body_json().get("ids"))
+            overview()
+            return True
+        if tail == ["organize"] and method == "POST":
+            require_role(role, "write")
+            job_id = enqueue_workstream_job(conn, self.server.db_path, project_id)
+            self.json({"id": job_id, "status": "queued"}, HTTPStatus.ACCEPTED)
+            return True
+        if tail and tail[0].isdigit():
+            workstream_id = int(tail[0])
+            if len(tail) == 1 and method == "GET":
+                self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
+                return True
+            if len(tail) == 1 and method == "PUT":
+                require_role(role, "write")
+                update_workstream(conn, project_id, workstream_id, self.body_json())
+                overview()
+                return True
+            if len(tail) == 1 and method == "DELETE":
+                require_role(role, "write")
+                delete_workstream(conn, project_id, workstream_id)
+                overview()
+                return True
+            if tail[1:] == ["snapshots"] and method == "PUT":
+                require_role(role, "write")
+                save_manual_snapshot(conn, project_id, workstream_id, self.body_json())
+                conn.commit()
+                self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
+                return True
+        return False
+
     def json(self, payload, status=HTTPStatus.OK, extra_headers=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self._send_bytes(data, "application/json; charset=utf-8", status=status, extra_headers=extra_headers)
@@ -1453,10 +1555,12 @@ def workspace(conn, project_id, role="owner"):
         ],
         "report": report_dict,
         "report_history": report_history,
-        "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? AND trigger_type != 'template' ORDER BY id DESC", (project_id, week_key))],
+        "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? AND trigger_type NOT IN ('template', 'workstreams') ORDER BY id DESC", (project_id, week_key))],
+        "workstream_job": row_to_dict(conn.execute("SELECT id, status, output_md, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'workstreams' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
         "template_job": row_to_dict(conn.execute("SELECT id, week_key, trigger_type, provider, status, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'template' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
-        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
+        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue', 'workstream_stale') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
+        "workstreams": workstream_overview(conn, project_id, project["timezone"]),
         "progress_status": progress_status(conn, project_id),
     }
 
@@ -1583,6 +1687,7 @@ def plan_dict(conn, project_id):
 
 
 def material_rows(conn, project_id, timezone):
+    links = material_links_map(conn, project_id)
     rows = []
     for row in conn.execute(
         """
@@ -1598,6 +1703,7 @@ def material_rows(conn, project_id, timezone):
         item = dict(row)
         item["editable"] = material_is_editable(row, timezone)
         item["deletable"] = material_is_unlocked(row, timezone)
+        item["workstreams"] = links.get(item["id"], {"primary": None, "related": [], "source": ""})
         if item["source_type"] == "manual":
             item["content"] = item.pop("extracted_text") or ""
         else:

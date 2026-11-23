@@ -10,6 +10,10 @@ from .risks import evaluate_risks
 from .timeutil import current_week_key, iso_now, parse_iso, week_bounds, week_key_for
 from .validation import ValidationError
 
+# generation_jobs rows that are not weekly reports; they never count as the
+# last successful report and never show up in the report job list
+NON_REPORT_TRIGGERS = ("template", "workstreams")
+
 
 def get_effective_template(project):
     return project["report_template"] or DEFAULT_REPORT_TEMPLATE
@@ -31,7 +35,7 @@ def assemble_context(conn, project_id, week_key=None):
     ).fetchone()
     materials = conn.execute(
         """
-        SELECT filename, source_type, extraction_status, extracted_text, summary,
+        SELECT id, filename, source_type, extraction_status, extracted_text, summary,
                extraction_error, created_at, updated_at
         FROM materials WHERE project_id = ? ORDER BY id DESC
         """,
@@ -49,6 +53,21 @@ def assemble_context(conn, project_id, week_key=None):
     # one credential snapshot for commits, extras, and org projects so the
     # three sections never diverge mid-assembly
     auth_info = git_auth_for_user(conn, project["user_id"])
+    workstream_rows = conn.execute(
+        "SELECT id, name, goal, owner_label, status, target_date FROM workstreams WHERE project_id = ? ORDER BY position, id",
+        (project_id,),
+    ).fetchall()
+    workstream_names = {row["id"]: row["name"] for row in workstream_rows}
+    primary_links = {
+        row["material_id"]: workstream_names.get(row["workstream_id"], "")
+        for row in conn.execute(
+            """
+            SELECT mw.material_id, mw.workstream_id FROM material_workstreams mw
+            JOIN materials m ON m.id = mw.material_id WHERE m.project_id = ? AND mw.is_primary = 1
+            """,
+            (project_id,),
+        )
+    }
     previous = conn.execute(
         "SELECT content_md, updated_at FROM weekly_reports WHERE project_id = ? AND week_key = ?",
         (project_id, week_key),
@@ -77,6 +96,16 @@ def assemble_context(conn, project_id, week_key=None):
             "deliverables": json.loads(plan["deliverables_json"] if plan else "[]"),
         },
         "weekly_update": dict(update) if update else None,
+        "workstreams": [
+            {
+                "name": row["name"],
+                "goal": (row["goal"] or "")[:300],
+                "owner_label": row["owner_label"],
+                "status": row["status"],
+                "target_date": row["target_date"],
+            }
+            for row in workstream_rows
+        ],
         "materials": [
             {
                 "filename": row["filename"],
@@ -97,6 +126,7 @@ def assemble_context(conn, project_id, week_key=None):
                 "extraction_status": row["extraction_status"],
                 "extraction_error": row["extraction_error"],
                 "summary": row["summary"],
+                "workstream": primary_links.get(row["id"], ""),
                 "excerpt": (row["extracted_text"] or "")[:8000],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -209,6 +239,7 @@ def latest_success(conn, project_id, week_key):
         """
         SELECT * FROM generation_jobs
         WHERE project_id = ? AND week_key = ? AND status = 'success'
+          AND trigger_type NOT IN ('template', 'workstreams')
         ORDER BY completed_at DESC, id DESC LIMIT 1
         """,
         (project_id, week_key),
@@ -296,6 +327,9 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
                 (project_id, week_key, output_md, supplement_json, job_id, completed, completed),
             )
         conn.commit()
+        from .workstream_agent import refresh_after_report
+
+        refresh_after_report(conn, project_id, week_key, output_md)
         return job_id
     except Exception as exc:
         completed = iso_now()
@@ -357,6 +391,10 @@ def build_internal_evidence_prompt(context):
         "Use current-week manually entered or uploaded materials and current-week Git commits as primary evidence for this week's changes. "
         "If git_extras_this_week contains pull request / merge request, issue, milestone, or repository Projects board entries, use them as secondary evidence for collaboration activity, open blockers, upcoming deadlines, and board statuses; an empty or missing section means the repo owner chose not to fetch it, so never invent entries. "
         "If git_org_projects is present, use its organization board items to describe project-level progress and statuses. "
+        "If workstreams is non-empty, the project runs these parallel lines of work: organise this week's progress by active workstream "
+        "(one sub-heading per active workstream, in the given order, inside the progress section of the required structure), "
+        "use each new material's workstream tag to place it, and state 本周无进展 for an active workstream without evidence; "
+        "untagged evidence goes under the workstream it clearly belongs to, otherwise under 其他. "
         "For every connected repository, include a short per-repo section. "
         "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "
         "If there are no new materials, say so explicitly. "
@@ -375,6 +413,7 @@ def compact_evidence(context):
         "project_week": context.get("project_week"),
         "plan": context.get("plan"),
         "weekly_update": context.get("weekly_update"),
+        "workstreams": context.get("workstreams", []),
         "new_materials_this_week": [
             {**item, "excerpt": (item.get("excerpt") or "")[:2500]}
             for item in context.get("new_materials_this_week", [])

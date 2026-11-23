@@ -30,6 +30,7 @@ from .sharing import ACCESSIBLE_PROJECTS_SQL
 from .timeutil import current_week_key, iso_now
 from .validation import ValidationError
 from .voice_todos import create_voice_job, run_voice_job
+from .workstream_agent import run_workstream_job
 
 
 class QueueFullError(Exception):
@@ -155,7 +156,7 @@ def enqueue_report_generation(conn, db_path, project_id, trigger_type, force=Fal
     conn.execute("BEGIN IMMEDIATE")
     try:
         duplicate = conn.execute(
-            "SELECT id FROM generation_jobs WHERE project_id = ? AND week_key = ? AND status IN ('queued', 'running')",
+            "SELECT id FROM generation_jobs WHERE project_id = ? AND week_key = ? AND status IN ('queued', 'running') AND trigger_type != 'workstreams'",
             (project_id, week_key),
         ).fetchone()
         if duplicate:
@@ -218,6 +219,42 @@ def enqueue_template_generation(conn, db_path, project_id, requirements):
     return job_id
 
 
+def enqueue_workstream_job(conn, db_path, project_id):
+    """Queue 「AI 整理」 (classify unassigned materials, backfill snapshots)
+    with the shared capacity accounting; one per project at a time."""
+    project = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        raise ValidationError("project not found")
+    if not conn.execute("SELECT 1 FROM workstreams WHERE project_id = ? AND status = 'active'", (project_id,)).fetchone():
+        raise ValidationError("先创建至少一条进行中的工作线")
+    now = iso_now()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute(
+            "SELECT id FROM generation_jobs WHERE project_id = ? AND trigger_type = 'workstreams' AND status IN ('queued', 'running')",
+            (project_id,),
+        ).fetchone():
+            raise ValidationError("这个项目已有工作线整理任务在排队或运行")
+        capacity = queue_capacity(conn)
+        if active_task_count(conn) >= capacity:
+            raise QueueFullError(f"task queue is full (capacity {capacity})")
+        cur = conn.execute(
+            """
+            INSERT INTO generation_jobs
+            (project_id, week_key, trigger_type, provider, status, queued_at, started_at)
+            VALUES (?, ?, 'workstreams', ?, 'queued', ?, ?)
+            """,
+            (project_id, current_week_key(project["timezone"]), project["report_provider"], now, now),
+        )
+        job_id = cur.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    get_task_queue(db_path).submit(run_workstream_job, db_path, job_id, project_id)
+    return job_id
+
+
 def enqueue_voice_job(conn, db_path, payload, asr_endpoint, asr_model, asr_language, user_id):
     """Insert a queued voice job and hand it to the shared task queue with the
     same capacity accounting as report generation."""
@@ -267,7 +304,7 @@ def task_queue_state(conn, user_id=None, is_admin=False):
         params,
     ):
         item = dict(row)
-        item["kind"] = "template" if row["trigger_type"] == "template" else "report"
+        item["kind"] = row["trigger_type"] if row["trigger_type"] in ("template", "workstreams") else "report"
         item["project_name"] = project_names.get(item["project_id"], "")
         tasks.append(item)
     for row in conn.execute(

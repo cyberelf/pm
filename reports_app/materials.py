@@ -610,8 +610,11 @@ def summarize_uploaded_materials(conn, project_id, material_ids, timeout=120):
         for row in rows
     ]
     fallbacks = {item["id"]: fallback_summary(item["filename"], item["text_start"]) for item in items}
+    from .workstreams import auto_link_material, workstreams_for_prompt
+
+    workstreams = workstreams_for_prompt(conn, project_id)
     try:
-        generated = generate_ai_summaries(items, timeout)
+        generated, assignments = generate_ai_summaries_and_workstreams(items, timeout, workstreams)
     except Exception as exc:
         for item in items:
             conn.execute(
@@ -631,29 +634,74 @@ def summarize_uploaded_materials(conn, project_id, material_ids, timeout=120):
                 "UPDATE materials SET summary = ?, summary_status = 'failed', summary_error = ? WHERE id = ?",
                 (fallbacks[item["id"]], "AI summary output was missing for this file", item["id"]),
             )
+    # the agent's workstream choice only lands on materials the request did
+    # not assign explicitly (auto_link_material skips linked ones)
+    for item in items:
+        if assignments.get(item["id"]) is not None:
+            auto_link_material(conn, project_id, item["id"], assignments[item["id"]])
 
 
 def generate_ai_summaries(items, timeout=120):
-    """Material summaries run through the internal agent; REPORTS_FAKE_PROVIDER
+    return generate_ai_summaries_and_workstreams(items, timeout)[0]
+
+
+def generate_ai_summaries_and_workstreams(items, timeout=120, workstreams=None):
+    """Material summaries (and, when the project has active workstreams, a
+    workstream per file) in one internal-agent call; REPORTS_FAKE_PROVIDER
     keeps tests and dry runs offline."""
     from .reports import fake_provider_enabled
 
     if fake_provider_enabled():
-        return {item["id"]: fallback_summary(item["filename"], item["text_start"]) for item in items}
+        from .workstream_agent import fake_classify
+
+        summaries = {item["id"]: fallback_summary(item["filename"], item["text_start"]) for item in items}
+        assignments = {}
+        if workstreams:
+            for item in items:
+                assignments[item["id"]] = fake_classify(f"{item['filename']} {item['text_start']}", workstreams)
+        return summaries, assignments
     from .internal_agent import internal_chat, resolve_llm_settings
 
-    raw = internal_chat(build_summary_prompt(items), resolve_llm_settings(), timeout=timeout, temperature=0)
-    return parse_summary_output(raw, items)
+    raw = internal_chat(build_summary_prompt(items, workstreams), resolve_llm_settings(), timeout=timeout, temperature=0)
+    return parse_summary_output(raw, items), (parse_summary_assignments(raw, items) if workstreams else {})
 
 
-def build_summary_prompt(items):
+def build_summary_prompt(items, workstreams=None):
     evidence = json.dumps(items, ensure_ascii=False, indent=2)
+    if workstreams:
+        return (
+            "为每份项目资料生成简洁、客观的摘要，并归到最相关的一条工作线。只依据原始文件名和正文开头，不要补充未出现的事实。"
+            "使用资料正文的主要语言，每条摘要不超过120个汉字或同等长度。无法判断工作线时 workstream_id 填 null。"
+            "只输出 JSON 数组，每项严格使用 {\"id\": 数字, \"summary\": \"摘要\", \"workstream_id\": 工作线ID或null}，不要 Markdown。\n\n"
+            f"工作线：\n{json.dumps(workstreams, ensure_ascii=False, indent=2)}\n\n"
+            f"资料：\n{evidence}"
+        )
     return (
         "为每份项目资料生成简洁、客观的摘要。只依据原始文件名和正文开头，不要补充未出现的事实。"
         "使用资料正文的主要语言，每条不超过120个汉字或同等长度。"
         "只输出 JSON 数组，每项严格使用 {\"id\": 数字, \"summary\": \"摘要\"}，不要 Markdown。\n\n"
         f"资料：\n{evidence}"
     )
+
+
+def parse_summary_assignments(raw, items):
+    """{material_id: workstream_id} from the summary output; entries without
+    a usable id are left out."""
+    value = (raw or "").strip()
+    if value.startswith("```"):
+        value = re.sub(r"^```(?:json)?\s*|\s*```$", "", value, flags=re.IGNORECASE)
+    try:
+        data = json.loads(value)
+    except ValueError:
+        return {}
+    if not isinstance(data, list):
+        return {}
+    allowed = {item["id"] for item in items}
+    result = {}
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("id") in allowed and isinstance(entry.get("workstream_id"), int):
+            result[entry["id"]] = entry["workstream_id"]
+    return result
 
 
 def parse_summary_output(raw, items):

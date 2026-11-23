@@ -21,6 +21,9 @@ def _lane_top_position(conn, user_id, status):
 
 
 def todo_rows(conn, user_id):
+    from .workstreams import todo_links_map
+
+    links = todo_links_map(conn, user_id)
     rows = []
     for row in conn.execute(
             """
@@ -36,6 +39,7 @@ def todo_rows(conn, user_id):
         item = dict(row)
         item["description_html"] = _render_todo_markdown(item["description"])
         item["close_reason_html"] = _render_todo_markdown(item["close_reason"])
+        item["workstreams"] = links.get(item["id"], {"primary": None, "related": []})
         rows.append(item)
     return rows
 
@@ -155,6 +159,9 @@ def close_todo(conn, todo_id, payload, user_id):
                 "content": _material_content(row, reason),
             },
         )
+        from .workstreams import copy_todo_links_to_material
+
+        copy_todo_links_to_material(conn, todo_id, project_id, material_id)
     now = iso_now()
     conn.execute(
         """

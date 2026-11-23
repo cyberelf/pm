@@ -29,7 +29,9 @@ def evaluate_risks(conn, project_id):
             'overdue_milestone',
             'generation_failed',
             'github_unavailable',
-            'material_extraction_failed'
+            'material_extraction_failed',
+            'workstream_stale',
+            'workstream_overdue'
           )
         """,
         (iso_now(), project_id, week_key),
@@ -63,6 +65,23 @@ def evaluate_risks(conn, project_id):
                     item.get("title", ""),
                 )
 
+    from .workstreams import list_workstreams, workstream_conditions
+
+    conditions = workstream_conditions(conn, project_id, project["timezone"])
+    for row in list_workstreams(conn, project_id):
+        condition = conditions[row["id"]]
+        ref = f"workstream:{row['id']}"
+        if condition["overdue"]:
+            upsert_warning(
+                conn, project_id, week_key, "workstream_overdue", "high",
+                f"工作线「{row['name']}」逾期", "；".join(condition["overdue"]), ref,
+            )
+        elif condition["stale"]:
+            upsert_warning(
+                conn, project_id, week_key, "workstream_stale", "medium",
+                f"工作线「{row['name']}」两周无新资料", "本周和上周都没有关联到这条工作线的资料", ref,
+            )
+
 
 def progress_status(conn, project_id):
     project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
@@ -71,7 +90,7 @@ def progress_status(conn, project_id):
         """
         SELECT severity FROM risk_warnings
         WHERE project_id = ? AND week_key = ? AND status = 'active'
-          AND rule IN ('missing_update', 'overdue_milestone')
+          AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue')
         """,
         (project_id, week_key),
     ).fetchall()
