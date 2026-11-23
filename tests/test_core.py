@@ -59,6 +59,7 @@ from reports_app.github import fetch_org_projects as github_fetch_org_projects
 from reports_app.github import fetch_repo_projects, list_branches, list_issues, list_milestones, list_pull_requests, weekly_commits
 from reports_app.markdown import render_markdown
 from reports_app.materials import (
+    add_uploaded_materials,
     build_summary_prompt,
     decode_document_bytes,
     delete_material,
@@ -67,7 +68,6 @@ from reports_app.materials import (
     parse_summary_output,
     store_manual_material,
     store_material,
-    summarize_uploaded_materials,
     update_manual_material,
     update_material_summary,
 )
@@ -1707,16 +1707,66 @@ class CoreTest(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_upload_model_calls_do_not_hold_the_write_lock(self):
+        import reports_app.materials as materials_module
+
+        seen = []
+        original_summary = materials_module.generate_ai_summaries_and_workstreams
+        original_image = materials_module.recognize_image_text
+
+        def probe(label):
+            # another writer (the scheduler, a second request) must get the
+            # lock immediately while the model call is in flight
+            seen.append((label, self.conn.in_transaction))
+            other = sqlite3.connect(str(self.db_path), timeout=0)
+            try:
+                other.execute("UPDATE projects SET updated_at = updated_at WHERE id = ?", (self.project_id,))
+                other.commit()
+            finally:
+                other.close()
+
+        def slow_summary(*args, **kwargs):
+            probe("summary")
+            return original_summary(*args, **kwargs)
+
+        def slow_image(*args, **kwargs):
+            probe("image")
+            return original_image(*args, **kwargs)
+
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 32).decode()
+        materials_module.generate_ai_summaries_and_workstreams = slow_summary
+        materials_module.recognize_image_text = slow_image
+        try:
+            ids = add_uploaded_materials(self.conn, self.project_id, [
+                {"filename": "a.txt", "content_base64": base64.b64encode(b"alpha").decode()},
+                {"filename": "b.png", "content_base64": png},
+            ])
+        finally:
+            materials_module.generate_ai_summaries_and_workstreams = original_summary
+            materials_module.recognize_image_text = original_image
+        self.conn.commit()
+        self.assertEqual(seen, [("image", False), ("summary", False)])
+        statuses = [row[0] for row in self.conn.execute(
+            "SELECT summary_status FROM materials WHERE id IN (?, ?) ORDER BY id", ids)]
+        self.assertEqual(statuses, ["generated", "generated"])
+
+    def test_failed_upload_batch_leaves_no_files_or_rows(self):
+        uploads = Path(self.tmp.name) / "uploads"
+        good = {"filename": "a.txt", "content_base64": base64.b64encode(b"alpha").decode()}
+        with mock.patch("reports_app.materials.UPLOAD_DIR", uploads), self.assertRaises(ValidationError):
+            add_uploaded_materials(self.conn, self.project_id, [good, {"filename": "x.pptx", "content_base64": ""}])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM materials").fetchone()[0], 0)
+        self.assertEqual([p for p in uploads.rglob("*") if p.is_file()], [])
+
     def test_batch_ai_summaries_and_manual_summary_edit(self):
-        ids = [
-            store_material(
-                self.conn,
-                self.project_id,
-                {"filename": name, "content_base64": base64.b64encode(content.encode()).decode()},
-            )
-            for name, content in (("第一份.txt", "alpha details"), ("second.md", "beta details"))
-        ]
-        summarize_uploaded_materials(self.conn, self.project_id, ids)
+        ids = add_uploaded_materials(
+            self.conn,
+            self.project_id,
+            [
+                {"filename": name, "content_base64": base64.b64encode(content.encode()).decode()}
+                for name, content in (("第一份.txt", "alpha details"), ("second.md", "beta details"))
+            ],
+        )
         rows = self.conn.execute(
             "SELECT id, summary, summary_status FROM materials WHERE id IN (?, ?) ORDER BY id", ids
         ).fetchall()

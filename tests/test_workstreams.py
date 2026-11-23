@@ -12,7 +12,7 @@ from unittest import mock
 
 from reports_app import auth
 from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db
-from reports_app.materials import store_manual_material, store_material, summarize_uploaded_materials
+from reports_app.materials import add_uploaded_materials, store_manual_material, store_material
 from reports_app.operations import OpContext, invoke
 from reports_app.reports import assemble_context, compact_evidence, generate_report, latest_success
 from reports_app.risks import evaluate_risks, progress_status
@@ -75,11 +75,12 @@ class WorkstreamTest(unittest.TestCase):
         os.environ.pop("REPORTS_ADMIN_PASSWORD", None)
         self.tmp.cleanup()
 
+    @staticmethod
+    def file(name, text):
+        return {"filename": name, "content_base64": base64.b64encode(text.encode()).decode()}
+
     def upload(self, name, text, project=None):
-        return store_material(
-            self.conn, project or self.project,
-            {"filename": name, "content_base64": base64.b64encode(text.encode()).decode()},
-        )
+        return store_material(self.conn, project or self.project, self.file(name, text))
 
     def age(self, workstream_id, weeks=3):
         old = (utc_now() - timedelta(days=7 * weeks)).isoformat()
@@ -137,11 +138,11 @@ class WorkstreamTest(unittest.TestCase):
     def test_upload_auto_classification_never_overrides_manual(self):
         dongfeng = create_workstream(self.conn, self.project, {"name": "东风交付"})
         financing = create_workstream(self.conn, self.project, {"name": "融资"})
-        auto = self.upload("周会.txt", "东风交付本周完成座舱安全联调")
-        manual = self.upload("纪要.txt", "东风交付里程碑")
-        set_material_links(self.conn, self.project, manual, financing)
-        none = self.upload("杂项.txt", "与任何工作线无关")
-        summarize_uploaded_materials(self.conn, self.project, [auto, manual, none])
+        auto, none = add_uploaded_materials(self.conn, self.project, [
+            self.file("周会.txt", "东风交付本周完成座舱安全联调"),
+            self.file("杂项.txt", "与任何工作线无关"),
+        ])
+        [manual] = add_uploaded_materials(self.conn, self.project, [self.file("纪要.txt", "东风交付里程碑")], financing)
         rows = {
             r["material_id"]: (r["workstream_id"], r["source"])
             for r in self.conn.execute("SELECT material_id, workstream_id, source FROM material_workstreams")
@@ -223,8 +224,7 @@ class WorkstreamTest(unittest.TestCase):
     def test_report_evidence_and_snapshots_after_generation(self):
         ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
         quiet = create_workstream(self.conn, self.project, {"name": "融资"})
-        material = self.upload("东风周报.txt", "东风交付进展")
-        summarize_uploaded_materials(self.conn, self.project, [material])
+        add_uploaded_materials(self.conn, self.project, [self.file("东风周报.txt", "东风交付进展")])
         week = current_week_key(self.tz)
         save_manual_snapshot(self.conn, self.project, quiet, {"week_key": week, "status": "blocked", "summary": "等待投资人反馈"})
         context, _hash = assemble_context(self.conn, self.project)

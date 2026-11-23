@@ -31,7 +31,7 @@ from typing import Callable, Optional
 
 from .db import connect
 from .git_sources import fetch_org_projects, git_auth_for_user
-from .materials import store_manual_material, store_material, summarize_uploaded_materials
+from .materials import add_uploaded_materials, store_manual_material
 from .reports import repo_commit_context, repo_extras_context, repo_fetch_switches_on
 from .risks import evaluate_risks
 from .search_index import search
@@ -789,10 +789,7 @@ def materials_add(ctx, project, text=None, title=None, file=None, workstream=Non
                 "content_base64": item.get("content_base64") or "",
                 "content_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
             })
-        ids = [store_material(ctx.conn, project["id"], item) for item in uploads]
-        for material_id in ids if chosen else []:
-            set_material_links(ctx.conn, project["id"], material_id, chosen)
-        summarize_uploaded_materials(ctx.conn, project["id"], ids)
+        ids = add_uploaded_materials(ctx.conn, project["id"], uploads, chosen)
         evaluate_risks(ctx.conn, project["id"])
         return {
             "ids": ids,

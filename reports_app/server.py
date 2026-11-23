@@ -92,14 +92,13 @@ from .git_sources import (
 from .github import token_kind as github_token_kind
 from .markdown import render_markdown
 from .materials import (
+    add_uploaded_materials,
     decode_document_bytes,
     delete_material,
     material_is_editable,
     material_is_unlocked,
     remove_material_file,
     store_manual_material,
-    store_material,
-    summarize_uploaded_materials,
     update_manual_material,
     update_material_summary,
 )
@@ -1233,13 +1232,7 @@ class Handler(BaseHTTPRequestHandler):
                         files = payload.get("files") if "files" in payload else [payload]
                         if not isinstance(files, list) or not files:
                             raise ValidationError("at least one material file is required")
-                        material_ids = [store_material(conn, project_id, item) for item in files]
-                        if chosen:
-                            # an explicit choice is manual and wins over the
-                            # agent's suggestion in the summary call below
-                            for material_id in material_ids:
-                                set_material_links(conn, project_id, material_id, chosen)
-                        summarize_uploaded_materials(conn, project_id, material_ids)
+                        material_ids = add_uploaded_materials(conn, project_id, files, chosen)
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     self.json({"id": material_ids[0], "ids": material_ids}, HTTPStatus.CREATED)

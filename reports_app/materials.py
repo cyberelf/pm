@@ -29,7 +29,45 @@ def safe_filename(name):
     return re.sub(r"[^A-Za-z0-9._-]+", "_", base) or "material"
 
 
+def add_uploaded_materials(conn, project_id, files, workstream_id=None, timeout=120):
+    """Store uploaded files with their summaries and workstream links.
+
+    Every slow step (image recognition, the summary/classification model
+    call) runs before the first write, so this request never holds the
+    SQLite write lock while waiting on the model; the rows land in one short
+    burst of inserts that the caller commits. An explicit workstream_id is a
+    manual link for every file, so the model is not asked to classify them."""
+    prepared = []
+    try:
+        for payload in files:
+            prepared.append(prepare_material(project_id, payload))
+        from .workstreams import auto_link_material, set_material_links, workstreams_for_prompt
+
+        workstreams = [] if workstream_id else workstreams_for_prompt(conn, project_id)
+        summaries, assignments = summarize_prepared(prepared, timeout, workstreams)
+        ids = []
+        for index, item in enumerate(prepared):
+            material_id = insert_material(conn, project_id, item, summaries[index])
+            ids.append(material_id)
+            if workstream_id:
+                set_material_links(conn, project_id, material_id, workstream_id)
+            elif assignments.get(index) is not None:
+                auto_link_material(conn, project_id, material_id, assignments[index])
+        return ids
+    except BaseException:
+        for item in prepared:
+            remove_material_file(item["storage_path"])
+        raise
+
+
 def store_material(conn, project_id, payload):
+    """Single file without a summary (summary_status stays pending)."""
+    return insert_material(conn, project_id, prepare_material(project_id, payload))
+
+
+def prepare_material(project_id, payload):
+    """Validate, save and extract one upload without touching the database
+    (image recognition is a model call)."""
     filename = original_filename(payload.get("filename") or "")
     ext = validate_material_filename(filename)
     raw = base64.b64decode(payload.get("content_base64") or "", validate=True)
@@ -99,24 +137,43 @@ def store_material(conn, project_id, payload):
             status = "failed"
             error = f"PDF text extraction failed: {exc}"
 
+    return {
+        "filename": filename,
+        "content_type": content_type,
+        "storage_path": os.fspath(path),
+        "size_bytes": len(raw),
+        "checksum": checksum,
+        "extraction_status": status,
+        "extracted_text": extracted,
+        "extraction_error": error,
+    }
+
+
+def insert_material(conn, project_id, item, summary=None):
+    """summary: (text, status, error) from summarize_prepared, or None."""
+    text, summary_status, summary_error = summary or ("", "pending", "")
     now = iso_now()
     cur = conn.execute(
         """
         INSERT INTO materials
         (project_id, filename, content_type, storage_path, size_bytes, checksum,
-         extraction_status, extracted_text, extraction_error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         extraction_status, extracted_text, extraction_error,
+         summary, summary_status, summary_error, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
-            filename,
-            content_type,
-            os.fspath(path),
-            len(raw),
-            checksum,
-            status,
-            extracted,
-            error,
+            item["filename"],
+            item["content_type"],
+            item["storage_path"],
+            item["size_bytes"],
+            item["checksum"],
+            item["extraction_status"],
+            item["extracted_text"],
+            item["extraction_error"],
+            text,
+            summary_status,
+            summary_error,
             now,
             now,
         ),
@@ -597,48 +654,29 @@ def extract_html_text(raw):
     return "\n".join(out).strip()
 
 
-def summarize_uploaded_materials(conn, project_id, material_ids, timeout=120):
-    if not material_ids:
-        return
-    placeholders = ",".join("?" for _ in material_ids)
-    rows = conn.execute(
-        f"SELECT id, filename, extracted_text FROM materials WHERE project_id = ? AND id IN ({placeholders}) ORDER BY id",
-        (project_id, *material_ids),
-    ).fetchall()
+def summarize_prepared(prepared, timeout=120, workstreams=None):
+    """One model call for a batch of prepared uploads, keyed by list index.
+    Returns ({index: (summary, status, error)}, {index: workstream_id}); a
+    failed call falls back to a text-start summary per file."""
     items = [
-        {"id": row["id"], "filename": row["filename"], "text_start": (row["extracted_text"] or "")[:4000]}
-        for row in rows
+        {"id": index, "filename": item["filename"], "text_start": (item["extracted_text"] or "")[:4000]}
+        for index, item in enumerate(prepared)
     ]
+    if not items:
+        return {}, {}
     fallbacks = {item["id"]: fallback_summary(item["filename"], item["text_start"]) for item in items}
-    from .workstreams import auto_link_material, workstreams_for_prompt
-
-    workstreams = workstreams_for_prompt(conn, project_id)
     try:
         generated, assignments = generate_ai_summaries_and_workstreams(items, timeout, workstreams)
     except Exception as exc:
-        for item in items:
-            conn.execute(
-                "UPDATE materials SET summary = ?, summary_status = 'failed', summary_error = ? WHERE id = ?",
-                (fallbacks[item["id"]], str(exc)[:2000], item["id"]),
-            )
-        return
-    for item in items:
-        summary = (generated.get(item["id"]) or "").strip()
+        return {key: (fallbacks[key], "failed", str(exc)[:2000]) for key in fallbacks}, {}
+    summaries = {}
+    for key, fallback in fallbacks.items():
+        summary = (generated.get(key) or "").strip()
         if summary:
-            conn.execute(
-                "UPDATE materials SET summary = ?, summary_status = 'generated', summary_error = '' WHERE id = ?",
-                (summary[:1000], item["id"]),
-            )
+            summaries[key] = (summary[:1000], "generated", "")
         else:
-            conn.execute(
-                "UPDATE materials SET summary = ?, summary_status = 'failed', summary_error = ? WHERE id = ?",
-                (fallbacks[item["id"]], "AI summary output was missing for this file", item["id"]),
-            )
-    # the agent's workstream choice only lands on materials the request did
-    # not assign explicitly (auto_link_material skips linked ones)
-    for item in items:
-        if assignments.get(item["id"]) is not None:
-            auto_link_material(conn, project_id, item["id"], assignments[item["id"]])
+            summaries[key] = (fallback, "failed", "AI summary output was missing for this file")
+    return summaries, assignments
 
 
 def generate_ai_summaries(items, timeout=120):

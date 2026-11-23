@@ -245,3 +245,9 @@ Validation (2026-11-21): All 242 unit tests and node --check passed; OpenSpec va
 - [x] 25.3 Add regression tests with a hand-built DOCX and a DOC fixture, and list Word in the upload picker
 
 Validation (2026-11-23): All 244 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.20 was reinstalled. Because the configured VPN address timed out from this host, the service was temporarily bound to 127.0.0.1: a temporary project received a textutil-generated `.doc` and `.docx`, both extracted (Chinese, accented Latin, tables) with summaries generated, and the served upload picker listed `.docx,.doc`. The temporary project, uploads and session were removed and the 10.200.200.3 binding was restored and confirmed listening.
+
+## 26. Uploads off the write lock
+
+- [x] 26.1 Run image recognition and the batched summary/workstream model call before any database write, then insert the material rows with their summaries and links in one short transaction, so the scheduler and other requests never wait on the model
+- [x] 26.2 Remove the batch's stored files when any upload in it fails, and give SQLite connections a 15 s busy timeout
+- [x] 26.3 Add a regression test where a second connection writes with no busy wait while the model calls are running
