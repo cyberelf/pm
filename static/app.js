@@ -54,6 +54,11 @@ const state = {
   branchOptions: {},
   tab: "overview",
   sourceTab: "manual",
+  sourceWorkstreamFilter: "all",
+  workstreamId: null,
+  workstreamDetail: null,
+  workstreamAssign: null,
+  todoWorkstreamOptions: [],
   planSubTab: "plan",
   settingsSubTab: "project",
   projectShares: [],
@@ -430,6 +435,7 @@ function updateWorkspace(workspace) {
 async function loadTodos() {
   const data = await api("/api/todos");
   state.todos = data.todos || [];
+  state.todoWorkstreamOptions = data.workstream_options || [];
   renderTodoBoard();
 }
 
@@ -903,7 +909,7 @@ function renderTodoCard(todo) {
         <div class="todo-close-reason"><span>关闭原因</span><div class="todo-markdown">${todo.close_reason_html}</div></div>
         ${todo.project_name ? `<span class="todo-project">${escapeHtml(todo.project_name)}</span>` : ""}
       ` : ""}
-      <div class="todo-card-meta">更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</div>
+      <div class="todo-card-meta"><span>更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</span>${todoWorkstreamTag(todo)}</div>
       ${(openActions || archive || remove) ? `<div class="todo-card-actions">${openActions}${archive}${remove}</div>` : ""}
     </article>
   `;
@@ -1029,6 +1035,10 @@ function openCloseTodo(id) {
     <option value="">不归属项目</option>
     ${state.projects.filter(projectCanWrite).map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("")}
   `;
+  const linked = todo.workstreams && todo.workstreams.primary;
+  if (linked && state.projects.some((project) => project.id === linked.project_id && projectCanWrite(project))) {
+    $("close-todo-project").value = String(linked.project_id);
+  }
   $("close-todo-form").elements.reason.value = "";
   $("close-todo-dialog").showModal();
 }
@@ -1311,8 +1321,8 @@ async function restoreQueues() {
         voiceJobs.set(task.id, { status: task.status, transcript: "" });
       } else if (task.kind === "report") {
         reportJobs.set(task.id, { projectId: task.project_id, status: task.status });
-      } else if (task.kind === "template") {
-        reportJobs.set(task.id, { projectId: task.project_id, kind: "template", status: task.status });
+      } else if (task.kind === "template" || task.kind === "workstreams") {
+        reportJobs.set(task.id, { projectId: task.project_id, kind: task.kind, status: task.status });
       }
     }
     if (voiceJobs.size) {
@@ -1941,6 +1951,7 @@ function render() {
     : `${ws.week_key} · ${ws.project.owner} 共享 · ${SHARE_ROLE_LABELS[wsRole]}权限`;
   renderProjects();
   renderOverview(ws);
+  renderWorkstreams(ws);
   renderSettings(ws);
   renderPlan(ws);
   renderUpdates(ws);
@@ -1987,7 +1998,490 @@ function renderOverview(ws) {
         <div class="row"><button onclick="switchTab('report')">打开周报</button></div>
       </div>
     </div>
+    ${renderOverviewWorkstreams(ws)}
   `;
+}
+
+// ---------------------------------------------------------------- 工作线
+
+const WS_SNAPSHOT_LABELS = { advanced: "有进展", steady: "无明显进展", blocked: "受阻" };
+const WS_STATUS_LABELS = { active: "进行中", paused: "暂停", done: "已完成" };
+const WS_HEALTH_LABELS = { "on track": "进展顺利", "at risk": "有风险", blocked: "受阻", paused: "暂停", complete: "已完成" };
+
+function workstreamList() {
+  return state.workspace?.workstreams?.workstreams || [];
+}
+
+function workstreamById(id) {
+  return workstreamList().find((item) => item.id === Number(id)) || null;
+}
+
+function wsShortWeek(key) {
+  return String(key || "").replace(/^\d{4}-/, "");
+}
+
+function wsSnapshotTone(status) {
+  if (status === "advanced") return "is-success";
+  if (status === "blocked") return "is-error";
+  return "is-neutral";
+}
+
+function wsHealthDot(health) {
+  return statusDot(WS_HEALTH_LABELS[health] || health, "", statusTone(health));
+}
+
+function wsCell(cell, currentWeek) {
+  const snap = cell.snapshot;
+  const current = cell.week_key === currentWeek ? " is-current" : "";
+  const weekAttr = `data-label="${escapeAttr(wsShortWeek(cell.week_key))}"`;
+  if (snap) {
+    const label = WS_SNAPSHOT_LABELS[snap.status] || snap.status;
+    const title = `${cell.week_key} · ${label}：${snap.summary}${snap.next_step ? `\n下一步：${snap.next_step}` : ""}`;
+    return `<td class="ws-cell is-${escapeAttr(snap.status)}${current}" ${weekAttr} title="${escapeAttr(title)}"><span class="ws-cell-line"><span class="status-dot ${wsSnapshotTone(snap.status)}" aria-label="${escapeAttr(label)}"></span><span class="ws-cell-text">${escapeHtml(snap.summary)}</span></span></td>`;
+  }
+  if (cell.materials) {
+    return `<td class="ws-cell is-pending${current}" ${weekAttr} title="${escapeAttr(`${cell.week_key} · ${cell.materials} 份关联资料，尚无快照`)}"><span class="ws-cell-text">${cell.materials} 份资料</span></td>`;
+  }
+  return `<td class="ws-cell is-empty${current}" ${weekAttr}><span aria-label="无记录">—</span></td>`;
+}
+
+function renderWorkstreams(ws) {
+  const root = $("tab-workstreams");
+  if (!root) return;
+  if (state.workstreamDetail && state.workstreamDetail.projectId !== ws.project.id) {
+    state.workstreamId = null;
+    state.workstreamDetail = null;
+  }
+  const data = ws.workstreams || { workstreams: [], weeks: [], unassigned_materials: 0 };
+  const items = data.workstreams || [];
+  const writable = canWriteWorkspace();
+  const job = ws.workstream_job;
+  const organizing = !!(job && ["queued", "running"].includes(job.status));
+  const hasActive = items.some((item) => item.status === "active");
+  const note = job && job.status === "success" && job.output_md
+    ? `<span class="workstream-job-note">上次整理：${escapeHtml(job.output_md)} · ${escapeHtml(formatChinaTime(job.completed_at))}</span>`
+    : job && job.status === "failed"
+      ? `<span class="workstream-job-note is-error">上次整理失败：${escapeHtml(job.failure_reason || "")}</span>`
+      : "";
+  const toolbar = writable ? `
+    <div class="row workstream-toolbar">
+      <button class="primary" type="button" onclick="openWorkstreamDialog()">＋ 新建工作线</button>
+      <button type="button" onclick="seedWorkstreams()" ${ws.plan.objectives ? "" : "disabled"} title="把项目目标里的编号行各生成一条工作线">从目标生成</button>
+      <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="AI 归类未归类资料，并用历史周报补齐近 8 周快照">${organizing ? "整理中…" : "AI 整理"}</button>
+      ${note}
+    </div>` : "";
+  if (!items.length) {
+    root.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><h2>工作线</h2><span>项目内并行的长线任务</span></div>
+        ${toolbar}
+        <p class="workstream-empty">还没有工作线。</p>
+      </div>`;
+    return;
+  }
+  const head = (data.weeks || []).map((week) =>
+    `<th class="ws-week${week === data.current_week ? " is-current" : ""}" scope="col" title="${escapeAttr(week)}">${escapeHtml(wsShortWeek(week))}</th>`).join("");
+  const rows = items.map((item) => {
+    const meta = [item.owner_label, item.status !== "active" ? WS_STATUS_LABELS[item.status] : "", item.target_date ? `截止 ${item.target_date}` : ""]
+      .filter(Boolean).map(escapeHtml).join(" · ");
+    return `
+      <tr class="ws-row${state.workstreamId === item.id ? " is-selected" : ""}" data-workstream-id="${item.id}" tabindex="0"
+          onclick="selectWorkstream(${item.id})" onkeydown="if (event.key === 'Enter') selectWorkstream(${item.id})">
+        <th scope="row" class="ws-name">
+          <span class="ws-name-line">${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span>
+          <small>${meta || `${item.material_total} 份资料`}</small>
+        </th>
+        ${(item.cells || []).map((cell) => wsCell(cell, data.current_week)).join("")}
+      </tr>`;
+  }).join("");
+  root.innerHTML = `
+    <div class="panel">
+      <div class="panel-head"><h2>工作线</h2><span>近 ${(data.weeks || []).length} 周 · 点击一行查看详情</span></div>
+      ${toolbar}
+      <table class="table ws-matrix">
+        <thead><tr><th scope="col" class="ws-name">工作线</th>${head}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="row workstream-footer">
+        <button type="button" onclick="showWorkstreamMaterials('none')">未归类资料 ${data.unassigned_materials}</button>
+        <span class="workstream-legend"><span class="status-dot is-success"></span>有进展<span class="status-dot is-neutral"></span>无明显进展<span class="status-dot is-error"></span>受阻</span>
+      </div>
+    </div>
+    <div id="workstream-detail"></div>`;
+  ensureTableScrollContainers();
+  renderWorkstreamDetail();
+}
+
+async function selectWorkstream(id) {
+  if (state.workstreamId === id) {
+    state.workstreamId = null;
+    state.workstreamDetail = null;
+    renderWorkstreams(state.workspace);
+    return;
+  }
+  state.workstreamId = id;
+  document.querySelectorAll(".ws-row").forEach((row) => row.classList.toggle("is-selected", Number(row.dataset.workstreamId) === id));
+  await loadWorkstreamDetail(id);
+}
+
+async function loadWorkstreamDetail(id) {
+  const projectId = state.projectId;
+  const detail = await api(`/api/projects/${projectId}/workstreams/${id}`);
+  if (state.projectId !== projectId || state.workstreamId !== id) return;
+  state.workstreamDetail = { ...detail, projectId };
+  renderWorkstreamDetail();
+}
+
+function renderWorkstreamDetail() {
+  const el = $("workstream-detail");
+  if (!el) return;
+  const d = state.workstreamDetail;
+  if (!d || d.id !== state.workstreamId) {
+    el.innerHTML = "";
+    return;
+  }
+  const writable = canWriteWorkspace();
+  const weeks = [...(state.workspace?.workstreams?.weeks || [])].reverse();
+  const order = workstreamList().map((item) => item.id);
+  const index = order.indexOf(d.id);
+  const meta = [WS_HEALTH_LABELS[d.health] || d.health, d.owner_label, d.target_date ? `截止 ${d.target_date}` : ""]
+    .filter(Boolean).map(escapeHtml).join(" · ");
+  const timeline = (d.snapshots || []).map((snap) => `
+    <li>
+      <span class="ws-timeline-week">${escapeHtml(snap.week_key)}</span>
+      <span class="status ${snap.status === "advanced" ? "success" : snap.status === "blocked" ? "blocked" : ""}">${escapeHtml(WS_SNAPSHOT_LABELS[snap.status] || snap.status)}</span>
+      <div class="ws-timeline-body">
+        <p>${escapeHtml(snap.summary)}</p>
+        ${snap.next_step ? `<small>下一步：${escapeHtml(snap.next_step)}</small>` : ""}
+      </div>
+    </li>`).join("") || "<li class=\"workstream-empty\">还没有周快照。生成周报或运行 AI 整理后出现。</li>";
+  const snapshotForm = writable ? `
+    <div class="workstream-snapshot-form">
+      <select id="ws-snap-week" aria-label="周">${weeks.map((week) => `<option value="${escapeAttr(week)}">${escapeHtml(week)}</option>`).join("")}</select>
+      <select id="ws-snap-status" aria-label="状态">${Object.entries(WS_SNAPSHOT_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+      <input id="ws-snap-summary" maxlength="300" placeholder="本周进展（一句话）">
+      <input id="ws-snap-next" maxlength="300" placeholder="下一步（可选）">
+      <button type="button" onclick="saveWorkstreamSnapshot(${d.id})">记录</button>
+    </div>` : "";
+  const milestones = (d.milestones || []).map((item) =>
+    `<tr><td data-label="里程碑">${escapeHtml(item.title || "")}</td><td data-label="日期">${escapeHtml(item.target_date || "")}</td><td data-label="状态">${escapeHtml(statusLabel(item.status || ""))}</td></tr>`).join("");
+  const materials = (d.materials || []).slice(0, 30).map((m) => `
+    <li>
+      <button type="button" class="link-button" onclick="previewMaterial(${m.id})">${escapeHtml(m.filename)}</button>
+      <small>${m.is_primary ? "" : "关联 · "}${escapeHtml(formatChinaTime(m.created_at))}${m.link_source === "auto" ? " · AI 归类" : ""}</small>
+    </li>`).join("");
+  const todos = (d.todos || []).map((t) => `<li><span class="status ${t.status === "doing" ? "running" : ""}">${t.status === "doing" ? "进行中" : "待办"}</span> ${escapeHtml(t.title)}</li>`).join("");
+  el.innerHTML = `
+    <div class="panel workstream-detail">
+      <div class="panel-head"><h2>${escapeHtml(d.name)}</h2><span>${meta}</span></div>
+      ${d.goal ? `<p class="workstream-goal">${escapeHtml(d.goal)}</p>` : ""}
+      ${(d.overdue_reasons || []).length ? `<p class="workstream-alert">${escapeHtml(d.overdue_reasons.join("；"))}</p>` : ""}
+      <div class="row">
+        ${writable ? `
+          <button type="button" onclick="openWorkstreamDialog(${d.id})">编辑</button>
+          <button type="button" onclick="moveWorkstream(${d.id}, -1)" ${index <= 0 ? "disabled" : ""}>上移</button>
+          <button type="button" onclick="moveWorkstream(${d.id}, 1)" ${index < 0 || index >= order.length - 1 ? "disabled" : ""}>下移</button>` : ""}
+        <button type="button" onclick="showWorkstreamMaterials(${d.id})">在过程资料中查看</button>
+        ${writable ? `<button type="button" class="danger" onclick="deleteWorkstream(${d.id})">删除</button>` : ""}
+      </div>
+      <div class="grid-2 workstream-detail-grid">
+        <section>
+          <h3>周进展</h3>
+          ${snapshotForm}
+          <ol class="workstream-timeline">${timeline}</ol>
+        </section>
+        <section>
+          <h3>里程碑</h3>
+          ${milestones ? `<table class="table"><tbody>${milestones}</tbody></table>` : `<p class="workstream-empty">在 计划和风险 → 项目计划 里给里程碑选择这条工作线。</p>`}
+          <h3>关联资料 <small>${(d.materials || []).length}</small></h3>
+          ${materials ? `<ul class="workstream-list">${materials}</ul>` : `<p class="workstream-empty">暂无关联资料。</p>`}
+          <h3>我的 TODO</h3>
+          ${todos ? `<ul class="workstream-list">${todos}</ul>` : `<p class="workstream-empty">暂无关联的未关闭 TODO。</p>`}
+        </section>
+      </div>
+    </div>`;
+  ensureTableScrollContainers();
+}
+
+function openWorkstreamDialog(id) {
+  const form = $("workstream-form");
+  const item = id ? (state.workstreamDetail && state.workstreamDetail.id === id ? state.workstreamDetail : workstreamById(id)) : null;
+  $("workstream-dialog-title").textContent = item ? "编辑工作线" : "新建工作线";
+  form.elements.id.value = item ? String(item.id) : "";
+  form.elements.name.value = item?.name || "";
+  form.elements.goal.value = item?.goal || "";
+  form.elements.owner_label.value = item?.owner_label || "";
+  form.elements.target_date.value = item?.target_date || "";
+  form.elements.status.value = item?.status || "active";
+  $("workstream-dialog").showModal();
+}
+
+async function submitWorkstreamForm(event) {
+  event.preventDefault();
+  const form = $("workstream-form");
+  const id = Number(form.elements.id.value) || null;
+  const body = {
+    name: form.elements.name.value.trim(),
+    goal: form.elements.goal.value,
+    owner_label: form.elements.owner_label.value.trim(),
+    target_date: form.elements.target_date.value,
+    status: form.elements.status.value,
+  };
+  if (!body.name) {
+    toast("请填写工作线名称");
+    return;
+  }
+  try {
+    const data = await api(`/api/projects/${state.projectId}/workstreams${id ? `/${id}` : ""}`, {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(body),
+    });
+    $("workstream-dialog").close();
+    if (!id && data.id) state.workstreamId = data.id;
+    await loadWorkspace();
+    if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    toast(id ? "工作线已更新" : "工作线已创建");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function seedWorkstreams() {
+  try {
+    const data = await api(`/api/projects/${state.projectId}/workstreams/seed`, { method: "POST", body: "{}" });
+    await loadWorkspace();
+    toast(data.created ? `已从项目目标生成 ${data.created} 条工作线` : "目标里的工作线都已存在");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function organizeWorkstreams() {
+  try {
+    const data = await api(`/api/projects/${state.projectId}/workstreams/organize`, { method: "POST", body: "{}" });
+    reportJobs.set(data.id, { projectId: state.projectId, kind: "workstreams", status: data.status || "queued" });
+    const button = $("workstream-organize-btn");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "整理中…";
+    }
+    toast("工作线整理任务已提交，完成后自动刷新");
+    startQueuePolling();
+  } catch (error) {
+    toast(`提交失败：${error.message}`);
+  }
+}
+
+async function workstreamJobFinished(jobId, job) {
+  let finished = null;
+  try {
+    finished = await api(`/api/projects/${job.projectId}/workspace`);
+  } catch {
+    toast("工作线整理已结束");
+    return;
+  }
+  if (job.projectId === state.projectId) {
+    updateWorkspace(finished);
+    if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+  }
+  const record = finished.workstream_job;
+  const name = (finished.project && finished.project.name) || "项目";
+  if (record && record.id === jobId && record.status === "success") toast(`「${name}」工作线整理完成：${record.output_md || ""}`);
+  else toast(`「${name}」工作线整理失败：${(record && record.failure_reason) || "未知错误"}`);
+}
+
+async function moveWorkstream(id, delta) {
+  const ids = workstreamList().map((item) => item.id);
+  const index = ids.indexOf(id);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= ids.length) return;
+  [ids[index], ids[target]] = [ids[target], ids[index]];
+  await api(`/api/projects/${state.projectId}/workstreams/reorder`, { method: "POST", body: JSON.stringify({ ids }) });
+  await loadWorkspace();
+}
+
+async function deleteWorkstream(id) {
+  const item = workstreamById(id);
+  if (!window.confirm(`删除工作线「${item ? item.name : ""}」？关联资料和 TODO 会保留，只移除归属和周快照。`)) return;
+  await api(`/api/projects/${state.projectId}/workstreams/${id}`, { method: "DELETE" });
+  state.workstreamId = null;
+  state.workstreamDetail = null;
+  await loadWorkspace();
+  toast("工作线已删除");
+}
+
+async function saveWorkstreamSnapshot(id) {
+  const summary = $("ws-snap-summary")?.value.trim() || "";
+  if (!summary) {
+    toast("请填写本周进展");
+    $("ws-snap-summary")?.focus();
+    return;
+  }
+  try {
+    const detail = await api(`/api/projects/${state.projectId}/workstreams/${id}/snapshots`, {
+      method: "PUT",
+      body: JSON.stringify({
+        week_key: $("ws-snap-week").value,
+        status: $("ws-snap-status").value,
+        summary,
+        next_step: $("ws-snap-next").value.trim(),
+      }),
+    });
+    state.workstreamDetail = { ...detail, projectId: state.projectId };
+    await loadWorkspace();
+    toast("周快照已记录");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function showWorkstreamMaterials(filter) {
+  state.sourceWorkstreamFilter = filter === "none" ? "none" : Number(filter);
+  renderSources(state.workspace);
+  switchTab("sources");
+}
+
+function sourceFilterActive() {
+  const filter = state.sourceWorkstreamFilter;
+  if (filter === "none") return "none";
+  return workstreamById(filter) ? Number(filter) : "all";
+}
+
+function materialMatchesWorkstream(m, filter) {
+  if (filter === "all") return true;
+  const links = m.workstreams || {};
+  if (filter === "none") return !links.primary;
+  return links.primary === filter || (links.related || []).includes(filter);
+}
+
+function setSourceWorkstreamFilter(filter) {
+  state.sourceWorkstreamFilter = filter;
+  renderSources(state.workspace);
+}
+
+function renderWorkstreamFilter(ws) {
+  const items = workstreamList();
+  if (!items.length) return "";
+  const active = sourceFilterActive();
+  const unassigned = ws.materials.filter((m) => !(m.workstreams || {}).primary).length;
+  const button = (value, label) => {
+    const key = typeof value === "number" ? value : `'${value}'`;
+    return `<button type="button" class="${active === value ? "active" : ""}" onclick="setSourceWorkstreamFilter(${key})">${label}</button>`;
+  };
+  return `
+    <div class="source-tabs workstream-filter" role="toolbar" aria-label="按工作线筛选">
+      ${button("all", "全部工作线")}
+      ${button("none", `未归类 ${unassigned}`)}
+      ${items.filter((item) => item.status !== "done" || active === item.id).map((item) => button(item.id, escapeHtml(item.name))).join("")}
+    </div>`;
+}
+
+function materialWorkstreamTag(m, writable) {
+  const links = m.workstreams || {};
+  const primary = links.primary ? workstreamById(links.primary) : null;
+  if (!primary && !workstreamList().length) return "";
+  const extra = (links.related || []).length ? ` +${links.related.length}` : "";
+  const label = primary ? `${escapeHtml(primary.name)}${extra}` : "＋ 工作线";
+  const auto = primary && links.source === "auto" ? " · AI" : "";
+  const cls = `ws-tag${primary ? "" : " is-empty"}`;
+  if (!writable) return primary ? `<span class="${cls}">${label}</span>` : "";
+  return `<button type="button" class="${cls}" title="设置归属工作线" onclick="openWorkstreamAssign('material', ${m.id})">${label}${auto}</button>`;
+}
+
+function todoWorkstreamTag(todo) {
+  const links = todo.workstreams || {};
+  const primary = links.primary;
+  if (!primary && !(state.todoWorkstreamOptions || []).length) return "";
+  const extra = (links.related || []).length ? ` +${links.related.length}` : "";
+  const label = primary ? `${escapeHtml(primary.name)}${extra}` : "＋ 工作线";
+  const title = primary ? `${primary.project_name} · ${primary.name}` : "设置归属工作线";
+  return `<button type="button" class="todo-ws-tag${primary ? "" : " is-empty"}" title="${escapeAttr(title)}" onclick="event.stopPropagation(); openWorkstreamAssign('todo', ${todo.id})">${label}</button>`;
+}
+
+function openWorkstreamAssign(kind, id) {
+  let groups = [];
+  let primary = null;
+  let related = [];
+  let context = "";
+  if (kind === "material") {
+    const m = (state.workspace?.materials || []).find((item) => item.id === id);
+    if (!m) return;
+    const links = m.workstreams || {};
+    primary = links.primary || null;
+    related = links.related || [];
+    const linked = new Set([primary, ...related]);
+    groups = [{ project_name: "", workstreams: workstreamList().filter((item) => item.status !== "done" || linked.has(item.id)) }];
+    context = m.filename;
+  } else {
+    const todo = state.todos.find((item) => item.id === id);
+    if (!todo) return;
+    const links = todo.workstreams || {};
+    primary = links.primary ? links.primary.id : null;
+    related = (links.related || []).map((item) => item.id);
+    groups = state.todoWorkstreamOptions || [];
+    context = todo.title;
+  }
+  state.workstreamAssign = { kind, id };
+  $("workstream-assign-context").textContent = context;
+  const option = (item) => `<option value="${item.id}" ${item.id === primary ? "selected" : ""}>${escapeHtml(item.name)}</option>`;
+  $("workstream-assign-primary").innerHTML = `<option value="">不归类</option>${groups.map((group) => group.project_name
+    ? `<optgroup label="${escapeAttr(group.project_name)}">${group.workstreams.map(option).join("")}</optgroup>`
+    : group.workstreams.map(option).join("")).join("")}`;
+  const boxes = groups.flatMap((group) => group.workstreams.map((item) => `
+    <label class="checkbox-row"><input type="checkbox" value="${item.id}" ${related.includes(item.id) ? "checked" : ""}>${group.project_name ? `${escapeHtml(group.project_name)} · ` : ""}${escapeHtml(item.name)}</label>`)).join("");
+  $("workstream-assign-related").innerHTML = `<legend>同时关联</legend>${boxes || "<p class=\"workstream-empty\">暂无可选工作线。</p>"}`;
+  $("workstream-assign-dialog").showModal();
+}
+
+async function submitWorkstreamAssign(event) {
+  event.preventDefault();
+  const target = state.workstreamAssign;
+  if (!target) return;
+  const primary = Number($("workstream-assign-primary").value) || null;
+  const related = Array.from($("workstream-assign-related").querySelectorAll("input:checked"))
+    .map((box) => Number(box.value)).filter((value) => value && value !== primary);
+  if (!primary && related.length) {
+    toast("关联工作线需要先选择主工作线");
+    return;
+  }
+  try {
+    if (target.kind === "material") {
+      updateWorkspace(await api(`/api/projects/${state.projectId}/materials/${target.id}/workstreams`, {
+        method: "PUT",
+        body: JSON.stringify({ primary, related }),
+      }));
+      if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    } else {
+      updateTodos(await api(`/api/todos/${target.id}/workstreams`, { method: "PUT", body: JSON.stringify({ primary, related }) }));
+    }
+    $("workstream-assign-dialog").close();
+    toast("归属已更新");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function renderOverviewWorkstreams(ws) {
+  const items = ((ws.workstreams || {}).workstreams || []).filter((item) => item.status !== "done");
+  if (!items.length) return "";
+  const rows = items.map((item) => {
+    const latest = [...(item.cells || [])].reverse().find((cell) => cell.snapshot);
+    return `<tr onclick="openWorkstreamFromOverview(${item.id})" class="ws-overview-row">
+      <td data-label="工作线"><span class="ws-name-line">${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span></td>
+      <td data-label="最近进展">${latest ? `${escapeHtml(wsShortWeek(latest.week_key))} · ${escapeHtml(latest.snapshot.summary)}` : "—"}</td>
+    </tr>`;
+  }).join("");
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>工作线</h2><span>${items.length} 条进行中或暂停</span></div>
+      <table class="table"><tbody>${rows}</tbody></table>
+      <div class="row"><button onclick="switchTab('workstreams')">打开工作线</button></div>
+    </div>`;
+}
+
+async function openWorkstreamFromOverview(id) {
+  switchTab("workstreams");
+  if (state.workstreamId !== id) await selectWorkstream(id);
 }
 
 function renderSettings(ws) {
@@ -2448,7 +2942,7 @@ function renderPlan(ws) {
         <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
         ${textarea("objectives", "目标", ws.plan.objectives)}
         <h3>里程碑</h3>
-        <div id="milestones">${renderPlanItems(ws.plan.milestones)}</div>
+        <div id="milestones">${renderPlanItems(ws.plan.milestones, true)}</div>
         <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
         <h3>交付物</h3>
         <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
@@ -2492,20 +2986,29 @@ function switchPlanSubTab(tab) {
   });
 }
 
-function renderPlanItems(items) {
+function milestoneWorkstreamSelect(value) {
+  const items = workstreamList();
+  if (!items.length) return "";
+  const current = String(value || "");
+  return `<select name="workstream_id" aria-label="工作线"><option value="">无工作线</option>${items.map((item) =>
+    `<option value="${item.id}" ${String(item.id) === current ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select>`;
+}
+
+function renderPlanItems(items, withWorkstream = false) {
   return (items.length ? items : [{ title: "", status: "planned", owner_label: "", target_date: "" }]).map(item => `
     <div class="row plan-item">
       <input name="title" placeholder="标题" value="${escapeAttr(item.title || "")}">
       <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
       <input name="target_date" type="date" value="${escapeAttr(item.target_date || "")}">
       <select name="status">${statusOptions(item.status)}</select>
+      ${withWorkstream ? milestoneWorkstreamSelect(item.workstream_id) : ""}
       <button type="button" class="danger" onclick="this.closest('.plan-item').remove(); touchAutoSave('plan')">移除</button>
     </div>
   `).join("");
 }
 
 function addPlanItem(id) {
-  $(id).insertAdjacentHTML("beforeend", renderPlanItems([{ title: "", status: "planned" }]));
+  $(id).insertAdjacentHTML("beforeend", renderPlanItems([{ title: "", status: "planned" }], id === "milestones"));
 }
 
 async function savePlan(event) {
@@ -2581,7 +3084,11 @@ async function saveWeeklyUpdate(event) {
 function renderSources(ws) {
   const writable = canWriteWorkspace();
   const manageable = canManageWorkspace();
+  const wsFilter = sourceFilterActive();
+  const visible = ws.materials.filter((m) => materialMatchesWorkstream(m, wsFilter));
+  const filterHint = typeof wsFilter === "number" ? `<p class="share-readonly-hint">当前筛选「${escapeHtml(workstreamById(wsFilter).name)}」：新增资料会归到这条工作线。</p>` : "";
   $("tab-sources").innerHTML = `
+    ${renderWorkstreamFilter(ws)}
     <div class="source-tabs" role="tablist" aria-label="资料类型">
       <button type="button" data-source-tab="manual" role="tab" onclick="switchSourceTab('manual')">手工资料</button>
       <button type="button" data-source-tab="files" role="tab" onclick="switchSourceTab('files')">文件资料</button>
@@ -2594,12 +3101,13 @@ function renderSources(ws) {
           <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.gif,.webp" multiple>
           <span class="upload-icon" aria-hidden="true">↑</span>
           <strong>拖入文件，或点击选择</strong>
-          <span id="material-selection">支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选</span>
+          <span id="material-selection">支持 Markdown、纯文本、HTML、PDF、Excel、Word 和图片，可多选</span>
         </label>
+        ${filterHint}
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
         </div>` : `<p class="share-readonly-hint">只读权限：可预览和下载资料，需要读写权限才能上传。</p>`}
-        <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type !== "manual").map((m) => renderUploadedMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
+        <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${visible.filter(m => m.source_type !== "manual").map((m) => renderUploadedMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
       </div>
     </section>
     <section id="source-manual" class="source-view hidden" role="tabpanel">
@@ -2610,8 +3118,8 @@ function renderSources(ws) {
           <input id="manual-material-title" placeholder="资料标题" onkeydown="if (event.key === 'Enter') addManualMaterial()">
           <textarea id="manual-material-content" placeholder="输入本周新增的背景、决策、会议记录或补充资料"></textarea>
           <div class="manual-material-actions"><button class="primary" type="button" onclick="addManualMaterial()">添加资料</button></div>
-        </div>` : `<p class="share-readonly-hint">只读权限：手工资料仅供查看。</p>`}
-        <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${ws.materials.filter(m => m.source_type === "manual").map((m) => renderManualMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
+        </div>${filterHint}` : `<p class="share-readonly-hint">只读权限：手工资料仅供查看。</p>`}
+        <table class="table"><thead><tr><th>标题</th><th>内容</th><th>创建时间</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${visible.filter(m => m.source_type === "manual").map((m) => renderManualMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无手工资料。</td></tr>"}</tbody></table>
       </div>
     </section>
   `;
@@ -2675,7 +3183,7 @@ function updateMaterialSelection() {
   if (!label) return;
   label.textContent = files.length
     ? `已选择 ${files.length} 个文件：${files.map((file) => file.name).join("、")}`
-    : "支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选";
+    : "支持 Markdown、纯文本、HTML、PDF、Excel、Word 和图片，可多选";
 }
 
 function downloadMaterial(id) {
@@ -2691,7 +3199,7 @@ function renderUploadedMaterialRow(m, writable = true, manageable = true) {
   const extractionMessage = m.extraction_error ? `<div class="material-message">${escapeHtml(m.extraction_error)}</div>` : "";
   const summaryMessage = m.summary_error ? `<div class="material-message">AI 摘要失败，当前显示回退摘要：${escapeHtml(m.summary_error)}</div>` : "";
   return `<tr>
-    <td data-label="文件"><strong>${escapeHtml(m.filename)}</strong><small>${formatBytes(m.size_bytes)}</small></td>
+    <td data-label="文件"><strong>${escapeHtml(m.filename)}</strong><small>${formatBytes(m.size_bytes)}</small>${materialWorkstreamTag(m, writable)}</td>
     <td data-label="提取"><span class="status ${m.extraction_status}">${escapeHtml(m.extraction_status)}</span>${extractionMessage}</td>
     <td data-label="摘要">${writable
       ? `<textarea id="material-summary-${m.id}" class="table-textarea summary-editor">${escapeHtml(m.summary || "")}</textarea>${summaryMessage}`
@@ -2704,12 +3212,12 @@ function renderUploadedMaterialRow(m, writable = true, manageable = true) {
 function renderManualMaterialRow(m, writable = true, manageable = true) {
   const content = escapeHtml(m.content || "");
   if (writable && m.editable) {
-    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}"></td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${manageable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td></tr>`;
+    return `<tr><td data-label="标题"><input id="manual-title-${m.id}" value="${escapeAttr(m.filename)}">${materialWorkstreamTag(m, writable)}</td><td data-label="内容"><textarea id="manual-content-${m.id}" class="table-textarea material-editor">${content}</textarea></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button>${manageable ? `<button class="danger" onclick="deleteMaterial(${m.id})">删除</button>` : ""}</div></td></tr>`;
   }
   if (m.editable) {
-    return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button></div></td></tr>`;
+    return `<tr><td data-label="标题">${escapeHtml(m.filename)}${materialWorkstreamTag(m, writable)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button></div></td></tr>`;
   }
-  return `<tr><td data-label="标题">${escapeHtml(m.filename)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><span class="status">已锁定</span></div></td></tr>`;
+  return `<tr><td data-label="标题">${escapeHtml(m.filename)}${materialWorkstreamTag(m, writable)}</td><td data-label="内容"><div class="locked-material">${content}</div></td><td data-label="创建时间">${escapeHtml(formatChinaTime(m.created_at))}</td><td data-label="更新时间">${escapeHtml(formatChinaTime(m.updated_at))}</td><td data-label="操作"><div class="table-actions"><button onclick="previewMaterial(${m.id})">预览</button><span class="status">已锁定</span></div></td></tr>`;
 }
 
 async function previewMaterial(id) {
@@ -2786,7 +3294,10 @@ async function uploadMaterial() {
       content_type: file.type,
       content_base64: await fileToBase64(file),
     })));
-    await api(`/api/projects/${state.projectId}/materials`, { method: "POST", body: JSON.stringify({ files: payloads }) });
+    const wsFilter = sourceFilterActive();
+    const body = { files: payloads };
+    if (typeof wsFilter === "number") body.workstream_id = wsFilter;
+    await api(`/api/projects/${state.projectId}/materials`, { method: "POST", body: JSON.stringify(body) });
     await loadWorkspace();
   });
   toast(`${files.length} 个资料文件已上传`);
@@ -2809,7 +3320,7 @@ async function addManualMaterial() {
   }
   await api(`/api/projects/${state.projectId}/materials`, {
     method: "POST",
-    body: JSON.stringify({ source_type: "manual", title, content }),
+    body: JSON.stringify({ source_type: "manual", title, content, ...(typeof sourceFilterActive() === "number" ? { workstream_id: sourceFilterActive() } : {}) }),
   });
   $("manual-material-title").value = "";
   $("manual-material-content").value = "";
@@ -3493,6 +4004,7 @@ async function pollTaskQueue() {
     // the job left the active set: it finished, failed, or was skipped
     reportJobs.delete(id);
     if (kind === "template") await templateJobFinished(id, job);
+    else if (kind === "workstreams") await workstreamJobFinished(id, job);
     else await reportJobFinished(id, job);
   }
   renderQueueProgress(data);
@@ -3518,7 +4030,7 @@ async function reportJobFinished(jobId, job) {
 function renderQueueProgress(data) {
   const bubble = $("task-queue-progress");
   if (!bubble) return;
-  const tasks = ((data && data.tasks) || []).filter((task) => task.kind === "report" || task.kind === "template");
+  const tasks = ((data && data.tasks) || []).filter((task) => ["report", "template", "workstreams"].includes(task.kind));
   if (!tasks.length) {
     bubble.classList.add("hidden");
     return;
@@ -3528,7 +4040,7 @@ function renderQueueProgress(data) {
   const limits = data.parallelism && data.capacity ? `（并行 ${data.parallelism} · 上限 ${data.capacity}）` : "";
   bubble.classList.remove("hidden");
   bubble.innerHTML = `<small>任务队列：${running} 生成中 · ${queued} 排队${limits}</small>${tasks.map((task) =>
-    `<span class="queue-task-line">${task.kind === "template" ? "模板 · " : ""}${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.project_name || "")} ${escapeHtml(task.week_key || "")}</span>`).join("")}`;
+    `<span class="queue-task-line">${task.kind === "template" ? "模板 · " : task.kind === "workstreams" ? "工作线整理 · " : ""}${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.project_name || "")} ${escapeHtml(task.week_key || "")}</span>`).join("")}`;
 }
 
 function confirmProjectGeneration(projectId) {
@@ -3777,6 +4289,10 @@ function openNewProjectDialog() {
   $("project-dialog").showModal();
 }
 $("new-project").onclick = openNewProjectDialog;
+$("workstream-form").onsubmit = submitWorkstreamForm;
+$("cancel-workstream").onclick = () => $("workstream-dialog").close();
+$("workstream-assign-form").onsubmit = submitWorkstreamAssign;
+$("cancel-workstream-assign").onclick = () => $("workstream-assign-dialog").close();
 $("open-assistant").onclick = () => toggleAssistant();
 $("assistant-close").onclick = () => toggleAssistant(false);
 $("assistant-clear").onclick = clearAssistant;

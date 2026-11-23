@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=67" />
+    <link rel="stylesheet" href="/styles.css?v=68" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -82,6 +82,7 @@
 
           <nav class="tabs" aria-label="Workspace views">
             <button data-tab="overview" class="active">总览</button>
+            <button data-tab="workstreams">工作线</button>
             <button data-tab="sources">过程资料</button>
             <button data-tab="updates">本周补充</button>
             <button data-tab="report">周报</button>
@@ -96,6 +97,7 @@
 
           <section id="workspace" class="workspace hidden">
             <div id="tab-overview" class="tab-panel"></div>
+            <div id="tab-workstreams" class="tab-panel hidden"></div>
             <div id="tab-sources" class="tab-panel hidden"></div>
             <div id="tab-updates" class="tab-panel hidden"></div>
             <div id="tab-report" class="tab-panel hidden"></div>
@@ -371,6 +373,47 @@
       </form>
     </dialog>
 
+    <dialog id="workstream-dialog">
+      <form method="dialog" id="workstream-form" class="modal-form">
+        <h2 id="workstream-dialog-title">新建工作线</h2>
+        <input name="id" type="hidden" />
+        <label>名称 <input name="name" required maxlength="60" placeholder="例如：东风交付" /></label>
+        <label>目标 <textarea name="goal" maxlength="2000" placeholder="这条线要达成什么、范围包括什么"></textarea></label>
+        <div class="grid-2 workstream-form-row">
+          <label>负责人 <input name="owner_label" maxlength="60" /></label>
+          <label>目标日期 <input name="target_date" type="date" /></label>
+        </div>
+        <label>状态
+          <select name="status">
+            <option value="active">进行中</option>
+            <option value="paused">暂停</option>
+            <option value="done">已完成</option>
+          </select>
+        </label>
+        <div class="modal-actions">
+          <button id="cancel-workstream" type="button">取消</button>
+          <button class="primary" value="default">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="workstream-assign-dialog">
+      <form method="dialog" id="workstream-assign-form" class="modal-form">
+        <h2>归属工作线</h2>
+        <p id="workstream-assign-context" class="dialog-context"></p>
+        <label>主工作线
+          <select id="workstream-assign-primary" name="primary"></select>
+        </label>
+        <fieldset id="workstream-assign-related" class="workstream-related">
+          <legend>同时关联</legend>
+        </fieldset>
+        <div class="modal-actions">
+          <button id="cancel-workstream-assign" type="button">取消</button>
+          <button class="primary" value="default">保存</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="todo-delete-dialog" class="message-dialog">
       <form method="dialog" id="todo-delete-form" class="modal-form message-box">
         <div class="message-icon" aria-hidden="true">
@@ -502,6 +545,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=73"></script>
+    <script src="/app.js?v=74"></script>
   </body>
 </html>

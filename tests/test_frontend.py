@@ -232,9 +232,9 @@ class FrontendTest(unittest.TestCase):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         html = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.gif,.webp" multiple', html)
-        self.assertIn("支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选", source)
+        self.assertIn("支持 Markdown、纯文本、HTML、PDF、Excel、Word 和图片，可多选", source)
         self.assertIn('Array.from($("material-file").files || [])', source)
-        self.assertIn('JSON.stringify({ files: payloads })', source)
+        self.assertIn('const body = { files: payloads };', source)
         self.assertIn("updateMaterialSummary", source)
         # 新增手工资料走显式「添加资料」按钮，不走自动保存
         self.assertIn('onclick="addManualMaterial()"', source)
@@ -276,7 +276,7 @@ class FrontendTest(unittest.TestCase):
         self.assertIn('id="template-field-hint"', source)
         self.assertIn('id="template-wand-btn"', source)
         self.assertIn("模板生成中，完成后自动保存并刷新", source)
-        self.assertIn('task.kind === "report" || task.kind === "template"', source)
+        self.assertIn('["report", "template", "workstreams"].includes(task.kind)', source)
         self.assertIn("模板 · ", source)
         self.assertIn("模板生成任务提交失败", source)
         self.assertIn("async function templateJobFinished(", source)
@@ -1515,3 +1515,103 @@ globalThis.fetch = async (path, options) => {
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js is required for frontend behavior tests")
+class WorkstreamFrontendTest(unittest.TestCase):
+    def test_workstream_tab_markup_and_wiring(self):
+        html = (ROOT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT_DIR / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertLess(html.index('data-tab="overview"'), html.index('data-tab="workstreams"'))
+        self.assertLess(html.index('data-tab="workstreams"'), html.index('data-tab="sources"'))
+        for marker in ('id="tab-workstreams"', 'id="workstream-dialog"', 'id="workstream-assign-dialog"', 'id="workstream-assign-primary"'):
+            self.assertIn(marker, html)
+        for marker in ("/workstreams/seed", "/workstreams/organize", "/workstreams/reorder", "/snapshots",
+                       "/api/todos/${target.id}/workstreams", 'kind === "workstreams"', "workstream_options",
+                       'name="workstream_id"', "body.workstream_id = wsFilter"):
+            self.assertIn(marker, source)
+        for marker in (".ws-matrix {", ".ws-tag, .todo-ws-tag {", ".workstream-timeline {"):
+            self.assertIn(marker, styles)
+
+    def test_matrix_filter_and_assignment_behaviour(self):
+        source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        source = source.split('\n$("new-project").onclick', 1)[0]
+        harness = r"""
+const testElements = new Map();
+function testElement() {
+  return {
+    value: "", textContent: "", innerHTML: "", disabled: false, dataset: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    setAttribute() {}, focus() {}, showModal() { this.open = true; }, close() { this.open = false; },
+    querySelectorAll() { return []; },
+  };
+}
+globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+globalThis.document = {
+  body: testElement(), activeElement: null,
+  getElementById(id) { if (!testElements.has(id)) testElements.set(id, testElement()); return testElements.get(id); },
+  querySelectorAll() { return []; }, addEventListener() {}, removeEventListener() {},
+};
+globalThis.window = { addEventListener() {}, removeEventListener() {}, confirm() { return true; } };
+globalThis.setTimeout = (callback) => { callback(); return 0; };
+globalThis.requestAnimationFrame = (callback) => callback();
+const fetchCalls = [];
+globalThis.fetch = async (path, options) => {
+  fetchCalls.push({ path, options });
+  const body = { project: { id: 3 }, materials: [] };
+  return { ok: true, text: async () => JSON.stringify(body), async json() { return body; } };
+};
+"""
+        assertions = r"""
+(async () => {
+  const cell = (week, snapshot, materials) => ({ week_key: week, snapshot, materials });
+  state.projectId = 3;
+  state.workspace = {
+    project: { id: 3, name: "agent guard" }, role: "owner", plan: { objectives: "1. 东风交付" },
+    materials: [
+      { id: 5, filename: "a.md", workstreams: { primary: 11, related: [12], source: "auto" } },
+      { id: 6, filename: "b.md", workstreams: { primary: null, related: [], source: "" } },
+    ],
+    workstream_job: { id: 1, status: "success", output_md: "归类 3 份资料，补齐 2 周快照", completed_at: "2026-11-23T10:00:00+00:00" },
+    workstreams: {
+      weeks: ["2026-W47", "2026-W48"], current_week: "2026-W48", unassigned_materials: 1,
+      workstreams: [
+        { id: 11, name: "东风交付", status: "active", health: "on track", owner_label: "高鹏", target_date: "", material_total: 2,
+          cells: [cell("2026-W47", { status: "advanced", summary: "完成联调", next_step: "验收" }, 1), cell("2026-W48", null, 2)] },
+        { id: 12, name: "融资", status: "paused", health: "paused", owner_label: "", target_date: "", material_total: 0,
+          cells: [cell("2026-W47", null, 0), cell("2026-W48", null, 0)] },
+      ],
+    },
+  };
+  renderWorkstreams(state.workspace);
+  const html = document.getElementById("tab-workstreams").innerHTML;
+  for (const needle of ["完成联调", "2 份资料", ">W48<", "未归类资料 1", "AI 整理", 'data-workstream-id="12"', "归类 3 份资料", "高鹏"]) {
+    if (!html.includes(needle)) throw new Error(`matrix missing ${needle}`);
+  }
+  const [linked, unassigned] = state.workspace.materials;
+  if (!materialMatchesWorkstream(linked, 12) || materialMatchesWorkstream(unassigned, 11) || !materialMatchesWorkstream(unassigned, "none")) {
+    throw new Error("workstream filter matched the wrong materials");
+  }
+  state.sourceWorkstreamFilter = 99;
+  if (sourceFilterActive() !== "all") throw new Error("unknown workstream filter should fall back to all");
+  if (!materialWorkstreamTag(linked, true).includes("东风交付 +1")) throw new Error("material tag should show primary plus related count");
+
+  let adopted = null;
+  updateWorkspace = (workspace) => { adopted = workspace; };
+  toast = () => {};
+  openWorkstreamAssign("material", 5);
+  if (!document.getElementById("workstream-assign-dialog").open) throw new Error("assign dialog did not open");
+  if (!document.getElementById("workstream-assign-primary").innerHTML.includes('value="11" selected')) throw new Error("current primary not preselected");
+  document.getElementById("workstream-assign-primary").value = "12";
+  await submitWorkstreamAssign({ preventDefault() {} });
+  const call = fetchCalls.at(-1);
+  if (call.path !== "/api/projects/3/materials/5/workstreams" || call.options.method !== "PUT") throw new Error(`unexpected call ${call.path}`);
+  if (JSON.stringify(JSON.parse(call.options.body)) !== JSON.stringify({ primary: 12, related: [] })) throw new Error(`unexpected body ${call.options.body}`);
+  if (!adopted) throw new Error("assignment response was not adopted");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run(
+            ["node"], input=f"{harness}\n{source}\n{assertions}", cwd=ROOT_DIR, text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
