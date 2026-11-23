@@ -237,3 +237,11 @@ Validation (2026-11-21): All 241 unit tests and node --check passed; OpenSpec va
 - [x] 24.2 Render the log T3 Code-style: raw tool calls, live shimmer and ticking timers, durations, failure marks, expandable input/result, folded summary on stored answers; disable the input while a thread loads
 
 Validation (2026-11-21): All 242 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.19 was reinstalled. In headless Chromium against the live service and provider, one question showed 思考中 at 0.4s, then 思考 7.5s and four parallel tool rows (weekly_show 3ms, supplement_show 3ms, materials_list 12ms, repos_commits ticking to 4.1s), a second 思考 19s segment and the streamed answer, stored as 已工作 36s · 4 次工具调用. The verification messages and session were removed; the account's existing conversation was left untouched.
+
+## 25. Word material uploads
+
+- [x] 25.1 Accept `.docx` and `.doc` uploads; extract DOCX body text through stdlib ZIP/XML (headings, lists, tables, content controls; DTDs refused) and DOC text through a stdlib OLE compound-file reader and the Word 97 piece table
+- [x] 25.2 Bound extraction to 2000000 characters and 64 MiB DOCX expanded data; mark encrypted, Word 6/95, empty and corrupt documents failed while keeping originals
+- [x] 25.3 Add regression tests with a hand-built DOCX and a DOC fixture, and list Word in the upload picker
+
+Validation (2026-11-23): All 244 unit tests and node --check passed; OpenSpec validation passed with only the existing warnings. Platform 1.3.20 was reinstalled. Because the configured VPN address timed out from this host, the service was temporarily bound to 127.0.0.1: a temporary project received a textutil-generated `.doc` and `.docx`, both extracted (Chinese, accented Latin, tables) with summaries generated, and the served upload picker listed `.docx,.doc`. The temporary project, uploads and session were removed and the 10.200.200.3 binding was restored and confirmed listening.

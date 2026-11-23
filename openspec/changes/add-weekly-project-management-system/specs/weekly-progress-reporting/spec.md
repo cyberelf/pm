@@ -214,11 +214,16 @@ The system SHALL define each project, material, report, TODO, search and Git ope
 - **AND** assistant calls are pinned to the conversation's project, cannot reach other projects' records and can use only read-only operations
 
 ### Requirement: Excel material extraction and original downloads
-The system SHALL accept XLSX and XLS uploads, extract worksheet names and cell text without executing formulas, and retain original bytes. Extraction SHALL be bounded to 200000 cells and 2000000 text characters, with XLSX expanded data bounded to 64 MiB. A failed extraction SHALL preserve the original and display the failed file in the material list. Downloads SHALL require project read access and return an attachment with the original UTF-8 filename, including for historical and failed files.
+The system SHALL accept XLSX and XLS uploads, extract worksheet names and cell text without executing formulas, and retain original bytes. The system SHALL also accept DOCX and Word 97-2003 DOC uploads, extracting body text with standard-library parsers bounded to 2000000 text characters and, for DOCX, 64 MiB of expanded data. Extraction SHALL be bounded to 200000 cells and 2000000 text characters, with XLSX expanded data bounded to 64 MiB. A failed extraction SHALL preserve the original and display the failed file in the material list. Downloads SHALL require project read access and return an attachment with the original UTF-8 filename, including for historical and failed files.
 
 #### Scenario: Upload an Excel workbook
 - **WHEN** a project writer uploads a supported Excel file with multiple worksheets
 - **THEN** its extracted text contains worksheet names and row values for preview, summaries and weekly report evidence
+
+#### Scenario: Upload a Word document
+- **WHEN** a project writer uploads a DOCX or Word 97-2003 DOC file
+- **THEN** its extracted text contains the body paragraphs in order, DOCX headings and list items marked in Markdown, and table rows tab-separated
+- **AND** an encrypted, Word 6/95, empty or corrupt document, or a DOCX part carrying a DTD, is marked failed while its original stays downloadable
 
 #### Scenario: Download an original file
 - **WHEN** a project reader downloads an uploaded file, including an archived or extraction-failed upload
