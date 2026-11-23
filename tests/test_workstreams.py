@@ -242,6 +242,20 @@ class WorkstreamTest(unittest.TestCase):
         cell = self.overview_item(ws)["cells"][-1]
         self.assertEqual((cell["week_key"], cell["materials"], cell["snapshot"]["status"]), (week, 1, "advanced"))
 
+    def test_job_stays_running_until_snapshots_exist(self):
+        create_workstream(self.conn, self.project, {"name": "东风交付"})
+        seen = []
+
+        def spy(conn, project_id, week_key, report_md, source="generated", timeout=120):
+            seen.append(conn.execute("SELECT status FROM generation_jobs ORDER BY id DESC LIMIT 1").fetchone()[0])
+            seen.append(bool(conn.execute("SELECT 1 FROM weekly_reports WHERE project_id = ?", (project_id,)).fetchone()))
+            return 0
+
+        with mock.patch("reports_app.workstream_agent.extract_snapshots", side_effect=spy):
+            job = generate_report(self.conn, self.project, "manual", force=True)
+        self.assertEqual(seen, ["running", True])
+        self.assertEqual(self.conn.execute("SELECT status FROM generation_jobs WHERE id = ?", (job,)).fetchone()[0], "success")
+
     def test_snapshot_failure_never_fails_report(self):
         create_workstream(self.conn, self.project, {"name": "东风交付"})
         with mock.patch("reports_app.workstream_agent.extract_snapshots", side_effect=RuntimeError("boom")):

@@ -306,10 +306,6 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
         if not output_md.strip():
             raise RuntimeError("expected Markdown output file was missing or empty")
         completed = iso_now()
-        conn.execute(
-            "UPDATE generation_jobs SET status = 'success', output_md = ?, completed_at = ? WHERE id = ?",
-            (output_md, completed, job_id),
-        )
         existing = conn.execute(
             "SELECT id FROM weekly_reports WHERE project_id = ? AND week_key = ?", (project_id, week_key)
         ).fetchone()
@@ -327,9 +323,16 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
                 (project_id, week_key, output_md, supplement_json, job_id, completed, completed),
             )
         conn.commit()
+        # the report is saved first; the job stays running until the
+        # workstream snapshots exist, so the page refreshes once with both
         from .workstream_agent import refresh_after_report
 
         refresh_after_report(conn, project_id, week_key, output_md)
+        conn.execute(
+            "UPDATE generation_jobs SET status = 'success', output_md = ?, completed_at = ? WHERE id = ?",
+            (output_md, iso_now(), job_id),
+        )
+        conn.commit()
         return job_id
     except Exception as exc:
         completed = iso_now()
