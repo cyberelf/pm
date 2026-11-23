@@ -134,7 +134,7 @@ SUPPORTED_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "im
 SUPPORTED_IMAGE_EXTENSIONS = set(SUPPORTED_IMAGE_TYPES)
 # vision recognition is skipped above this size (Anthropic caps images at 5 MB)
 MAX_IMAGE_RECOGNITION_BYTES = 5 * 1024 * 1024
-SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls"} | SUPPORTED_IMAGE_EXTENSIONS
+SUPPORTED_MATERIAL_EXTENSIONS = {".md", ".markdown", ".txt", ".html", ".htm", ".pdf", ".xlsx", ".xls", ".docx", ".doc"} | SUPPORTED_IMAGE_EXTENSIONS
 SUPPORTED_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 # uploaded HTML documents get tag-stripping extraction, not the raw text decode
 SUPPORTED_HTML_EXTENSIONS = {".html", ".htm"}

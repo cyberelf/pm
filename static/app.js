@@ -2591,7 +2591,7 @@ function renderSources(ws) {
         <div class="panel-head"><h2>文件资料</h2><span>本周新增资料会进入生成上下文</span></div>
         ${writable ? `
         <label id="material-dropzone" class="upload-dropzone" for="material-file" role="button" tabindex="0">
-          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls,.png,.jpg,.jpeg,.gif,.webp" multiple>
+          <input id="material-file" class="visually-hidden" type="file" accept=".md,.markdown,.txt,.html,.htm,.pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.gif,.webp" multiple>
           <span class="upload-icon" aria-hidden="true">↑</span>
           <strong>拖入文件，或点击选择</strong>
           <span id="material-selection">支持 Markdown、纯文本、HTML、PDF、Excel 和图片，可多选</span>

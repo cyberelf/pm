@@ -136,7 +136,7 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             validate_schedule_item({"weekday": 8, "local_time": "09:30", "timezone": "Asia/Shanghai"})
         with self.assertRaises(ValidationError):
-            validate_material_filename("notes.docx")
+            validate_material_filename("notes.pptx")
         self.assertEqual(validate_material_filename("notes.md"), ".md")
         self.assertEqual(validate_material_filename("page.html"), ".html")
         self.assertEqual(validate_material_filename("page.htm"), ".htm")

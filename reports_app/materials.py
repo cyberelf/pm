@@ -4,11 +4,13 @@ import io
 import json
 import os
 import re
+import struct
 import uuid
 from zipfile import ZipFile
 from pathlib import Path
 
 from html.parser import HTMLParser
+from xml.etree import ElementTree
 from pypdf import PdfReader
 
 from .config import (
@@ -71,6 +73,13 @@ def store_material(conn, project_id, payload):
         except Exception as exc:
             status = "failed"
             error = f"Excel text extraction failed: {exc}"
+    elif ext in {".docx", ".doc"}:
+        try:
+            extracted = extract_docx_text(raw) if ext == ".docx" else extract_doc_text(raw)
+            status = "extracted"
+        except Exception as exc:
+            status = "failed"
+            error = f"Word text extraction failed: {exc}"
     elif ext in SUPPORTED_IMAGE_TYPES:
         try:
             if len(raw) > MAX_IMAGE_RECOGNITION_BYTES:
@@ -185,6 +194,303 @@ def extract_excel_text(raw, ext):
     if not parts:
         raise ValueError("Excel contains no extractable cells")
     return "\n\n".join(parts)
+
+
+MAX_WORD_TEXT_CHARACTERS = 2000000
+MAX_WORD_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _parse_docx_xml(data):
+    # stdlib ElementTree is not hardened against entity expansion; OOXML
+    # parts never carry a DTD, so refuse any that do
+    if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+        raise ValueError("Word XML must not contain a DTD")
+    return ElementTree.fromstring(data)
+
+
+def _docx_heading_levels(styles_xml):
+    """styleId -> heading level from styles.xml: 'heading N'/'Title' names or
+    an outline level (Chinese Word names heading styles by number IDs)."""
+    levels = {}
+    if not styles_xml:
+        return levels
+    for style in _parse_docx_xml(styles_xml).iter(f"{_W}style"):
+        style_id = style.get(f"{_W}styleId") or ""
+        name_el = style.find(f"{_W}name")
+        name = (name_el.get(f"{_W}val") if name_el is not None else "") or ""
+        outline = style.find(f"{_W}pPr/{_W}outlineLvl")
+        match = re.fullmatch(r"heading\s*([1-9])", name.strip(), re.IGNORECASE)
+        if match:
+            levels[style_id] = int(match.group(1))
+        elif name.strip().lower() == "title":
+            levels[style_id] = 1
+        elif outline is not None and (outline.get(f"{_W}val") or "").isdigit() and int(outline.get(f"{_W}val")) < 9:
+            levels[style_id] = int(outline.get(f"{_W}val")) + 1
+    return levels
+
+
+def _docx_blocks(container):
+    """Paragraphs and tables in document order, unwrapping content controls."""
+    for child in container:
+        if child.tag in {f"{_W}p", f"{_W}tbl"}:
+            yield child
+        elif child.tag in {f"{_W}sdt", f"{_W}customXml"}:
+            content = child.find(f"{_W}sdtContent") if child.tag == f"{_W}sdt" else child
+            if content is not None:
+                yield from _docx_blocks(content)
+
+
+def _docx_paragraph_text(paragraph):
+    parts = []
+    for el in paragraph.iter():
+        if el.tag == f"{_W}t":
+            parts.append(el.text or "")
+        elif el.tag == f"{_W}tab":
+            parts.append("\t")
+        elif el.tag in {f"{_W}br", f"{_W}cr"}:
+            parts.append("\n")
+        elif el.tag == f"{_W}noBreakHyphen":
+            parts.append("-")
+    return "".join(parts).strip()
+
+
+def _docx_table_rows(table):
+    rows = []
+    for tr in table.findall(f"{_W}tr"):
+        cells = []
+        for tc in tr.findall(f"{_W}tc"):
+            texts = []
+            for block in _docx_blocks(tc):
+                if block.tag == f"{_W}p":
+                    text = _docx_paragraph_text(block)
+                    if text:
+                        texts.append(text)
+                else:
+                    texts.extend(" / ".join(row.split("\t")) for row in _docx_table_rows(block))
+            cells.append(" ".join(texts).replace("\t", " ").replace("\n", " "))
+        while cells and not cells[-1]:
+            cells.pop()
+        if any(cells):
+            rows.append("\t".join(cells))
+    return rows
+
+
+def extract_docx_text(raw):
+    """Word .docx body text: headings as Markdown '#', list items as '- ',
+    table rows tab-separated (like Excel extraction). Bounded."""
+    with ZipFile(io.BytesIO(raw)) as archive:
+        if sum(item.file_size for item in archive.infolist()) > MAX_WORD_UNCOMPRESSED_BYTES:
+            raise ValueError("Word uncompressed data exceeds 64 MiB")
+        names = set(archive.namelist())
+        if "word/document.xml" not in names:
+            raise ValueError("not a Word document (word/document.xml missing)")
+        document_xml = archive.read("word/document.xml")
+        styles_xml = archive.read("word/styles.xml") if "word/styles.xml" in names else b""
+    levels = _docx_heading_levels(styles_xml)
+    body = _parse_docx_xml(document_xml).find(f"{_W}body")
+    lines = []
+    characters = 0
+    for block in _docx_blocks(body if body is not None else []):
+        if block.tag == f"{_W}tbl":
+            entry = "\n".join(_docx_table_rows(block))
+        else:
+            entry = _docx_paragraph_text(block)
+            if entry:
+                props = block.find(f"{_W}pPr")
+                level = 0
+                if props is not None:
+                    outline = props.find(f"{_W}outlineLvl")
+                    style = props.find(f"{_W}pStyle")
+                    if outline is not None and (outline.get(f"{_W}val") or "").isdigit() and int(outline.get(f"{_W}val")) < 9:
+                        level = int(outline.get(f"{_W}val")) + 1
+                    elif style is not None:
+                        level = levels.get(style.get(f"{_W}val") or "", 0)
+                    if level:
+                        entry = "#" * min(level, 6) + " " + entry.replace("\n", " ")
+                    elif props.find(f"{_W}numPr") is not None:
+                        entry = "- " + entry
+        if not entry:
+            continue
+        characters += len(entry)
+        if characters > MAX_WORD_TEXT_CHARACTERS:
+            raise ValueError("Word text exceeds 2000000 characters")
+        lines.append(entry)
+    if not lines:
+        raise ValueError("Word document contains no extractable text")
+    return "\n\n".join(lines)
+
+
+_CFB_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_CFB_NOSTREAM = 0xFFFFFFFF
+
+
+def _cfb_root_streams(raw):
+    """Top-level streams of an OLE compound file (MS-CFB), stdlib only.
+    Sector chains are cycle-checked; returns {name: bytes}."""
+    if raw[:8] != _CFB_SIGNATURE or len(raw) < 512:
+        raise ValueError("not an OLE compound document")
+    sector_shift, mini_shift = struct.unpack_from("<HH", raw, 0x1E)
+    if sector_shift not in (9, 12) or mini_shift != 6:
+        raise ValueError("unsupported compound document sector size")
+    size = 1 << sector_shift
+    (num_fat, first_dir, _transaction, cutoff, first_minifat, _num_minifat,
+     first_difat, num_difat) = struct.unpack_from("<8I", raw, 0x2C)
+    sector_count = max(0, (len(raw) - size) // size + (1 if (len(raw) - size) % size else 0))
+
+    def sector(index):
+        if index >= sector_count:
+            raise ValueError("compound document sector out of range")
+        start = (index + 1) * size
+        return raw[start:start + size].ljust(size, b"\0")
+
+    fat_sectors = [value for value in struct.unpack_from("<109I", raw, 0x4C)]
+    next_difat, seen = first_difat, set()
+    while next_difat < 0xFFFFFFFA and len(fat_sectors) < num_fat + 109:
+        if next_difat in seen:
+            raise ValueError("compound document DIFAT loop")
+        seen.add(next_difat)
+        values = struct.unpack(f"<{size // 4}I", sector(next_difat))
+        fat_sectors.extend(values[:-1])
+        next_difat = values[-1]
+    fat = []
+    for index in fat_sectors[:num_fat]:
+        if index >= 0xFFFFFFFA:
+            break
+        fat.extend(struct.unpack(f"<{size // 4}I", sector(index)))
+
+    def chain(start, table):
+        ids, seen = [], set()
+        while start < 0xFFFFFFFA:
+            if start in seen or start >= len(table):
+                raise ValueError("corrupt compound document sector chain")
+            seen.add(start)
+            ids.append(start)
+            start = table[start]
+        return ids
+
+    directory = b"".join(sector(index) for index in chain(first_dir, fat))
+    entries = []
+    for offset in range(0, len(directory) - 127, 128):
+        name_len, kind = struct.unpack_from("<HB", directory, offset + 64)
+        left, right, child = struct.unpack_from("<III", directory, offset + 68)
+        start, stream_size = struct.unpack_from("<IQ", directory, offset + 116)
+        if sector_shift == 9:
+            stream_size &= 0xFFFFFFFF
+        name = directory[offset:offset + max(0, min(name_len, 64) - 2)].decode("utf-16-le", errors="replace")
+        entries.append((name, kind, left, right, child, start, stream_size))
+    if not entries or entries[0][1] != 5:
+        raise ValueError("compound document has no root entry")
+    root = entries[0]
+    mini_stream = b"".join(sector(index) for index in chain(root[5], fat))[:root[6]] if root[6] else b""
+    minifat = []
+    for index in chain(first_minifat, fat) if first_minifat < 0xFFFFFFFA else []:
+        minifat.extend(struct.unpack(f"<{size // 4}I", sector(index)))
+
+    def read(start, stream_size):
+        if stream_size < cutoff:
+            data = b"".join(mini_stream[i * 64:(i + 1) * 64] for i in chain(start, minifat))
+        else:
+            data = b"".join(sector(i) for i in chain(start, fat))
+        return data[:stream_size]
+
+    streams, pending, visited = {}, [root[4]], set()
+    while pending:
+        index = pending.pop()
+        if index == _CFB_NOSTREAM or index in visited or index >= len(entries):
+            continue
+        visited.add(index)
+        name, kind, left, right, _child, start, stream_size = entries[index]
+        pending.extend((left, right))
+        if kind == 2:
+            streams[name] = (start, stream_size)
+    return {name: read(*location) for name, location in streams.items() if name in {"WordDocument", "0Table", "1Table"}}
+
+
+def _clean_doc_text(text):
+    """Drop field instructions (keep displayed results) and map Word's
+    control characters: paragraph/line/page marks to newlines, cell marks to tabs."""
+    out, fields = [], []
+    for char in text:
+        if char == "\x13":
+            fields.append(False)
+        elif char == "\x14":
+            if fields:
+                fields[-1] = True
+        elif char == "\x15":
+            if fields:
+                fields.pop()
+        elif all(fields):
+            out.append(char)
+    text = "".join(out).replace("\r\x07", "\x07").replace("\x07\x07", "\n").replace("\x07", "\t")
+    text = re.sub(r"[\r\x0b\x0c\x0e]", "\n", text).replace("\x1e", "-").replace("\x1f", "")
+    text = re.sub(r"[\x00-\x08\x10-\x1f]", "", text)
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def extract_doc_text(raw):
+    """Word 97-2003 .doc main-document text from the piece table (MS-DOC).
+    Encrypted and pre-97 (Word 6/95) files are rejected."""
+    streams = _cfb_root_streams(raw)
+    word = streams.get("WordDocument") or b""
+    if len(word) < 0x200:
+        raise ValueError("not a Word 97-2003 document")
+    ident, nfib = struct.unpack_from("<HH", word, 0)
+    flags = struct.unpack_from("<H", word, 0x0A)[0]
+    if ident != 0xA5EC:
+        raise ValueError("not a Word 97-2003 document")
+    if nfib < 0xC0:
+        raise ValueError("Word 6/95 documents are not supported; save as .docx")
+    if flags & 0x0100:
+        raise ValueError("encrypted Word documents are not supported")
+    table = streams.get("1Table" if flags & 0x0200 else "0Table") or b""
+    csw = struct.unpack_from("<H", word, 32)[0]
+    lw = 34 + csw * 2
+    cslw = struct.unpack_from("<H", word, lw)[0]
+    ccp_text = struct.unpack_from("<i", word, lw + 2 + 12)[0]
+    rg = lw + 2 + cslw * 4
+    cb_rg = struct.unpack_from("<H", word, rg)[0]
+    if cb_rg < 34 or rg + 2 + 34 * 8 > len(word):
+        raise ValueError("Word file information block is truncated")
+    fc_clx, lcb_clx = struct.unpack_from("<II", word, rg + 2 + 33 * 8)
+    clx = table[fc_clx:fc_clx + lcb_clx]
+    if not clx or len(clx) < lcb_clx:
+        raise ValueError("Word piece table is missing")
+    pos, plc = 0, b""
+    while pos < len(clx):
+        if clx[pos] == 1:
+            pos += 3 + struct.unpack_from("<H", clx, pos + 1)[0]
+        elif clx[pos] == 2:
+            length = struct.unpack_from("<I", clx, pos + 1)[0]
+            plc = clx[pos + 5:pos + 5 + length]
+            break
+        else:
+            raise ValueError("Word piece table is corrupt")
+    count = (len(plc) - 4) // 12
+    if count <= 0:
+        raise ValueError("Word piece table is empty")
+    cps = struct.unpack_from(f"<{count + 1}I", plc, 0)
+    pieces, characters = [], 0
+    for index in range(count):
+        start, end = cps[index], min(cps[index + 1], max(ccp_text, 0))
+        if start >= end:
+            continue
+        fc = struct.unpack_from("<I", plc, 4 * (count + 1) + 8 * index + 2)[0]
+        length = end - start
+        characters += length
+        if characters > MAX_WORD_TEXT_CHARACTERS:
+            raise ValueError("Word text exceeds 2000000 characters")
+        if fc & 0x40000000:
+            offset = (fc & 0x3FFFFFFF) // 2
+            pieces.append(word[offset:offset + length].decode("cp1252", errors="replace"))
+        else:
+            offset = fc & 0x3FFFFFFF
+            pieces.append(word[offset:offset + 2 * length].decode("utf-16-le", errors="replace"))
+    text = _clean_doc_text("".join(pieces))
+    if not text:
+        raise ValueError("Word document contains no extractable text")
+    return text
 
 
 def sniff_image_type(raw):

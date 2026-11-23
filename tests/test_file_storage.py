@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+import zipfile
 from datetime import datetime
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -16,7 +17,7 @@ from reports_app import auth
 from reports_app.backup import run_backup
 from reports_app.cold_storage import evaluate_cold_storage, month_cutoff, validate_cold_target
 from reports_app.db import connect, create_project, ensure_bootstrap_admin, init_db, set_setting
-from reports_app.materials import extract_excel_text, store_material
+from reports_app.materials import extract_doc_text, extract_docx_text, extract_excel_text, store_material
 from reports_app.server import Handler, material_detail
 from reports_app.validation import ValidationError
 
@@ -109,6 +110,66 @@ class FileStorageTest(unittest.TestCase):
         Workbook().save(stream)
         row = self.row(self.upload("empty.xlsx", stream.getvalue()))
         self.assertEqual(row["extraction_status"], "failed")
+
+    @staticmethod
+    def docx(body, styles=""):
+        ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr("word/document.xml", f'<?xml version="1.0" encoding="UTF-8"?><w:document {ns}><w:body>{body}</w:body></w:document>')
+            if styles:
+                archive.writestr("word/styles.xml", f"<w:styles {ns}>{styles}</w:styles>")
+        return stream.getvalue()
+
+    def test_word_docx_structure_and_legacy_doc(self):
+        def para(text, props=""):
+            return f"<w:p><w:pPr>{props}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"
+        def cell(text):
+            return f"<w:tc>{para(text)}</w:tc>"
+        body = (
+            para("项目周报", '<w:pStyle w:val="1"/>')
+            + para("背景", '<w:pStyle w:val="Heading2"/>')
+            + "<w:p><w:r><w:t>进度</w:t><w:tab/><w:t>80%</w:t><w:delText>已删除</w:delText></w:r></w:p>"
+            + para("接口联调", '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>')
+            + f"<w:sdt><w:sdtContent>{para('控件内文本')}</w:sdtContent></w:sdt>"
+            + f"<w:tbl><w:tr>{cell('任务')}{cell('状态')}</w:tr><w:tr>{cell('联调')}{cell('完成')}</w:tr></w:tbl>"
+        )
+        styles = '<w:style w:styleId="1"><w:name w:val="heading 1"/></w:style><w:style w:styleId="Heading2"><w:name w:val="heading 2"/></w:style>'
+        material = self.upload("周报.docx", self.docx(body, styles))
+        row = self.row(material)
+        self.assertEqual(row["extraction_status"], "extracted")
+        self.assertEqual(
+            row["extracted_text"],
+            "# 项目周报\n\n## 背景\n\n进度\t80%\n\n- 接口联调\n\n控件内文本\n\n任务\t状态\n联调\t完成",
+        )
+        self.assertEqual(material_detail(self.conn, self.project, material)["preview_kind"], "text")
+        legacy = (Path(__file__).with_name("fixtures") / "materials.doc").read_bytes()
+        row = self.row(self.upload("旧版.doc", legacy))
+        self.assertEqual(row["extraction_status"], "extracted")
+        for value in ("周报标题", "第一段 English text, café.", "列表项一", "任务\t状态\n接口开发\t完成", "结尾段落"):
+            self.assertIn(value, row["extracted_text"])
+        self.assertEqual(extract_doc_text(legacy), row["extracted_text"])
+
+    def test_invalid_and_hostile_word_keep_original(self):
+        empty = self.docx("")
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("word/document.xml", '<!DOCTYPE x [<!ENTITY a "aaaa">]><x>&a;</x>')
+        cases = (
+            ("bad.doc", b"invalid"),
+            ("bad.docx", b"invalid"),
+            ("empty.docx", empty),
+            ("dtd.docx", stream.getvalue()),
+            ("truncated.doc", (Path(__file__).with_name("fixtures") / "materials.doc").read_bytes()[:1024]),
+        )
+        for name, raw in cases:
+            row = self.row(self.upload(name, raw))
+            self.assertEqual(row["extraction_status"], "failed", name)
+            self.assertTrue(row["extraction_error"].startswith("Word text extraction failed"), name)
+            self.assertEqual(Path(row["storage_path"]).read_bytes(), raw)
+        with self.assertRaisesRegex(ValueError, "DTD"):
+            extract_docx_text(stream.getvalue())
 
     def test_calendar_month_threshold_and_hourly_schedule(self):
         self.assertEqual(month_cutoff(self.now).isoformat(), "2026-02-28T12:00:00+08:00")
