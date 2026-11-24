@@ -41,3 +41,12 @@ Live check (2026-11-23, platform 1.3.21, real provider, service temporarily boun
 - [x] 6.3 Overdue open items mark health 有风险 and raise the medium `workstream_item_overdue` warning
 - [x] 6.4 进展 view (default) with summary strip and week lanes, milestone/target/today markers and item completion; 周矩阵 kept as the second view; items section in the detail panel
 
+## 7. Sub-workstreams and plan/risks in the workstream tab
+
+- [x] 7.1 `workstreams.parent_id` (two levels at most, names unique per project), tree order, parent validation, children promoted on delete, nested seeding from indented / `1.1` objective lines
+- [x] 7.2 Parent health rolls up active children (`child_alerts`), staleness counts children's material; warnings stay per line
+- [x] 7.3 Agent prompts carry the hierarchy (classify to the most specific line; parent snapshots see children's material, follow-ups stay on the child); report evidence carries parent and milestones per workstream
+- [x] 7.4 Milestones with stable ids (`reports_app/plans.py`), workstream milestone CRUD API, `project_milestones` plan saves; `overdue_milestone` no longer duplicates `workstream_overdue`
+- [x] 7.5 UI: 计划和风险 tab removed; 风险提醒 and 项目计划 panels in 工作线; nested, foldable lanes and matrix rows; sub-workstreams and editable milestones in the detail panel; 上级工作线 in the dialog; parent filters include children
+- [x] 7.6 `workstream_list` shows the tree, `workstream_show` lists sub-workstreams and milestones
+

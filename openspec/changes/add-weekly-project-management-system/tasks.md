@@ -251,3 +251,7 @@ Validation (2026-11-23): All 244 unit tests and node --check passed; OpenSpec va
 - [x] 26.1 Run image recognition and the batched summary/workstream model call before any database write, then insert the material rows with their summaries and links in one short transaction, so the scheduler and other requests never wait on the model
 - [x] 26.2 Remove the batch's stored files when any upload in it fails, and give SQLite connections a 15 s busy timeout
 - [x] 26.3 Add a regression test where a second connection writes with no busy wait while the model calls are running
+
+## 27. Plan and risks moved into 工作线
+
+- [x] 27.1 Remove the 计划和风险 tab; the 工作线 tab carries the 风险提醒 and 项目计划 panels and each workstream edits its own milestones (see `add-project-workstreams` §7)
