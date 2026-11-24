@@ -1460,7 +1460,8 @@ span.ws-tag { cursor: default; }
 .workstream-filter button { flex: 0 0 auto; }
 .workstream-related { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; margin: 0; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 10px 12px; }
 .workstream-related legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
-.workstream-related .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.workstream-related .checkbox-row { display: flex; align-items: center; gap: 8px; justify-content: flex-start; color: var(--ink); font-size: 13px; font-weight: 400; text-align: left; cursor: pointer; }
+.workstream-related .checkbox-row input[type="checkbox"] { flex: none; width: 15px; height: 15px; min-height: 0; margin: 0; padding: 0; accent-color: var(--ink); cursor: pointer; }
 .workstream-form-row { gap: 12px; }
 .ws-overview-row { cursor: pointer; }
 .ws-cell.is-steady .ws-cell-text { color: var(--muted-soft); }
