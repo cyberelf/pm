@@ -50,3 +50,9 @@ Live check (2026-11-23, platform 1.3.21, real provider, service temporarily boun
 - [x] 7.5 UI: 计划和风险 tab removed; 风险提醒 and 项目计划 panels in 工作线; nested, foldable lanes and matrix rows; sub-workstreams and editable milestones in the detail panel; 上级工作线 in the dialog; parent filters include children
 - [x] 7.6 `workstream_list` shows the tree, `workstream_show` lists sub-workstreams and milestones
 
+## 8. PR / issue activity
+
+- [x] 8.1 `workstream_git_items` and `github_repos.workstream_id`; sync of this week's PRs/MRs and issues in 「AI 整理」 (fetch before writes) and from the report's extras
+- [x] 8.2 Link order manual > earlier agent > repository default > agent classification; manual link and repository default APIs
+- [x] 8.3 PR/issue evidence in snapshot prompts, staleness counts linked activity, report extras tagged with the workstream
+- [x] 8.4 UI: PR / Issue list and 改归属 in the detail, 本周未归类 PR/Issue, lane and matrix counts, PR/Issue 归属 per repository; `workstream_show` / `workstream_list` include them

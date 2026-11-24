@@ -151,3 +151,13 @@ The 工作线 tab SHALL hold the project plan and the risk list, replacing the s
 - **WHEN** a milestone of an active workstream passes its date unfinished
 - **THEN** the risk list shows the workstream's overdue warning and no separate milestone warning
 
+### Requirement: PR and issue activity per workstream
+The system SHALL sync, for each connected repository with its PR or issue switch on, the pull/merge requests and issues updated in the current project week during 「AI 整理」, and SHALL store those the report run already fetched without new remote calls. Each item SHALL be linked to at most one workstream: a person's choice first (kept for later weeks), else an earlier agent link, else the repository's default workstream, else the internal agent's classification. Linked items SHALL be snapshot and tracking-item evidence, SHALL count as activity for the staleness rule, and SHALL be listed in the workstream detail and per-week lanes; unlinked items of the week SHALL be listed for manual assignment.
+
+#### Scenario: Repository default
+- **WHEN** a repository has a default workstream and one of its PRs is merged this week
+- **THEN** 「AI 整理」 links the PR to that workstream and the week's snapshot can cite it as progress
+
+#### Scenario: Manual choice survives
+- **WHEN** a writer moves an issue to another workstream
+- **THEN** later syncs keep that link even if the repository default changes

@@ -255,3 +255,7 @@ Validation (2026-11-23): All 244 unit tests and node --check passed; OpenSpec va
 ## 27. Plan and risks moved into 工作线
 
 - [x] 27.1 Remove the 计划和风险 tab; the 工作线 tab carries the 风险提醒 and 项目计划 panels and each workstream edits its own milestones (see `add-project-workstreams` §7)
+
+## 28. Workstream PR / issue sync
+
+- [x] 28.1 Sync this week's PR / issue activity into workstreams (see `add-project-workstreams` §8)
