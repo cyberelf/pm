@@ -1468,7 +1468,7 @@ span.ws-tag { cursor: default; }
 /* 工作线进展视图: summary strip, week lanes with milestones/target markers, tracking items */
 .ws-view-row { margin-bottom: 12px; }
 .ws-view-switch button { min-height: 30px; padding: 5px 14px; }
-.ws-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
+.ws-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }
 .ws-stat { min-width: 0; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 10px 12px; }
 .ws-stat strong { display: block; color: var(--ink); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .ws-stat span { color: var(--muted); font-size: 12px; }
@@ -1539,6 +1539,23 @@ span.ws-tag { cursor: default; }
 .ws-items-done summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .ws-snap-week { align-self: center; color: var(--muted); font-size: 13px; font-weight: 500; }
 .ws-overview-items { white-space: nowrap; color: var(--muted); font-size: 13px; }
+/* 子工作线: one level of nesting under a top-level line */
+.ws-fold, .ws-fold-space, .ws-branch { flex: 0 0 18px; width: 18px; }
+.ws-fold { display: inline-grid; place-items: center; height: 18px; min-height: 0; border: 0; border-radius: var(--radius-sm, 4px); background: transparent; padding: 0; color: var(--muted); font-size: 14px; line-height: 1; }
+.ws-fold:hover { background: var(--surface-strong); color: var(--ink); }
+.ws-chevron { width: 7px; height: 7px; margin-top: -3px; border-right: 1.75px solid currentColor; border-bottom: 1.75px solid currentColor; transform: rotate(45deg); }
+.ws-chevron.is-collapsed { margin: 0 0 0 -3px; transform: rotate(-45deg); }
+.ws-branch { color: var(--muted-soft); font-size: 12px; text-align: center; }
+.is-child > .ws-progress-name .ws-name-line, .ws-row.is-child .ws-name-line, .ws-overview-row.is-child .ws-name-line { padding-left: 18px; }
+.ws-row.is-child .ws-name small, .is-child > .ws-progress-name small { padding-left: 44px; }
+.ws-progress-row.is-child strong, .ws-row.is-child strong { font-weight: 500; }
+.ws-progress-row.is-child .ws-seg:not(.is-future) { height: 9px; }
+.ws-kids { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ws-parent-link { color: var(--muted); font-size: 13px; }
+.ws-children li { align-items: center; }
+.ws-item.is-editing .ws-milestone-form { grid-template-columns: 110px 150px 110px minmax(0, 1fr); }
+.ws-item.is-editing .ws-milestone-form > .row { grid-column: 1 / -1; }
+.ws-risks tr.is-resolved td { color: var(--muted); }
 @media (hover: none) {
   .ws-item-actions { visibility: visible; }
 }
@@ -1553,6 +1570,7 @@ span.ws-tag { cursor: default; }
   .ws-matrix td.ws-cell:nth-of-type(-n+4) { display: none; }
   .workstream-snapshot-form { grid-template-columns: minmax(0, 1fr); }
   .ws-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ws-item.is-editing .ws-milestone-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .ws-progress-inner { min-width: calc(130px + var(--ws-weeks) * 32px + 96px); }
   .ws-progress-row { grid-template-columns: 130px minmax(0, 1fr) 96px; gap: 8px; padding: 8px 4px; }
   .ws-item-form, .ws-item.is-editing .ws-item-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

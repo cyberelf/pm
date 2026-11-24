@@ -61,7 +61,8 @@ const state = {
   workstreamView: readWorkstreamView(),
   workstreamItemEditing: null,
   todoWorkstreamOptions: [],
-  planSubTab: "plan",
+  workstreamCollapsed: readWorkstreamCollapsed(),
+  workstreamMilestoneEditing: null,
   settingsSubTab: "project",
   projectShares: [],
   shareCandidates: [],
@@ -1954,8 +1955,8 @@ function render() {
   renderProjects();
   renderOverview(ws);
   renderWorkstreams(ws);
+  renderWorkstreamPlan(ws);
   renderSettings(ws);
-  renderPlan(ws);
   renderUpdates(ws);
   renderSources(ws);
   renderReport(ws);
@@ -2024,6 +2025,49 @@ function setWorkstreamView(view) {
   renderWorkstreams(state.workspace);
 }
 
+function readWorkstreamCollapsed() {
+  try {
+    const ids = JSON.parse(localStorage.getItem("workstreamCollapsed") || "[]");
+    return new Set(Array.isArray(ids) ? ids.map(Number) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function toggleWorkstreamCollapse(event, id) {
+  event.stopPropagation();
+  const collapsed = state.workstreamCollapsed;
+  if (collapsed.has(id)) collapsed.delete(id);
+  else collapsed.add(id);
+  try {
+    localStorage.setItem("workstreamCollapsed", JSON.stringify([...collapsed]));
+  } catch {
+    // per-viewer convenience only
+  }
+  renderWorkstreams(state.workspace);
+}
+
+// children of a collapsed parent are hidden; the parent's health already rolls them up
+function wsVisible(items) {
+  return items.filter((item) => !item.parent_id || !state.workstreamCollapsed.has(item.parent_id));
+}
+
+// reserve: some line has children, so top-level lines keep the fold column aligned
+function wsNameLine(item, reserve = false) {
+  const kids = (item.children || []).length;
+  const collapsed = state.workstreamCollapsed.has(item.id);
+  const fold = kids
+    ? `<button type="button" class="ws-fold" aria-expanded="${!collapsed}" aria-label="${collapsed ? "展开" : "收起"} ${kids} 条子工作线" onclick="toggleWorkstreamCollapse(event, ${item.id})" onkeydown="event.stopPropagation()"><span class="ws-chevron${collapsed ? " is-collapsed" : ""}"></span></button>`
+    : "";
+  const more = kids && collapsed ? `<small class="ws-kids">+${kids}</small>` : "";
+  const lead = fold || (item.parent_id ? `<span class="ws-branch" aria-hidden="true">└</span>` : reserve ? `<span class="ws-fold-space" aria-hidden="true"></span>` : "");
+  return `<span class="ws-name-line">${lead}${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong>${more}</span>`;
+}
+
+function wsRowClass(item) {
+  return `${item.parent_id ? " is-child" : ""}${(item.children || []).length ? " is-parent" : ""}`;
+}
+
 function wsDay(value) {
   const [y, m, d] = String(value || "").split("-").map(Number);
   return y ? Date.UTC(y, m - 1, d) / 86400000 : null;
@@ -2058,7 +2102,8 @@ function renderWorkstreamProgress(data, items) {
     const show = current || index % labelEvery === 0;
     return `<span class="ws-scale-week${current ? " is-current" : ""}" title="${escapeAttr(`${week.week_key}（${week.start} 起）`)}">${show ? escapeHtml(wsShortWeek(week.week_key)) : ""}</span>`;
   }).join("");
-  const rows = items.map((item) => {
+  const reserve = items.some((item) => (item.children || []).length);
+  const rows = wsVisible(items).map((item) => {
     const cells = Object.fromEntries((item.cells || []).map((cell) => [cell.week_key, cell]));
     const segments = timeline.map((week) => {
       const cell = cells[week.week_key];
@@ -2087,10 +2132,10 @@ function renderWorkstreamProgress(data, items) {
     const meta = [item.owner_label, item.status !== "active" ? WS_STATUS_LABELS[item.status] : "", item.target_date ? `截止 ${item.target_date}` : ""]
       .filter(Boolean).map(escapeHtml).join(" · ");
     return `
-      <div class="ws-progress-row${state.workstreamId === item.id ? " is-selected" : ""}${item.status !== "active" ? " is-inactive" : ""}" data-workstream-id="${item.id}" tabindex="0" role="button"
+      <div class="ws-progress-row${wsRowClass(item)}${state.workstreamId === item.id ? " is-selected" : ""}${item.status !== "active" ? " is-inactive" : ""}" data-workstream-id="${item.id}" tabindex="0" role="button"
            onclick="selectWorkstream(${item.id})" onkeydown="if (event.key === 'Enter') selectWorkstream(${item.id})">
         <div class="ws-progress-name">
-          <span class="ws-name-line">${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span>
+          ${wsNameLine(item, reserve)}
           <small>${meta || `${item.material_total} 份资料`}</small>
         </div>
         <div class="ws-progress-track">${segments}${markers.join("")}${todayLine}</div>
@@ -2112,13 +2157,15 @@ function renderWorkstreamProgress(data, items) {
 
 function renderWorkstreamSummary(data, items) {
   const active = items.filter((item) => item.status === "active");
-  const count = (health) => active.filter((item) => item.health === health).length;
+  // every line counts once by its own health, so a parent does not repeat its children
+  const count = (health) => active.filter((item) => (item.own_health || item.health) === health).length;
   const advanced = active.filter((item) => {
     const cell = (item.cells || []).find((c) => c.week_key === data.current_week);
     return cell && cell.snapshot && cell.snapshot.status === "advanced";
   }).length;
   const open = items.reduce((sum, item) => sum + (item.items_open || 0), 0);
   const overdue = items.reduce((sum, item) => sum + (item.items_overdue || 0), 0);
+  const risks = (state.workspace?.risks || []).filter((risk) => risk.status === "active").length;
   const stat = (value, label, tone = "") => `<div class="ws-stat${tone ? ` ${tone}` : ""}"><strong>${value}</strong><span>${label}</span></div>`;
   return `
     <div class="ws-summary">
@@ -2127,6 +2174,7 @@ function renderWorkstreamSummary(data, items) {
       ${stat(count("blocked"), "受阻", count("blocked") ? "is-error" : "")}
       ${stat(`${advanced}/${active.length}`, "本周有进展")}
       ${stat(open, overdue ? `待跟踪 · ${overdue} 逾期` : "待跟踪", overdue ? "is-error" : "")}
+      ${stat(risks, "风险提醒", risks ? "is-warning" : "")}
     </div>`;
 }
 
@@ -2171,9 +2219,19 @@ function wsCell(cell, currentWeek) {
   return `<td class="ws-cell is-empty${current}" ${weekAttr}><span aria-label="无记录">—</span></td>`;
 }
 
-function renderWorkstreams(ws) {
+// the tab keeps the 项目计划 panel out of board re-renders so typing there is never interrupted
+function workstreamLayout() {
   const root = $("tab-workstreams");
-  if (!root) return;
+  if (!root) return false;
+  if (!$("ws-board")) {
+    root.innerHTML = `<div id="ws-board"></div><div id="workstream-detail"></div><div id="ws-risks"></div><div id="ws-plan"></div>`;
+  }
+  return true;
+}
+
+function renderWorkstreams(ws) {
+  if (!workstreamLayout()) return;
+  const board = $("ws-board");
   if (state.workstreamDetail && state.workstreamDetail.projectId !== ws.project.id) {
     state.workstreamId = null;
     state.workstreamDetail = null;
@@ -2192,29 +2250,32 @@ function renderWorkstreams(ws) {
   const toolbar = writable ? `
     <div class="row workstream-toolbar">
       <button class="primary" type="button" onclick="openWorkstreamDialog()">＋ 新建工作线</button>
-      <button type="button" onclick="seedWorkstreams()" ${ws.plan.objectives ? "" : "disabled"} title="把项目目标里的编号行各生成一条工作线">从目标生成</button>
+      <button type="button" onclick="seedWorkstreams()" title="把下方项目目标里的编号行各生成一条工作线，缩进行或 1.1 编号生成子工作线">从目标生成</button>
       <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="${data.organized_at ? "AI 归类本周未归类资料，更新本周快照和待跟踪项；过去的周已锁定" : "首次整理：AI 归类全部未归类资料、用历史周报补齐近 8 周快照，并整理本周"}">${organizing ? "整理中…" : "AI 整理"}</button>
       ${note}
     </div>` : "";
   if (!items.length) {
-    root.innerHTML = `
+    board.innerHTML = `
       <div class="panel">
         <div class="panel-head"><h2>工作线</h2><span>项目内并行的长线任务</span></div>
         ${toolbar}
-        <p class="workstream-empty">还没有工作线。</p>
+        <p class="workstream-empty">还没有工作线。${writable ? "可以新建，或在下方项目计划里写好编号目标后“从目标生成”。" : ""}</p>
       </div>`;
+    renderWorkstreamDetail();
+    renderWorkstreamRisks(ws);
     return;
   }
   const head = (data.weeks || []).map((week) =>
     `<th class="ws-week${week === data.current_week ? " is-current" : ""}" scope="col" title="${escapeAttr(week)}">${escapeHtml(wsShortWeek(week))}</th>`).join("");
-  const rows = items.map((item) => {
+  const reserve = items.some((item) => (item.children || []).length);
+  const rows = wsVisible(items).map((item) => {
     const meta = [item.owner_label, item.status !== "active" ? WS_STATUS_LABELS[item.status] : "", item.target_date ? `截止 ${item.target_date}` : ""]
       .filter(Boolean).map(escapeHtml).join(" · ");
     return `
-      <tr class="ws-row${state.workstreamId === item.id ? " is-selected" : ""}" data-workstream-id="${item.id}" tabindex="0"
+      <tr class="ws-row${wsRowClass(item)}${state.workstreamId === item.id ? " is-selected" : ""}" data-workstream-id="${item.id}" tabindex="0"
           onclick="selectWorkstream(${item.id})" onkeydown="if (event.key === 'Enter') selectWorkstream(${item.id})">
         <th scope="row" class="ws-name">
-          <span class="ws-name-line">${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span>
+          ${wsNameLine(item, reserve)}
           <small>${meta || `${item.material_total} 份资料`}</small>
         </th>
         ${(item.cells || []).map((cell) => wsCell(cell, data.current_week)).join("")}
@@ -2235,7 +2296,7 @@ function renderWorkstreams(ws) {
   const legend = progress
     ? `<span class="workstream-legend"><span class="ws-seg-key is-advanced"></span>有进展<span class="ws-seg-key is-steady"></span>无明显进展<span class="ws-seg-key is-blocked"></span>受阻<span class="ws-seg-key is-pending"></span>有资料未整理<span class="ws-key-milestone"></span>里程碑<span class="ws-key-target"></span>目标日期<span class="ws-key-today"></span>今天</span>`
     : `<span class="workstream-legend"><span class="status-dot is-success"></span>有进展<span class="status-dot is-neutral"></span>无明显进展<span class="status-dot is-error"></span>受阻</span>`;
-  root.innerHTML = `
+  board.innerHTML = `
     <div class="panel">
       <div class="panel-head"><h2>工作线</h2><span>${progress ? "过去 8 周进展与后续节点" : `近 ${(data.weeks || []).length} 周`} · 点击一行查看详情</span></div>
       ${toolbar}
@@ -2246,10 +2307,53 @@ function renderWorkstreams(ws) {
         <button type="button" onclick="showWorkstreamMaterials('none')">未归类资料 ${data.unassigned_materials}</button>
         ${legend}
       </div>
-    </div>
-    <div id="workstream-detail"></div>`;
+    </div>`;
   ensureTableScrollContainers();
   renderWorkstreamDetail();
+  renderWorkstreamRisks(ws);
+}
+
+const RISK_RULE_LABELS = {
+  missing_update: "缺少本周更新",
+  overdue_milestone: "项目里程碑逾期",
+  workstream_overdue: "工作线逾期",
+  workstream_stale: "工作线停滞",
+  workstream_item_overdue: "待跟踪项逾期",
+};
+
+function riskWorkstreamId(risk) {
+  const match = /^workstream:(\d+)$/.exec(String(risk.source_ref || ""));
+  return match ? Number(match[1]) : null;
+}
+
+function renderWorkstreamRisks(ws) {
+  const el = $("ws-risks");
+  if (!el) return;
+  const risks = ws.risks || [];
+  const active = risks.filter((risk) => risk.status === "active").length;
+  const rows = risks.map((risk) => {
+    const id = riskWorkstreamId(risk);
+    const title = id && workstreamById(id)
+      ? `<button type="button" class="link-button" onclick="focusWorkstream(${id})">${escapeHtml(risk.title)}</button>`
+      : escapeHtml(risk.title);
+    return `<tr class="${risk.status === "active" ? "" : "is-resolved"}">
+      <td data-label="严重度"><span class="status ${risk.severity}">${escapeHtml(statusLabel(risk.severity))}</span></td>
+      <td data-label="规则">${escapeHtml(RISK_RULE_LABELS[risk.rule] || risk.rule)}</td>
+      <td data-label="内容">${title}${risk.details ? `<br><small>${escapeHtml(risk.details)}</small>` : ""}</td>
+      <td data-label="状态">${escapeHtml(statusLabel(risk.status))}</td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `
+    <div class="panel ws-risks">
+      <div class="panel-head"><h2>风险提醒</h2><span>确定性规则 · 本周 ${active} 条活跃 · 项目进度 <span class="status ${String(ws.progress_status || "").replace(" ", "-")}">${escapeHtml(statusLabel(ws.progress_status))}</span></span></div>
+      <table class="table"><thead><tr><th>严重度</th><th>规则</th><th>内容</th><th>状态</th></tr></thead><tbody>${rows || "<tr><td colspan='4'>暂无风险。</td></tr>"}</tbody></table>
+    </div>`;
+  ensureTableScrollContainers();
+}
+
+async function focusWorkstream(id) {
+  if (state.workstreamId !== id) await selectWorkstream(id);
+  $("workstream-detail")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 }
 
 async function selectWorkstream(id) {
@@ -2282,10 +2386,14 @@ function renderWorkstreamDetail() {
   }
   const writable = canWriteWorkspace();
   const currentWeek = d.current_week || state.workspace?.workstreams?.current_week || "";
-  const order = workstreamList().map((item) => item.id);
+  const order = wsSiblings(d.id);
   const index = order.indexOf(d.id);
   const meta = [WS_HEALTH_LABELS[d.health] || d.health, d.owner_label, d.target_date ? `截止 ${d.target_date}` : ""]
     .filter(Boolean).map(escapeHtml).join(" · ");
+  const parentLink = d.parent
+    ? `<span class="ws-parent-link">上级工作线 <button type="button" class="link-button" onclick="selectWorkstream(${d.parent.id})">${escapeHtml(d.parent.name)}</button></span>`
+    : "";
+  const alerts = [...(d.overdue_reasons || []), ...(d.child_alerts || [])];
   const timeline = (d.snapshots || []).map((snap) => `
     <li>
       <span class="ws-timeline-week">${escapeHtml(snap.week_key)}</span>
@@ -2303,8 +2411,6 @@ function renderWorkstreamDetail() {
       <input id="ws-snap-next" maxlength="300" placeholder="下一步（可选）">
       <button type="button" onclick="saveWorkstreamSnapshot(${d.id})">记录</button>
     </div>` : "";
-  const milestones = (d.milestones || []).map((item) =>
-    `<tr><td data-label="里程碑">${escapeHtml(item.title || "")}</td><td data-label="日期">${escapeHtml(item.target_date || "")}</td><td data-label="状态">${escapeHtml(statusLabel(item.status || ""))}</td></tr>`).join("");
   const materials = (d.materials || []).slice(0, 30).map((m) => `
     <li>
       <button type="button" class="link-button" onclick="previewMaterial(${m.id})">${escapeHtml(m.filename)}</button>
@@ -2313,14 +2419,15 @@ function renderWorkstreamDetail() {
   const todos = (d.todos || []).map((t) => `<li><span class="status ${t.status === "doing" ? "running" : ""}">${t.status === "doing" ? "进行中" : "待办"}</span> ${escapeHtml(t.title)}</li>`).join("");
   el.innerHTML = `
     <div class="panel workstream-detail">
-      <div class="panel-head"><h2>${escapeHtml(d.name)}</h2><span>${meta}</span></div>
+      <div class="panel-head"><h2>${escapeHtml(d.name)}</h2><span>${meta}${parentLink ? ` · ${parentLink}` : ""}</span></div>
       ${d.goal ? `<p class="workstream-goal">${escapeHtml(d.goal)}</p>` : ""}
-      ${(d.overdue_reasons || []).length ? `<p class="workstream-alert">${escapeHtml(d.overdue_reasons.join("；"))}</p>` : ""}
+      ${alerts.length ? `<p class="workstream-alert">${escapeHtml(alerts.join("；"))}</p>` : ""}
       <div class="row">
         ${writable ? `
           <button type="button" onclick="openWorkstreamDialog(${d.id})">编辑</button>
           <button type="button" onclick="moveWorkstream(${d.id}, -1)" ${index <= 0 ? "disabled" : ""}>上移</button>
-          <button type="button" onclick="moveWorkstream(${d.id}, 1)" ${index < 0 || index >= order.length - 1 ? "disabled" : ""}>下移</button>` : ""}
+          <button type="button" onclick="moveWorkstream(${d.id}, 1)" ${index < 0 || index >= order.length - 1 ? "disabled" : ""}>下移</button>
+          ${d.parent ? "" : `<button type="button" onclick="openWorkstreamDialog(null, ${d.id})">＋ 子工作线</button>`}` : ""}
         <button type="button" onclick="showWorkstreamMaterials(${d.id})">在过程资料中查看</button>
         ${writable ? `<button type="button" class="danger" onclick="deleteWorkstream(${d.id})">删除</button>` : ""}
       </div>
@@ -2332,8 +2439,8 @@ function renderWorkstreamDetail() {
           <ol class="workstream-timeline">${timeline}</ol>
         </section>
         <section>
-          <h3>里程碑</h3>
-          ${milestones ? `<table class="table"><tbody>${milestones}</tbody></table>` : `<p class="workstream-empty">在 计划和风险 → 项目计划 里给里程碑选择这条工作线。</p>`}
+          ${renderWorkstreamChildren(d, writable)}
+          ${renderWorkstreamMilestones(d, writable)}
           <h3>关联资料 <small>${(d.materials || []).length}</small></h3>
           ${materials ? `<ul class="workstream-list">${materials}</ul>` : `<p class="workstream-empty">暂无关联资料。</p>`}
           <h3>我的 TODO</h3>
@@ -2342,6 +2449,123 @@ function renderWorkstreamDetail() {
       </div>
     </div>`;
   ensureTableScrollContainers();
+}
+
+function renderWorkstreamChildren(d, writable) {
+  if (d.parent) return "";
+  const kids = d.child_items || [];
+  if (!kids.length) return "";
+  const rows = kids.map((kid) => `
+    <li class="ws-child">
+      ${wsHealthDot(kid.health)}
+      <button type="button" class="link-button" onclick="selectWorkstream(${kid.id})">${escapeHtml(kid.name)}</button>
+      <small>${[kid.status !== "active" ? WS_STATUS_LABELS[kid.status] : "", kid.owner_label, kid.items_open ? `${kid.items_open} 待跟踪` : "", kid.items_overdue ? `${kid.items_overdue} 逾期` : ""]
+        .filter(Boolean).map(escapeHtml).join(" · ")}</small>
+    </li>`).join("");
+  return `<h3>子工作线 <small>${kids.length}</small></h3><ul class="workstream-list ws-children">${rows}</ul>`;
+}
+
+const MILESTONE_ORDER = (a, b) => (a.target_date || "9999").localeCompare(b.target_date || "9999");
+
+function milestoneMoveSelect(current) {
+  const options = workstreamList().map((item) =>
+    `<option value="${item.id}" ${item.id === current ? "selected" : ""}>${item.parent_id ? "　└ " : ""}${escapeHtml(item.name)}</option>`).join("");
+  return `<select name="workstream_id" aria-label="所属工作线"><option value="">项目级（不属于工作线）</option>${options}</select>`;
+}
+
+function renderWorkstreamMilestone(d, m, writable, today) {
+  if (writable && state.workstreamMilestoneEditing === m.id) {
+    return `
+      <li class="ws-item is-editing">
+        <form class="ws-item-form ws-milestone-form" onsubmit="saveWorkstreamMilestone(event, ${d.id}, ${m.id})">
+          <input name="title" maxlength="200" required value="${escapeAttr(m.title || "")}" aria-label="里程碑">
+          <input name="owner_label" maxlength="60" value="${escapeAttr(m.owner_label || "")}" placeholder="负责人" aria-label="负责人">
+          <input name="target_date" type="date" value="${escapeAttr(m.target_date || "")}" aria-label="目标日期">
+          <select name="status" aria-label="状态">${statusOptions(m.status)}</select>
+          ${milestoneMoveSelect(d.id)}
+          <span class="row"><button class="primary" type="submit">保存</button><button type="button" onclick="editWorkstreamMilestone(null)">取消</button></span>
+        </form>
+      </li>`;
+  }
+  const done = m.status === "complete";
+  const late = !done && m.target_date && m.target_date < today;
+  const meta = [
+    m.target_date ? `<span class="${late ? "is-overdue" : ""}">${late ? "已逾期 · " : ""}${escapeHtml(m.target_date)}</span>` : "",
+    m.status && !["planned", "complete"].includes(m.status) ? escapeHtml(statusLabel(m.status)) : "",
+    m.owner_label ? escapeHtml(m.owner_label) : "",
+  ].filter(Boolean).join(" · ");
+  return `
+    <li class="ws-item ws-milestone-item${done ? " is-done" : ""}${late ? " is-late" : ""}">
+      ${writable
+        ? `<input type="checkbox" ${done ? "checked" : ""} aria-label="${done ? "重新打开" : "标记完成"}：${escapeAttr(m.title || "")}" onchange="toggleWorkstreamMilestone(${d.id}, ${m.id}, this.checked)">`
+        : `<span class="ws-item-mark" aria-hidden="true">${done ? "◆" : "◇"}</span>`}
+      <div class="ws-item-body">
+        <span class="ws-item-title">${escapeHtml(m.title || "")}</span>
+        ${meta ? `<small>${meta}</small>` : ""}
+      </div>
+      ${writable ? `<span class="ws-item-actions">
+        <button type="button" class="link-button" onclick="editWorkstreamMilestone(${m.id})">编辑</button>
+        <button type="button" class="link-button is-danger" onclick="deleteWorkstreamMilestone(${d.id}, ${m.id})">删除</button>
+      </span>` : ""}
+    </li>`;
+}
+
+function renderWorkstreamMilestones(d, writable) {
+  const today = state.workspace?.workstreams?.today || "";
+  const list = [...(d.milestones || [])].sort(MILESTONE_ORDER);
+  const done = list.filter((m) => m.status === "complete").length;
+  const addForm = writable ? `
+    <form class="ws-item-form ws-item-add" onsubmit="addWorkstreamMilestone(event, ${d.id})">
+      <input name="title" maxlength="200" required placeholder="新增里程碑" aria-label="新增里程碑">
+      <input name="owner_label" maxlength="60" placeholder="负责人" aria-label="负责人">
+      <input name="target_date" type="date" aria-label="目标日期">
+      <button type="submit">添加</button>
+    </form>` : "";
+  return `
+    <h3>里程碑 <small>${list.length ? `已完成 ${done}/${list.length}` : ""}</small></h3>
+    ${addForm}
+    ${list.length ? `<ul class="ws-items">${list.map((m) => renderWorkstreamMilestone(d, m, writable, today)).join("")}</ul>` : `<p class="workstream-empty">暂无里程碑。</p>`}`;
+}
+
+function workstreamMilestoneBody(form) {
+  const body = {
+    title: form.elements.title.value.trim(),
+    owner_label: form.elements.owner_label.value.trim(),
+    target_date: form.elements.target_date.value,
+  };
+  if (form.elements.status) body.status = form.elements.status.value;
+  if (form.elements.workstream_id) body.workstream_id = Number(form.elements.workstream_id.value) || null;
+  return body;
+}
+
+function addWorkstreamMilestone(event, workstreamId) {
+  event.preventDefault();
+  const body = workstreamMilestoneBody(event.target);
+  if (!body.title) return;
+  workstreamSubRequest(workstreamId, "milestones", "", { method: "POST", body: JSON.stringify(body) }, "已添加里程碑");
+}
+
+function editWorkstreamMilestone(id) {
+  state.workstreamMilestoneEditing = id;
+  renderWorkstreamDetail();
+}
+
+function saveWorkstreamMilestone(event, workstreamId, id) {
+  event.preventDefault();
+  const body = workstreamMilestoneBody(event.target);
+  if (!body.title) return;
+  const moved = body.workstream_id !== workstreamId;
+  workstreamSubRequest(workstreamId, "milestones", `/${id}`, { method: "PUT", body: JSON.stringify(body) },
+    moved ? (body.workstream_id ? "里程碑已移到其他工作线" : "里程碑已改为项目级") : "里程碑已更新");
+}
+
+function toggleWorkstreamMilestone(workstreamId, id, done) {
+  workstreamSubRequest(workstreamId, "milestones", `/${id}`, { method: "PUT", body: JSON.stringify({ status: done ? "complete" : "in_progress" }) }, "");
+}
+
+function deleteWorkstreamMilestone(workstreamId, id) {
+  if (!window.confirm("删除这个里程碑？")) return;
+  workstreamSubRequest(workstreamId, "milestones", `/${id}`, { method: "DELETE" }, "里程碑已删除");
 }
 
 function wsItemMeta(item, today) {
@@ -2414,12 +2638,17 @@ function workstreamItemBody(form) {
   };
 }
 
-async function workstreamItemRequest(workstreamId, path, options, message) {
+function workstreamItemRequest(workstreamId, path, options, message) {
+  return workstreamSubRequest(workstreamId, "items", path, options, message);
+}
+
+async function workstreamSubRequest(workstreamId, kind, path, options, message) {
   const projectId = state.projectId;
   try {
-    const detail = await api(`/api/projects/${projectId}/workstreams/${workstreamId}/items${path}`, options);
+    const detail = await api(`/api/projects/${projectId}/workstreams/${workstreamId}/${kind}${path}`, options);
     if (state.projectId !== projectId) return;
     state.workstreamItemEditing = null;
+    state.workstreamMilestoneEditing = null;
     if (state.workstreamId === workstreamId) state.workstreamDetail = { ...detail, projectId };
     await loadWorkspace();
     if (message) toast(message);
@@ -2456,10 +2685,18 @@ function deleteWorkstreamItem(workstreamId, itemId) {
   workstreamItemRequest(workstreamId, `/${itemId}`, { method: "DELETE" }, "待跟踪项已删除");
 }
 
-function openWorkstreamDialog(id) {
+function openWorkstreamDialog(id, parentId = null) {
   const form = $("workstream-form");
   const item = id ? (state.workstreamDetail && state.workstreamDetail.id === id ? state.workstreamDetail : workstreamById(id)) : null;
-  $("workstream-dialog-title").textContent = item ? "编辑工作线" : "新建工作线";
+  $("workstream-dialog-title").textContent = item ? "编辑工作线" : parentId ? "新建子工作线" : "新建工作线";
+  // two levels at most: only top-level lines can be parents, and a line with children stays top-level
+  const hasKids = !!(item && (item.children || []).length);
+  const parents = workstreamList().filter((w) => !w.parent_id && (!item || w.id !== item.id));
+  const select = $("workstream-parent-select");
+  select.innerHTML = `<option value="">无（一级工作线）</option>${parents.map((w) => `<option value="${w.id}">${escapeHtml(w.name)}</option>`).join("")}`;
+  select.value = String((item ? item.parent_id : parentId) || "");
+  select.disabled = hasKids;
+  select.title = hasKids ? "有子工作线的工作线不能再挂到其他工作线下" : "";
   form.elements.id.value = item ? String(item.id) : "";
   form.elements.name.value = item?.name || "";
   form.elements.goal.value = item?.goal || "";
@@ -2480,6 +2717,7 @@ async function submitWorkstreamForm(event) {
     target_date: form.elements.target_date.value,
     status: form.elements.status.value,
   };
+  if (!form.elements.parent_id.disabled) body.parent_id = Number(form.elements.parent_id.value) || null;
   if (!body.name) {
     toast("请填写工作线名称");
     return;
@@ -2543,19 +2781,35 @@ async function workstreamJobFinished(jobId, job) {
   else toast(`「${name}」工作线整理失败：${(record && record.failure_reason) || "未知错误"}`);
 }
 
+// ids of the lines that share this line's parent (top-level lines share none), in display order
+function wsSiblings(id) {
+  const items = workstreamList();
+  const item = items.find((w) => w.id === id);
+  if (!item) return [];
+  return items.filter((w) => (w.parent_id || null) === (item.parent_id || null)).map((w) => w.id);
+}
+
 async function moveWorkstream(id, delta) {
-  const ids = workstreamList().map((item) => item.id);
-  const index = ids.indexOf(id);
+  const items = workstreamList();
+  const item = items.find((w) => w.id === id);
+  const siblings = wsSiblings(id);
+  const index = siblings.indexOf(id);
   const target = index + delta;
-  if (index < 0 || target < 0 || target >= ids.length) return;
-  [ids[index], ids[target]] = [ids[target], ids[index]];
+  if (!item || index < 0 || target < 0 || target >= siblings.length) return;
+  [siblings[index], siblings[target]] = [siblings[target], siblings[index]];
+  // a parent moves with its children; positions are rebuilt from the whole tree order
+  const tops = item.parent_id ? items.filter((w) => !w.parent_id).map((w) => w.id) : siblings;
+  const kids = (parentId) => (item.parent_id === parentId ? siblings : items.filter((w) => w.parent_id === parentId).map((w) => w.id));
+  const ids = tops.flatMap((top) => [top, ...kids(top)]);
+  items.forEach((w) => { if (!ids.includes(w.id)) ids.push(w.id); });
   await api(`/api/projects/${state.projectId}/workstreams/reorder`, { method: "POST", body: JSON.stringify({ ids }) });
   await loadWorkspace();
 }
 
 async function deleteWorkstream(id) {
   const item = workstreamById(id);
-  if (!window.confirm(`删除工作线「${item ? item.name : ""}」？关联资料和 TODO 会保留，只移除归属和周快照。`)) return;
+  const kids = item && (item.children || []).length ? `它的 ${item.children.length} 条子工作线会变成一级工作线。` : "";
+  if (!window.confirm(`删除工作线「${item ? item.name : ""}」？关联资料和 TODO 会保留，只移除归属、周快照和待跟踪项。${kids}`)) return;
   await api(`/api/projects/${state.projectId}/workstreams/${id}`, { method: "DELETE" });
   state.workstreamId = null;
   state.workstreamDetail = null;
@@ -2599,11 +2853,13 @@ function sourceFilterActive() {
   return workstreamById(filter) ? Number(filter) : "all";
 }
 
+// a parent's filter also shows the material of its 子工作线
 function materialMatchesWorkstream(m, filter) {
   if (filter === "all") return true;
   const links = m.workstreams || {};
   if (filter === "none") return !links.primary;
-  return links.primary === filter || (links.related || []).includes(filter);
+  const ids = new Set([filter, ...((workstreamById(filter) || {}).children || [])]);
+  return ids.has(links.primary) || (links.related || []).some((id) => ids.has(id));
 }
 
 function setSourceWorkstreamFilter(filter) {
@@ -2624,7 +2880,7 @@ function renderWorkstreamFilter(ws) {
     <div class="source-tabs workstream-filter" role="toolbar" aria-label="按工作线筛选">
       ${button("all", "全部工作线")}
       ${button("none", `未归类 ${unassigned}`)}
-      ${items.filter((item) => item.status !== "done" || active === item.id).map((item) => button(item.id, escapeHtml(item.name))).join("")}
+      ${items.filter((item) => item.status !== "done" || active === item.id).map((item) => button(item.id, `${item.parent_id ? "└ " : ""}${escapeHtml(item.name)}`)).join("")}
     </div>`;
 }
 
@@ -2646,7 +2902,7 @@ function todoWorkstreamTag(todo) {
   if (!primary && !(state.todoWorkstreamOptions || []).length) return "";
   const extra = (links.related || []).length ? ` +${links.related.length}` : "";
   const label = primary ? `${escapeHtml(primary.name)}${extra}` : "＋ 工作线";
-  const title = primary ? `${primary.project_name} · ${primary.name}` : "设置归属工作线";
+  const title = primary ? `${primary.project_name} · ${primary.path || primary.name}` : "设置归属工作线";
   return `<button type="button" class="todo-ws-tag${primary ? "" : " is-empty"}" title="${escapeAttr(title)}" onclick="event.stopPropagation(); openWorkstreamAssign('todo', ${todo.id})">${label}</button>`;
 }
 
@@ -2675,12 +2931,12 @@ function openWorkstreamAssign(kind, id) {
   }
   state.workstreamAssign = { kind, id };
   $("workstream-assign-context").textContent = context;
-  const option = (item) => `<option value="${item.id}" ${item.id === primary ? "selected" : ""}>${escapeHtml(item.name)}</option>`;
+  const option = (item) => `<option value="${item.id}" ${item.id === primary ? "selected" : ""}>${item.parent_id ? "　└ " : ""}${escapeHtml(item.name)}</option>`;
   $("workstream-assign-primary").innerHTML = `<option value="">不归类</option>${groups.map((group) => group.project_name
     ? `<optgroup label="${escapeAttr(group.project_name)}">${group.workstreams.map(option).join("")}</optgroup>`
     : group.workstreams.map(option).join("")).join("")}`;
   const boxes = groups.flatMap((group) => group.workstreams.map((item) => `
-    <label class="checkbox-row"><input type="checkbox" value="${item.id}" ${related.includes(item.id) ? "checked" : ""}>${group.project_name ? `${escapeHtml(group.project_name)} · ` : ""}${escapeHtml(item.name)}</label>`)).join("");
+    <label class="checkbox-row"><input type="checkbox" value="${item.id}" ${related.includes(item.id) ? "checked" : ""}>${group.project_name ? `${escapeHtml(group.project_name)} · ` : ""}${escapeHtml(item.path || item.name)}</label>`)).join("");
   $("workstream-assign-related").innerHTML = `<legend>同时关联</legend>${boxes || "<p class=\"workstream-empty\">暂无可选工作线。</p>"}`;
   $("workstream-assign-dialog").showModal();
 }
@@ -2718,8 +2974,8 @@ function renderOverviewWorkstreams(ws) {
   if (!items.length) return "";
   const rows = items.map((item) => {
     const latest = [...(item.cells || [])].reverse().find((cell) => cell.snapshot);
-    return `<tr onclick="openWorkstreamFromOverview(${item.id})" class="ws-overview-row">
-      <td data-label="工作线"><span class="ws-name-line">${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span></td>
+    return `<tr onclick="openWorkstreamFromOverview(${item.id})" class="ws-overview-row${item.parent_id ? " is-child" : ""}">
+      <td data-label="工作线"><span class="ws-name-line">${item.parent_id ? `<span class="ws-branch" aria-hidden="true">└</span>` : ""}${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span></td>
       <td data-label="最近进展">${latest ? `${escapeHtml(wsShortWeek(latest.week_key))} · ${escapeHtml(latest.snapshot.summary)}` : "—"}</td>
       <td data-label="待跟踪" class="ws-overview-items">${item.items_open ? `${item.items_open} 待跟踪${item.items_overdue ? ` · <b class="is-overdue">${item.items_overdue} 逾期</b>` : ""}` : "—"}</td>
     </tr>`;
@@ -3182,74 +3438,57 @@ async function saveSettings(event) {
   renderProjects();
 }
 
-function renderPlan(ws) {
+// 项目计划 inside the 工作线 tab: objectives, project-level milestones (not
+// owned by any workstream) and deliverables; workstream milestones are edited
+// in each workstream's detail panel
+function projectMilestones(ws) {
+  return (ws.plan.milestones || []).filter((m) => !m.workstream_id);
+}
+
+function renderWorkstreamPlan(ws) {
+  if (!workstreamLayout()) return;
+  const el = $("ws-plan");
   const writable = canWriteWorkspace();
-  $("tab-plan").innerHTML = `
-    <div class="source-tabs" role="tablist" aria-label="计划和风险">
-      <button type="button" data-subtab="plan" role="tab" onclick="switchPlanSubTab('plan')">项目计划</button>
-      <button type="button" data-subtab="risk" role="tab" onclick="switchPlanSubTab('risk')">进度风险</button>
-    </div>
-    <section id="plan-sub-plan" class="source-view" role="tabpanel">
-      ${writable ? `
-      <form id="plan-form" class="panel">
-        <div class="panel-head"><h2>项目计划</h2><span>里程碑与交付物 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
-        ${textarea("objectives", "目标", ws.plan.objectives)}
-        <h3>里程碑</h3>
-        <div id="milestones">${renderPlanItems(ws.plan.milestones, true)}</div>
-        <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
-        <h3>交付物</h3>
-        <div id="deliverables">${renderPlanItems(ws.plan.deliverables)}</div>
-        <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
-      </form>` : `
-      <div class="panel">
-        <div class="panel-head"><h2>项目计划</h2><span>只读</span></div>
-        <p>${escapeHtml(ws.plan.objectives || "暂无目标。")}</p>
-        <h3>里程碑</h3>
-        <table class="table"><tbody>${ws.plan.milestones.map(rowItem).join("") || "<tr><td>暂无里程碑。</td></tr>"}</tbody></table>
-        <h3>交付物</h3>
-        <table class="table"><tbody>${ws.plan.deliverables.map(rowItem).join("") || "<tr><td>暂无交付物。</td></tr>"}</tbody></table>
-      </div>`}
-    </section>
-    <section id="plan-sub-risk" class="source-view hidden" role="tabpanel">
-      <div class="panel">
-        <div class="panel-head"><h2>进度和风险</h2><span>仅项目相关风险</span></div>
-        <p>进度状态：<span class="status ${ws.progress_status.replace(" ", "-")}">${escapeHtml(statusLabel(ws.progress_status))}</span></p>
-        <table class="table"><thead><tr><th>严重度</th><th>规则</th><th>标题</th><th>状态</th></tr></thead><tbody>${ws.risks.map(r => `<tr><td data-label="严重度"><span class="status ${r.severity}">${statusLabel(r.severity)}</span></td><td data-label="规则">${escapeHtml(r.rule)}</td><td data-label="标题">${escapeHtml(r.title)}<br>${escapeHtml(r.details || "")}</td><td data-label="状态">${escapeHtml(statusLabel(r.status))}</td></tr>`).join("") || "<tr><td colspan='4'>暂无风险。</td></tr>"}</tbody></table>
-      </div>
-    </section>
-  `;
+  const linked = (ws.plan.milestones || []).length - projectMilestones(ws).length;
+  const hint = linked ? `另有 ${linked} 个里程碑在各工作线中` : "项目级里程碑与交付物";
+  el.innerHTML = writable ? `
+    <form id="plan-form" class="panel ws-plan">
+      <div class="panel-head"><h2>项目计划</h2><span>${escapeHtml(hint)} · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
+      ${textarea("objectives", "项目目标（编号行可“从目标生成”工作线，缩进行生成子工作线）", ws.plan.objectives)}
+      <h3>项目级里程碑 <small>选择工作线后移到该工作线下</small></h3>
+      <div id="milestones">${renderPlanItems(projectMilestones(ws), true)}</div>
+      <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
+      <h3>交付物</h3>
+      <div id="deliverables">${renderPlanItems(ws.plan.deliverables || [])}</div>
+      <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
+    </form>` : `
+    <div class="panel ws-plan">
+      <div class="panel-head"><h2>项目计划</h2><span>${escapeHtml(hint)} · 只读</span></div>
+      <p>${escapeHtml(ws.plan.objectives || "暂无目标。")}</p>
+      <h3>项目级里程碑</h3>
+      <table class="table"><tbody>${projectMilestones(ws).map(rowItem).join("") || "<tr><td>暂无项目级里程碑。</td></tr>"}</tbody></table>
+      <h3>交付物</h3>
+      <table class="table"><tbody>${(ws.plan.deliverables || []).map(rowItem).join("") || "<tr><td>暂无交付物。</td></tr>"}</tbody></table>
+    </div>`;
   if (writable) {
     $("plan-form").onsubmit = savePlan;
     setupAutoSave("plan", $("plan-form"), savePlan);
   }
-  switchPlanSubTab(state.planSubTab);
-}
-
-function switchPlanSubTab(tab) {
-  state.planSubTab = tab;
-  const root = $("tab-plan");
-  root.querySelectorAll("[data-subtab]").forEach((button) => {
-    const active = button.dataset.subtab === tab;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-selected", String(active));
-  });
-  ["plan", "risk"].forEach((name) => {
-    const view = root.querySelector(`#plan-sub-${name}`);
-    if (view) view.classList.toggle("hidden", name !== tab);
-  });
+  ensureTableScrollContainers();
 }
 
 function milestoneWorkstreamSelect(value) {
   const items = workstreamList();
   if (!items.length) return "";
   const current = String(value || "");
-  return `<select name="workstream_id" aria-label="工作线"><option value="">无工作线</option>${items.map((item) =>
-    `<option value="${item.id}" ${String(item.id) === current ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select>`;
+  return `<select name="workstream_id" aria-label="工作线"><option value="">项目级</option>${items.map((item) =>
+    `<option value="${item.id}" ${String(item.id) === current ? "selected" : ""}>${item.parent_id ? "　└ " : ""}${escapeHtml(item.name)}</option>`).join("")}</select>`;
 }
 
 function renderPlanItems(items, withWorkstream = false) {
   return (items.length ? items : [{ title: "", status: "planned", owner_label: "", target_date: "" }]).map(item => `
     <div class="row plan-item">
+      ${withWorkstream ? `<input type="hidden" name="id" value="${escapeAttr(item.id || "")}">` : ""}
       <input name="title" placeholder="标题" value="${escapeAttr(item.title || "")}">
       <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
       <input name="target_date" type="date" value="${escapeAttr(item.target_date || "")}">
@@ -3269,11 +3508,27 @@ async function savePlan(event) {
   const form = $("plan-form");
   if (!form) return;
   const groups = (id) => Array.from($(id).querySelectorAll(".plan-item")).map(row => itemPayload(row)).filter(i => i.title);
-  await api(`/api/projects/${state.projectId}/plan`, { method: "PUT", body: JSON.stringify({ objectives: form.objectives.value, milestones: groups("milestones"), deliverables: groups("deliverables") }) });
-  if (state.workspace?.plan) {
-    state.workspace.plan.objectives = form.objectives.value;
-    state.workspace.plan.milestones = groups("milestones");
-    state.workspace.plan.deliverables = groups("deliverables");
+  const milestones = groups("milestones").map((item) => {
+    const { id, workstream_id: workstreamId, ...rest } = item;
+    return { ...rest, ...(Number(id) ? { id: Number(id) } : {}), ...(Number(workstreamId) ? { workstream_id: Number(workstreamId) } : {}) };
+  });
+  const deliverables = groups("deliverables");
+  // only project-level milestones are sent; the server keeps every workstream's own
+  const data = await api(`/api/projects/${state.projectId}/plan`, {
+    method: "PUT",
+    body: JSON.stringify({ objectives: form.objectives.value, project_milestones: milestones, deliverables }),
+  });
+  if (milestones.some((item) => item.workstream_id) && data && data.project) {
+    // a milestone moved into a workstream: show it there and drop it from this list
+    updateWorkspace(data);
+    toast("里程碑已移到所选工作线");
+    return;
+  }
+  if (state.workspace?.plan && data?.plan) {
+    state.workspace.plan = data.plan;
+    state.workspace.risks = data.risks || state.workspace.risks;
+    state.workspace.progress_status = data.progress_status || state.workspace.progress_status;
+    renderWorkstreamRisks(state.workspace);
   }
 }
 
