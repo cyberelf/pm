@@ -1527,11 +1527,11 @@ class WorkstreamFrontendTest(unittest.TestCase):
         self.assertLess(html.index('data-tab="workstreams"'), html.index('data-tab="sources"'))
         for marker in ('id="tab-workstreams"', 'id="workstream-dialog"', 'id="workstream-assign-dialog"', 'id="workstream-assign-primary"'):
             self.assertIn(marker, html)
-        for marker in ("/workstreams/seed", "/workstreams/organize", "/workstreams/reorder", "/snapshots",
+        for marker in ("/workstreams/seed", "/workstreams/organize", "/workstreams/reorder", "/snapshots", "/items",
                        "/api/todos/${target.id}/workstreams", 'kind === "workstreams"', "workstream_options",
                        'name="workstream_id"', "body.workstream_id = wsFilter"):
             self.assertIn(marker, source)
-        for marker in (".ws-matrix {", ".ws-tag, .todo-ws-tag {", ".workstream-timeline {"):
+        for marker in (".ws-matrix {", ".ws-tag, .todo-ws-tag {", ".workstream-timeline {", ".ws-progress-track {", ".ws-item {"):
             self.assertIn(marker, styles)
 
     def test_matrix_filter_and_assignment_behaviour(self):
@@ -1584,11 +1584,35 @@ globalThis.fetch = async (path, options) => {
       ],
     },
   };
+  if (state.workstreamView !== "progress") throw new Error("progress view should be the default");
+  state.workstreamView = "matrix";
   renderWorkstreams(state.workspace);
   const html = document.getElementById("tab-workstreams").innerHTML;
   for (const needle of ["完成联调", "2 份资料", ">W48<", "未归类资料 1", "AI 整理", 'data-workstream-id="12"', "归类 3 份资料", "高鹏"]) {
     if (!html.includes(needle)) throw new Error(`matrix missing ${needle}`);
   }
+
+  // progress view: one lane segment per timeline week, markers placed by date, item progress
+  Object.assign(state.workspace.workstreams, {
+    today: "2026-11-24",
+    timeline: [
+      { week_key: "2026-W47", start: "2026-11-16" }, { week_key: "2026-W48", start: "2026-11-23" },
+      { week_key: "2026-W49", start: "2026-11-30" }, { week_key: "2026-W50", start: "2026-12-07" },
+    ],
+  });
+  Object.assign(state.workspace.workstreams.workstreams[0], {
+    target_date: "2026-12-07", items_open: 2, items_done: 1, items_overdue: 1,
+    milestones: [{ title: "实车测试", target_date: "2026-11-30", status: "planned" }],
+  });
+  state.workstreamView = "progress";
+  renderWorkstreams(state.workspace);
+  const lanes = document.getElementById("tab-workstreams").innerHTML;
+  for (const needle of ['ws-seg is-advanced"', "is-pending is-current", 'ws-seg is-future"', "里程碑：实车测试（2026-11-30）",
+                        'ws-target" style="left:75.00%"', 'class="ws-today" style="left:28.57%"', "1 逾期", "width:33%", "2 待跟踪",
+                        "本周有进展"]) {
+    if (!lanes.includes(needle)) throw new Error(`progress view missing ${needle}`);
+  }
+  if (lanes.includes("ws-matrix")) throw new Error("progress view should not render the matrix");
   const [linked, unassigned] = state.workspace.materials;
   if (!materialMatchesWorkstream(linked, 12) || materialMatchesWorkstream(unassigned, 11) || !materialMatchesWorkstream(unassigned, "none")) {
     throw new Error("workstream filter matched the wrong materials");
@@ -1609,6 +1633,28 @@ globalThis.fetch = async (path, options) => {
   if (call.path !== "/api/projects/3/materials/5/workstreams" || call.options.method !== "PUT") throw new Error(`unexpected call ${call.path}`);
   if (JSON.stringify(JSON.parse(call.options.body)) !== JSON.stringify({ primary: 12, related: [] })) throw new Error(`unexpected body ${call.options.body}`);
   if (!adopted) throw new Error("assignment response was not adopted");
+
+  // tracking items in the detail panel: open first, done folded, edits go to the items API
+  state.workstreamId = 11;
+  state.workstreamDetail = {
+    id: 11, projectId: 3, name: "东风交付", health: "at risk", current_week: "2026-W48", snapshots: [], materials: [], todos: [], milestones: [],
+    items: [
+      { id: 7, title: "确认实车排期", owner_label: "高鹏", due_date: "2026-11-20", status: "open", source: "auto" },
+      { id: 8, title: "签署确认单", owner_label: "", due_date: "", status: "done", source: "manual", done_at: "2026-11-23T10:00:00+00:00" },
+    ],
+  };
+  renderWorkstreamDetail();
+  const detail = document.getElementById("workstream-detail").innerHTML;
+  for (const needle of ["待跟踪项", "1 项待跟踪", "已逾期 · 2026-11-20", "AI 提取", "已完成 1", "本周 W48", "过去的周已锁定"]) {
+    if (!detail.includes(needle)) throw new Error(`detail missing ${needle}`);
+  }
+  if (detail.includes('id="ws-snap-week"')) throw new Error("past weeks should not be selectable");
+  loadWorkspace = async () => {};
+  await toggleWorkstreamItem(11, 7, true);
+  const toggle = fetchCalls.at(-1);
+  if (toggle.path !== "/api/projects/3/workstreams/11/items/7" || toggle.options.method !== "PUT" || JSON.parse(toggle.options.body).status !== "done") {
+    throw new Error(`unexpected toggle ${toggle.path} ${toggle.options.body}`);
+  }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 """
         result = subprocess.run(
