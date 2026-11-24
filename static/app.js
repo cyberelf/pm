@@ -1955,7 +1955,7 @@ function render() {
   renderProjects();
   renderOverview(ws);
   renderWorkstreams(ws);
-  renderWorkstreamPlan(ws);
+  renderPlan(ws);
   renderSettings(ws);
   renderUpdates(ws);
   renderSources(ws);
@@ -2221,12 +2221,12 @@ function wsCell(cell, currentWeek) {
   return `<td class="ws-cell is-empty${current}" ${weekAttr}><span aria-label="无记录">—</span></td>`;
 }
 
-// the tab keeps the 项目计划 panel out of board re-renders so typing there is never interrupted
+// board, detail and risks render into their own slots so one re-render never resets the others
 function workstreamLayout() {
   const root = $("tab-workstreams");
   if (!root) return false;
   if (!$("ws-board")) {
-    root.innerHTML = `<div id="ws-board"></div><div id="workstream-detail"></div><div id="ws-risks"></div><div id="ws-plan"></div>`;
+    root.innerHTML = `<div id="ws-board"></div><div id="workstream-detail"></div><div id="ws-risks"></div>`;
   }
   return true;
 }
@@ -2252,7 +2252,7 @@ function renderWorkstreams(ws) {
   const toolbar = writable ? `
     <div class="row workstream-toolbar">
       <button class="primary" type="button" onclick="openWorkstreamDialog()">＋ 新建工作线</button>
-      <button type="button" onclick="seedWorkstreams()" title="把下方项目目标里的编号行各生成一条工作线，缩进行或 1.1 编号生成子工作线">从目标生成</button>
+      <button type="button" onclick="seedWorkstreams()" title="把「项目计划」页签中项目目标的编号行各生成一条工作线，缩进行或 1.1 编号生成子工作线；已有同名工作线跳过">按项目目标生成</button>
       <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="${data.organized_at ? "同步本周 PR/Issue，AI 归类本周未归类资料和 PR/Issue，更新本周快照和待跟踪项；过去的周已锁定" : "首次整理：同步本周 PR/Issue，AI 归类全部未归类资料、用历史周报补齐近 8 周快照，并整理本周"}">${organizing ? "整理中…" : "AI 整理"}</button>
       ${note}
     </div>` : "";
@@ -2261,7 +2261,7 @@ function renderWorkstreams(ws) {
       <div class="panel">
         <div class="panel-head"><h2>工作线</h2><span>项目内并行的长线任务</span></div>
         ${toolbar}
-        <p class="workstream-empty">还没有工作线。${writable ? "可以新建，或在下方项目计划里写好编号目标后“从目标生成”。" : ""}</p>
+        <p class="workstream-empty">还没有工作线。${writable ? "可以新建，或在「项目计划」页签写好编号的项目目标后“按项目目标生成”。" : ""}</p>
       </div>`;
     renderWorkstreamDetail();
     renderWorkstreamRisks(ws);
@@ -2881,9 +2881,12 @@ async function submitWorkstreamForm(event) {
 
 async function seedWorkstreams() {
   try {
+    // the server seeds from the saved objectives: save unsaved edits of the 项目计划 tab first
+    const form = $("plan-form");
+    if (form && form.objectives && form.objectives.value !== (state.workspace?.plan?.objectives || "")) await savePlan();
     const data = await api(`/api/projects/${state.projectId}/workstreams/seed`, { method: "POST", body: "{}" });
     await loadWorkspace();
-    toast(data.created ? `已从项目目标生成 ${data.created} 条工作线` : "目标里的工作线都已存在");
+    toast(data.created ? `已从项目目标生成 ${data.created} 条工作线，在「工作线」页签查看` : "目标里的工作线都已存在");
   } catch (error) {
     toast(error.message);
   }
@@ -3613,35 +3616,58 @@ async function saveSettings(event) {
   renderProjects();
 }
 
-// 项目计划 inside the 工作线 tab: objectives, project-level milestones (not
-// owned by any workstream) and deliverables; workstream milestones are edited
-// in each workstream's detail panel
+// 项目计划 tab: objectives, project-level milestones and deliverables are
+// edited here; workstream milestones are edited in each workstream's detail
+// panel and only listed here so the whole plan reads in one place
 function projectMilestones(ws) {
   return (ws.plan.milestones || []).filter((m) => !m.workstream_id);
 }
 
-function renderWorkstreamPlan(ws) {
-  if (!workstreamLayout()) return;
-  const el = $("ws-plan");
+function workstreamMilestoneRows(ws) {
+  const order = new Map(workstreamList().map((item, index) => [item.id, index]));
+  return (ws.plan.milestones || [])
+    .filter((m) => m.workstream_id && order.has(Number(m.workstream_id)))
+    .sort((a, b) => order.get(Number(a.workstream_id)) - order.get(Number(b.workstream_id))
+      || String(a.target_date || "9999").localeCompare(String(b.target_date || "9999")))
+    .map((m) => {
+      const line = workstreamById(m.workstream_id);
+      return `<tr>
+        <td data-label="工作线"><button type="button" class="link-button" onclick="openWorkstreamFromOverview(${line.id})">${escapeHtml(line.path || line.name)}</button></td>
+        <td data-label="里程碑">${escapeHtml(m.title || "")}</td>
+        <td data-label="负责人">${escapeHtml(m.owner_label || "")}</td>
+        <td data-label="日期">${escapeHtml(m.target_date || "")}</td>
+        <td data-label="状态">${escapeHtml(statusLabel(m.status || ""))}</td>
+      </tr>`;
+    }).join("");
+}
+
+function renderPlan(ws) {
+  const el = $("tab-plan");
+  if (!el) return;
   const writable = canWriteWorkspace();
-  const linked = (ws.plan.milestones || []).length - projectMilestones(ws).length;
-  const hint = linked ? `另有 ${linked} 个里程碑在各工作线中` : "项目级里程碑与交付物";
+  const linkedRows = workstreamMilestoneRows(ws);
+  const linked = linkedRows ? `
+    <h3>工作线里程碑 <small>在工作线详情里编辑</small></h3>
+    <table class="table plan-ws-milestones"><thead><tr><th>工作线</th><th>里程碑</th><th>负责人</th><th>日期</th><th>状态</th></tr></thead><tbody>${linkedRows}</tbody></table>` : "";
   el.innerHTML = writable ? `
-    <form id="plan-form" class="panel ws-plan">
-      <div class="panel-head"><h2>项目计划</h2><span>${escapeHtml(hint)} · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
-      ${textarea("objectives", "项目目标（编号行可“从目标生成”工作线，缩进行生成子工作线）", ws.plan.objectives)}
+    <form id="plan-form" class="panel">
+      <div class="panel-head"><h2>项目计划</h2><span>目标、里程碑与交付物 · 修改后自动保存</span><span class="autosave-status" aria-live="polite"></span></div>
+      ${textarea("objectives", "项目目标", ws.plan.objectives)}
+      <div class="row plan-seed"><button type="button" onclick="seedWorkstreams()">按目标生成工作线</button><small>每个编号行生成一条工作线，缩进行或 1.1 编号生成子工作线，已有同名的跳过</small></div>
       <h3>项目级里程碑 <small>选择工作线后移到该工作线下</small></h3>
       <div id="milestones">${renderPlanItems(projectMilestones(ws), true)}</div>
       <button type="button" onclick="addPlanItem('milestones')">+ 添加里程碑</button>
+      ${linked}
       <h3>交付物</h3>
       <div id="deliverables">${renderPlanItems(ws.plan.deliverables || [])}</div>
       <button type="button" onclick="addPlanItem('deliverables')">+ 添加交付物</button>
     </form>` : `
-    <div class="panel ws-plan">
-      <div class="panel-head"><h2>项目计划</h2><span>${escapeHtml(hint)} · 只读</span></div>
+    <div class="panel">
+      <div class="panel-head"><h2>项目计划</h2><span>只读</span></div>
       <p>${escapeHtml(ws.plan.objectives || "暂无目标。")}</p>
       <h3>项目级里程碑</h3>
       <table class="table"><tbody>${projectMilestones(ws).map(rowItem).join("") || "<tr><td>暂无项目级里程碑。</td></tr>"}</tbody></table>
+      ${linked}
       <h3>交付物</h3>
       <table class="table"><tbody>${(ws.plan.deliverables || []).map(rowItem).join("") || "<tr><td>暂无交付物。</td></tr>"}</tbody></table>
     </div>`;

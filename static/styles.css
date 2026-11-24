@@ -1618,3 +1618,6 @@ span.ws-tag { cursor: default; }
   .workstream-timeline li { grid-template-columns: auto minmax(0, 1fr); }
   .workstream-timeline .ws-timeline-body { grid-column: 1 / -1; }
 }
+.plan-seed { margin: 6px 0 4px; }
+.plan-seed small { color: var(--muted); font-size: 12px; }
+.plan-ws-milestones td:first-child { white-space: nowrap; }
