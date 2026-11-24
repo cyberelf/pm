@@ -57,3 +57,7 @@ Live check (2026-11-23, platform 1.3.21, real provider, service temporarily boun
 - [x] 8.3 PR/issue evidence in snapshot prompts, staleness counts linked activity, report extras tagged with the workstream
 - [x] 8.4 UI: PR / Issue list and 改归属 in the detail, 本周未归类 PR/Issue, lane and matrix counts, PR/Issue 归属 per repository; `workstream_show` / `workstream_list` include them
 - [x] 8.5 Detail shows linked materials and PRs/issues as icon chips (shape = type, color = status) with hover / tap cards
+
+## 9. Project plan back in its own tab
+
+- [x] 9.1 项目计划 tab restored (objectives, project-level milestones, read-only workstream milestones linking to their workstream, deliverables, 按目标生成工作线); 风险提醒 stays in 工作线

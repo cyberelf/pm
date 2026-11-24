@@ -16,7 +16,7 @@ The system SHALL let a project hold an ordered list of workstreams, each with a 
 - **THEN** the system rejects it with a permission error while the workstream view stays readable
 
 #### Scenario: Seed from plan objectives
-- **WHEN** a writer runs 从目标生成 on a project whose objectives contain numbered or bulleted lines
+- **WHEN** a writer runs 按目标生成工作线 on a project whose objectives contain numbered or bulleted lines
 - **THEN** the system creates one workstream per line, named by the line's first clause, with the whole line as its goal, skipping names that already exist; an indented line or a `1.1`-style number under a top-level line becomes a sub-workstream of it
 
 ### Requirement: Material and TODO workstream links
@@ -140,12 +140,12 @@ The system SHALL let a top-level workstream hold sub-workstreams (子工作线) 
 - **WHEN** a sub-workstream has an overdue tracking item
 - **THEN** the sub-workstream and its parent both show 有风险, and only the sub-workstream raises the warning
 
-### Requirement: Plan and risks inside the workstream tab
-The 工作线 tab SHALL hold the project plan and the risk list, replacing the separate 计划和风险 tab. Each milestone SHALL have a stable id and belong to one workstream or to the project: a workstream's milestones SHALL be added, edited, completed, moved or deleted in its detail panel, and the 项目计划 panel SHALL edit the objectives, project-level milestones (assigning one to a workstream moves it there) and deliverables without touching workstream milestones. The 风险提醒 panel SHALL list this week's deterministic warnings with the project progress status, linking workstream warnings to their workstream. An overdue milestone of an active workstream SHALL be reported only by `workstream_overdue`; `overdue_milestone` SHALL cover project-level milestones and those of inactive workstreams.
+### Requirement: Project plan tab and risks inside the workstream tab
+The 工作线 tab SHALL hold the risk list, and the project plan SHALL live in its own 项目计划 tab, which SHALL also list every workstream's milestones read-only with a link to their workstream. Each milestone SHALL have a stable id and belong to one workstream or to the project: a workstream's milestones SHALL be added, edited, completed, moved or deleted in its detail panel, and the 项目计划 tab SHALL edit the objectives, project-level milestones (assigning one to a workstream moves it there) and deliverables without touching workstream milestones. The 风险提醒 panel SHALL list this week's deterministic warnings with the project progress status, linking workstream warnings to their workstream. An overdue milestone of an active workstream SHALL be reported only by `workstream_overdue`; `overdue_milestone` SHALL cover project-level milestones and those of inactive workstreams.
 
 #### Scenario: Move a project milestone into a workstream
 - **WHEN** a writer picks a workstream for a project-level milestone in 项目计划
-- **THEN** the milestone moves to that workstream's detail and timeline and leaves the project-level list
+- **THEN** the milestone moves to that workstream's detail and timeline and leaves the project-level list, showing under 工作线里程碑 in 项目计划
 
 #### Scenario: One warning per overdue milestone
 - **WHEN** a milestone of an active workstream passes its date unfinished

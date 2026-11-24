@@ -259,3 +259,7 @@ Validation (2026-11-23): All 244 unit tests and node --check passed; OpenSpec va
 ## 28. Workstream PR / issue sync
 
 - [x] 28.1 Sync this week's PR / issue activity into workstreams (see `add-project-workstreams` §8)
+
+## 29. 项目计划 tab restored
+
+- [x] 29.1 Move the project plan back to its own 项目计划 tab after 周报; risks stay in 工作线 (see `add-project-workstreams` §9)
