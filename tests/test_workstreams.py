@@ -97,7 +97,7 @@ class WorkstreamTest(unittest.TestCase):
 
     def test_seed_from_objectives_and_crud(self):
         self.assertEqual(
-            [name for name, _goal in parse_objective_lines(AGENT_GUARD_OBJECTIVES)],
+            [name for name, _goal, _sub in parse_objective_lines(AGENT_GUARD_OBJECTIVES)],
             ["东风交付", "产品设计和优化", "推动和智联云安的合作", "浩瀚融资"],
         )
         created = seed_from_objectives(self.conn, self.project)
@@ -397,6 +397,132 @@ class WorkstreamTest(unittest.TestCase):
         create_workstream(self.conn, self.project, {"name": "远期", "target_date": "2030-01-01"})
         self.assertEqual(len(workstream_overview(self.conn, self.project, self.tz)["timeline"]), 8 + 26)
 
+    # ------------------------------------------------------------ 子工作线
+
+    def test_sub_workstream_rules_order_and_delete(self):
+        parent = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        other = create_workstream(self.conn, self.project, {"name": "融资"})
+        child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": parent})
+        order = [w["id"] for w in workstream_overview(self.conn, self.project, self.tz)["workstreams"]]
+        self.assertEqual(order, [parent, child, other])
+        with self.assertRaises(ValidationError):  # two levels at most
+            create_workstream(self.conn, self.project, {"name": "孙", "parent_id": child})
+        with self.assertRaises(ValidationError):  # a line with children stays top-level
+            update_workstream(self.conn, self.project, parent, {"parent_id": other})
+        with self.assertRaises(ValidationError):
+            update_workstream(self.conn, self.project, other, {"parent_id": other})
+        foreign = create_workstream(self.conn, self.other, {"name": "外部"})
+        with self.assertRaises(ValidationError):
+            create_workstream(self.conn, self.project, {"name": "跨项目", "parent_id": foreign})
+        with self.assertRaises(ValidationError):  # names stay unique across levels
+            create_workstream(self.conn, self.project, {"name": "融资", "parent_id": parent})
+        update_workstream(self.conn, self.project, other, {"parent_id": parent})
+        item = self.overview_item(parent)
+        self.assertEqual((item["children"], self.overview_item(other)["path"]), ([child, other], "东风交付 / 融资"))
+        update_workstream(self.conn, self.project, other, {"parent_id": None})
+        self.assertIsNone(self.overview_item(other)["parent_id"])
+        delete_workstream(self.conn, self.project, parent)
+        self.assertIsNone(self.overview_item(child)["parent_id"])
+
+    def test_parent_health_rolls_up_and_counts_child_activity(self):
+        parent = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": parent})
+        self.age(parent)
+        self.age(child)
+        set_material_links(self.conn, self.project, store_manual_material(self.conn, self.project, {"title": "n", "content": "x"}), child)
+        create_item(self.conn, self.project, child, {"title": "确认排期", "due_date": "2020-01-01"})
+        evaluate_risks(self.conn, self.project)
+        item = self.overview_item(parent)
+        # the child's material keeps the parent from looking stale; the child's overdue item pulls it to at risk
+        self.assertEqual((item["own_health"], item["health"]), ("on track", "at risk"))
+        self.assertEqual(item["child_alerts"], ["子工作线「实车测试」有风险"])
+        refs = {r[0] for r in self.conn.execute("SELECT source_ref FROM risk_warnings WHERE status = 'active' AND rule LIKE 'workstream_%'")}
+        self.assertEqual(refs, {f"workstream:{child}"})  # warnings stay per line
+        detail = workstream_detail(self.conn, self.project, parent, self.tz, self.owner["id"])
+        self.assertEqual([(c["id"], c["health"], c["items_overdue"]) for c in detail["child_items"]], [(child, "at risk", 1)])
+        child_detail = workstream_detail(self.conn, self.project, child, self.tz, self.owner["id"])
+        self.assertEqual(child_detail["parent"], {"id": parent, "name": "东风交付"})
+        update_workstream(self.conn, self.project, parent, {"status": "paused"})
+        self.assertEqual(self.overview_item(parent)["health"], "paused")
+
+    def test_seed_nested_objectives(self):
+        self.conn.execute("UPDATE project_plans SET objectives = ? WHERE project_id = ?", (
+            "1. 东风交付，座舱安全\n   - 实车测试\n   - 风险规则平台\n1.1 智驾安全研究\n2. 浩瀚融资", self.project))
+        created = seed_from_objectives(self.conn, self.project)
+        rows = {w["name"]: w for w in workstream_overview(self.conn, self.project, self.tz)["workstreams"]}
+        self.assertEqual(len(created), 5)
+        parent = rows["东风交付"]["id"]
+        self.assertEqual({n for n, w in rows.items() if w["parent_id"] == parent}, {"实车测试", "风险规则平台", "智驾安全研究"})
+        self.assertIsNone(rows["浩瀚融资"]["parent_id"])
+        self.assertEqual(seed_from_objectives(self.conn, self.project), [])
+
+    def test_agent_prompts_know_the_hierarchy(self):
+        from reports_app.workstream_agent import build_classify_prompt, extract_snapshots
+        from reports_app.workstreams import workstreams_for_prompt
+
+        parent = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": parent})
+        listed = workstreams_for_prompt(self.conn, self.project)
+        self.assertEqual(listed[1], {"id": child, "name": "实车测试", "goal": "", "parent": "东风交付"})
+        self.assertIn("子工作线", build_classify_prompt(listed, []))
+        material = store_manual_material(self.conn, self.project, {"title": "实车周会", "content": "待跟进：确认场地"})
+        set_material_links(self.conn, self.project, material, child)
+        result = extract_snapshots(self.conn, self.project, current_week_key(self.tz), "")
+        self.assertEqual(result["snapshots"], 2)
+        summaries = dict(self.conn.execute("SELECT workstream_id, summary FROM workstream_weekly").fetchall())
+        self.assertIn("实车周会", summaries[parent])  # the parent's snapshot sees its children's material
+        items = self.conn.execute("SELECT workstream_id, title FROM workstream_items").fetchall()
+        self.assertEqual([tuple(r) for r in items], [(child, "确认场地")])  # follow-ups stay on the child
+        context, _hash = assemble_context(self.conn, self.project)
+        self.assertEqual(context["workstreams"][1]["parent"], "东风交付")
+        self.assertEqual(context["new_materials_this_week"][0]["workstream"], "东风交付 / 实车测试")
+
+    # ------------------------------------------------------------ milestones
+
+    def test_workstream_milestones_and_project_plan(self):
+        from reports_app.plans import create_milestone, delete_milestone, load_plan, save_plan_payload, update_milestone
+
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        self.conn.execute("UPDATE project_plans SET milestones_json = ? WHERE project_id = ?", (json.dumps([
+            {"title": "旧里程碑", "target_date": "2020-01-01", "status": "planned"},
+            {"title": "旧关联", "target_date": "2020-01-02", "status": "planned", "workstream_id": str(ws)},
+        ]), self.project))
+        from reports_app.plans import ensure_milestone_ids
+
+        ensure_milestone_ids(self.conn)
+        plan = load_plan(self.conn, self.project)
+        self.assertEqual([(m["id"], m.get("workstream_id")) for m in plan["milestones"]], [(1, None), (2, ws)])
+        evaluate_risks(self.conn, self.project)
+        rules = {r[0]: r[1] for r in self.conn.execute("SELECT rule, details FROM risk_warnings WHERE status = 'active' AND rule IN ('overdue_milestone', 'workstream_overdue')")}
+        # the workstream's milestone is reported once, by its workstream
+        self.assertEqual(rules["overdue_milestone"], "旧里程碑")
+        self.assertIn("旧关联", rules["workstream_overdue"])
+
+        new_id = create_milestone(self.conn, self.project, ws, {"title": "实车测试", "target_date": "2030-01-01"})
+        self.assertEqual(new_id, 3)
+        with self.assertRaises(ValidationError):
+            create_milestone(self.conn, self.project, ws, {"title": "", "target_date": "2030-01-01"})
+        with self.assertRaises(LookupError):  # a project-level milestone is not this workstream's
+            update_milestone(self.conn, self.project, ws, 1, {"status": "complete"})
+        update_milestone(self.conn, self.project, ws, 2, {"status": "complete"})
+        self.assertEqual(self.overview_item(ws)["health"], "on track")
+        # the 项目计划 panel replaces only project-level milestones
+        save_plan_payload(self.conn, self.project, {
+            "objectives": "目标", "deliverables": [{"title": "交付物"}],
+            "project_milestones": [{"id": 1, "title": "旧里程碑", "status": "complete"}, {"title": "项目发布", "target_date": "2030-02-01"}],
+        })
+        plan = load_plan(self.conn, self.project)
+        self.assertEqual(sorted(m["title"] for m in plan["milestones"]), ["实车测试", "旧关联", "旧里程碑", "项目发布"])
+        released = next(m for m in plan["milestones"] if m["title"] == "项目发布")
+        save_plan_payload(self.conn, self.project, {"project_milestones": [{**released, "workstream_id": ws}]})
+        detail = workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])
+        self.assertEqual(sorted(m["title"] for m in detail["milestones"]), ["实车测试", "旧关联", "项目发布"])
+        self.assertEqual([m["title"] for m in load_plan(self.conn, self.project)["milestones"] if not m.get("workstream_id")], [])
+        update_milestone(self.conn, self.project, ws, new_id, {"workstream_id": None})
+        self.assertNotIn(new_id, [m["id"] for m in workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])["milestones"]])
+        delete_milestone(self.conn, self.project, ws, 2)
+        self.assertEqual(sorted(m["id"] for m in load_plan(self.conn, self.project)["milestones"]), [3, 4])
+
     # ------------------------------------------------------------ operations
 
     def test_operations_list_show_and_materials_add(self):
@@ -415,6 +541,16 @@ class WorkstreamTest(unittest.TestCase):
         self.assertIn(f"{current_week_key(self.tz)} [advanced] 完成联调 → 验收", shown["timeline"])
         self.assertEqual(shown["items_text"], "[ ] 确认实车排期 (due 2030-01-05)")
         self.assertEqual(rows[0]["items_open"], 1)
+        child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": ws})
+        from reports_app.plans import create_milestone
+
+        create_milestone(self.conn, self.project, ws, {"title": "验收", "target_date": "2030-02-01"})
+        rows = invoke(ctx, "workstream_list", {"project": "agent guard"})["workstreams"]
+        self.assertEqual([(r["label"], r["parent_id"]) for r in rows], [("东风交付", None), ("└ 实车测试", ws)])
+        shown = invoke(ctx, "workstream_show", {"workstream": "东风交付", "project": "agent guard"})
+        self.assertEqual(shown["children_text"], f"#{child} 实车测试 [active/on track]")
+        self.assertEqual(shown["milestones_text"], "[ ] 验收 (2030-02-01)")
+        self.assertEqual(invoke(ctx, "workstream_show", {"workstream": "实车测试", "project": "agent guard"})["path"], "东风交付 / 实车测试")
         with self.assertRaises(LookupError):
             invoke(ctx, "workstream_show", {"workstream": "不存在", "project": "agent guard"})
 
@@ -482,6 +618,29 @@ class WorkstreamTest(unittest.TestCase):
         status, data = call("writer", "GET", "/api/todos")
         self.assertEqual(data["workstream_options"][0]["project_name"], "agent guard")
         self.assertEqual(call("writer", "DELETE", f"{base}/{ids[3]}")[0], 200)
+
+        # 子工作线 and milestones through the API
+        status, data = call("writer", "POST", base, {"name": "实车测试", "parent_id": ids[0]})
+        child = data["id"]
+        self.assertEqual((status, next(w for w in data["workstreams"] if w["id"] == child)["path"]), (201, "东风交付 / 实车测试"))
+        self.assertEqual(call("writer", "POST", base, {"name": "孙", "parent_id": child})[0], 400)
+        status, data = call("writer", "GET", "/api/todos")
+        option = next(w for w in data["workstream_options"][0]["workstreams"] if w["id"] == child)
+        self.assertEqual((option["path"], option["parent_id"]), ("东风交付 / 实车测试", ids[0]))
+        self.assertEqual(call("reader", "POST", f"{base}/{child}/milestones", {"title": "进场"})[0], 403)
+        status, detail = call("writer", "POST", f"{base}/{child}/milestones", {"title": "进场", "target_date": "2030-01-01"})
+        self.assertEqual((status, [m["title"] for m in detail["milestones"]]), (200, ["进场"]))
+        milestone = detail["milestones"][0]["id"]
+        self.assertEqual(call("writer", "PUT", f"{base}/{ids[1]}/milestones/{milestone}", {"status": "complete"})[0], 404)
+        status, detail = call("writer", "PUT", f"{base}/{child}/milestones/{milestone}", {"status": "complete"})
+        self.assertEqual((status, detail["milestones"][0]["status"]), (200, "complete"))
+        status, parent = call("reader", "GET", f"{base}/{ids[0]}")
+        self.assertEqual([c["name"] for c in parent["child_items"]], ["实车测试"])
+        status, detail = call("writer", "DELETE", f"{base}/{child}/milestones/{milestone}")
+        self.assertEqual((status, detail["milestones"]), (200, []))
+        status, data = call("writer", "PUT", f"/api/projects/{self.project}/plan",
+                            {"objectives": "目标", "project_milestones": [{"title": "发布", "target_date": "2030-03-01"}], "deliverables": []})
+        self.assertEqual((status, [m["title"] for m in data["plan"]["milestones"]]), (200, ["发布"]))
 
 
 if __name__ == "__main__":

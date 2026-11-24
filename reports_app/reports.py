@@ -53,11 +53,13 @@ def assemble_context(conn, project_id, week_key=None):
     # one credential snapshot for commits, extras, and org projects so the
     # three sections never diverge mid-assembly
     auth_info = git_auth_for_user(conn, project["user_id"])
-    workstream_rows = conn.execute(
-        "SELECT id, name, goal, owner_label, status, target_date FROM workstreams WHERE project_id = ? ORDER BY position, id",
-        (project_id,),
-    ).fetchall()
-    workstream_names = {row["id"]: row["name"] for row in workstream_rows}
+    from .plans import load_plan, workstream_milestones
+    from .workstreams import list_workstreams, workstream_paths
+
+    workstream_rows = list_workstreams(conn, project_id)
+    workstream_names = workstream_paths(workstream_rows)
+    parent_names = {row["id"]: row["name"] for row in workstream_rows}
+    plan_milestones = load_plan(conn, project_id)["milestones"]
     primary_links = {
         row["material_id"]: workstream_names.get(row["workstream_id"], "")
         for row in conn.execute(
@@ -99,10 +101,15 @@ def assemble_context(conn, project_id, week_key=None):
         "workstreams": [
             {
                 "name": row["name"],
+                **({"parent": parent_names[row["parent_id"]]} if row["parent_id"] in parent_names else {}),
                 "goal": (row["goal"] or "")[:300],
                 "owner_label": row["owner_label"],
                 "status": row["status"],
                 "target_date": row["target_date"],
+                "milestones": [
+                    {k: m.get(k, "") for k in ("title", "target_date", "status")}
+                    for m in workstream_milestones(plan_milestones, row["id"])
+                ],
                 "open_items": [
                     {"title": item["title"], "due_date": item["due_date"]}
                     for item in conn.execute(
@@ -402,7 +409,8 @@ def build_internal_evidence_prompt(context):
         "If git_extras_this_week contains pull request / merge request, issue, milestone, or repository Projects board entries, use them as secondary evidence for collaboration activity, open blockers, upcoming deadlines, and board statuses; an empty or missing section means the repo owner chose not to fetch it, so never invent entries. "
         "If git_org_projects is present, use its organization board items to describe project-level progress and statuses. "
         "If workstreams is non-empty, the project runs these parallel lines of work: organise this week's progress by active workstream "
-        "(one sub-heading per active workstream, in the given order, inside the progress section of the required structure), "
+        "(one sub-heading per active top-level workstream, in the given order, inside the progress section of the required structure; "
+        "a workstream with a parent is a sub-workstream and goes as a bold lead-in point under its parent's sub-heading), "
         "use each new material's workstream tag to place it, and state 本周无进展 for an active workstream without evidence; "
         "untagged evidence goes under the workstream it clearly belongs to, otherwise under 其他. "
         "For every connected repository, include a short per-repo section. "

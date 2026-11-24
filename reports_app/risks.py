@@ -47,26 +47,27 @@ def evaluate_risks(conn, project_id):
     if not update and materials_changed == 0 and repos_active == 0:
         upsert_warning(conn, project_id, week_key, "missing_update", "medium", "No current-period update or source activity")
 
-    plan = conn.execute("SELECT milestones_json FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
-    if plan:
-        import json
-        from datetime import date
+    from .plans import load_plan
+    from .workstreams import list_workstreams, local_today, workstream_conditions
 
-        today = date.today().isoformat()
-        for item in json.loads(plan["milestones_json"] or "[]"):
-            if item.get("target_date") and item.get("target_date") < today and item.get("status") != "complete":
-                upsert_warning(
-                    conn,
-                    project_id,
-                    week_key,
-                    "overdue_milestone",
-                    "high",
-                    "Milestone is overdue",
-                    item.get("title", ""),
-                    item.get("title", ""),
-                )
-
-    from .workstreams import list_workstreams, workstream_conditions
+    # a milestone of an active workstream is reported by workstream_overdue;
+    # this rule covers project-level milestones and those of inactive lines
+    today = local_today(project["timezone"]).isoformat()
+    active_lines = {row["id"] for row in list_workstreams(conn, project_id) if row["status"] == "active"}
+    for item in load_plan(conn, project_id)["milestones"]:
+        if item.get("workstream_id") in active_lines:
+            continue
+        if item.get("target_date") and item.get("target_date") < today and item.get("status") != "complete":
+            upsert_warning(
+                conn,
+                project_id,
+                week_key,
+                "overdue_milestone",
+                "high",
+                "Milestone is overdue",
+                item.get("title", ""),
+                item.get("title", ""),
+            )
 
     conditions = workstream_conditions(conn, project_id, project["timezone"])
     for row in list_workstreams(conn, project_id):

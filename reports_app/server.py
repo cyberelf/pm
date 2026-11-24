@@ -103,6 +103,7 @@ from .materials import (
     update_material_summary,
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
+from .plans import create_milestone, delete_milestone, load_plan, save_plan, save_plan_payload, update_milestone
 from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report, repo_extras_context
 from .task_queue import enqueue_template_generation, enqueue_workstream_job
 from .risks import evaluate_risks, progress_status
@@ -132,6 +133,7 @@ from .workstreams import (
     create_workstream,
     delete_item,
     delete_workstream,
+    get_workstream,
     material_links_map,
     reorder_workstreams,
     save_manual_snapshot,
@@ -1295,7 +1297,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if len(parts) == 4 and parts[3] == "plan" and method == "PUT":
                     require_role(role, "write")
-                    save_plan(conn, project_id, self.body_json())
+                    save_plan_payload(conn, project_id, self.body_json())
+                    evaluate_risks(conn, project_id)
                     conn.commit()
                     self.json(workspace(conn, project_id, role))
                     return
@@ -1454,6 +1457,23 @@ class Handler(BaseHTTPRequestHandler):
             if tail[1:] == ["snapshots"] and method == "PUT":
                 require_role(role, "write")
                 save_manual_snapshot(conn, project_id, workstream_id, self.body_json())
+                conn.commit()
+                self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
+                return True
+            milestone_route = tail[1:2] == ["milestones"] and (
+                (len(tail) == 2 and method == "POST") or (len(tail) == 3 and tail[2].isdigit() and method in ("PUT", "DELETE"))
+            )
+            if milestone_route:
+                require_role(role, "write")
+                get_workstream(conn, project_id, workstream_id)
+                body = self.body_json()
+                if method == "POST":
+                    create_milestone(conn, project_id, workstream_id, body)
+                elif method == "PUT":
+                    update_milestone(conn, project_id, workstream_id, int(tail[2]), body)
+                else:
+                    delete_milestone(conn, project_id, workstream_id, int(tail[2]))
+                evaluate_risks(conn, project_id)
                 conn.commit()
                 self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
                 return True
@@ -1685,16 +1705,8 @@ def source_diagnostics(conn, project_id, week_key):
 
 
 def plan_dict(conn, project_id):
-    row = conn.execute("SELECT * FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
-    if not row:
-        return {"objectives": "", "milestones": [], "deliverables": [], "version": 1}
-    return {
-        "objectives": row["objectives"],
-        "milestones": json.loads(row["milestones_json"] or "[]"),
-        "deliverables": json.loads(row["deliverables_json"] or "[]"),
-        "version": row["version"],
-        "updated_at": row["updated_at"],
-    }
+    plan = load_plan(conn, project_id)
+    return {**plan, "version": plan["version"] or 1}
 
 
 def material_rows(conn, project_id, timezone):
@@ -2006,29 +2018,6 @@ def repo_activity_detail(conn, project_id, repo_id, auth_info=None):
     else:
         payload["org_projects"] = []
     return payload
-
-
-def save_plan(conn, project_id, payload):
-    now = iso_now()
-    current = conn.execute("SELECT version FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
-    version = (current["version"] if current else 0) + 1
-    milestones = payload.get("milestones") or []
-    deliverables = payload.get("deliverables") or []
-    snapshot = {"objectives": payload.get("objectives") or "", "milestones": milestones, "deliverables": deliverables}
-    conn.execute(
-        """
-        INSERT INTO project_plans (project_id, objectives, milestones_json, deliverables_json, version, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project_id) DO UPDATE SET objectives = excluded.objectives,
-            milestones_json = excluded.milestones_json, deliverables_json = excluded.deliverables_json,
-            version = excluded.version, updated_at = excluded.updated_at
-        """,
-        (project_id, snapshot["objectives"], json.dumps(milestones), json.dumps(deliverables), version, now),
-    )
-    conn.execute(
-        "INSERT INTO plan_versions (project_id, version, snapshot_json, created_at) VALUES (?, ?, ?, ?)",
-        (project_id, version, json.dumps(snapshot), now),
-    )
 
 
 def save_weekly_update(conn, project_id, payload):

@@ -292,12 +292,14 @@ CREATE TABLE IF NOT EXISTS assistant_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(project_id, user_id, week_key, id);
 
--- 工作线 (workstreams.py): one flat level of long-running lines inside a
--- project. Materials and the owner's TODOs link to them (one primary plus
--- related); weekly snapshots keep the per-line view across weeks.
+-- 工作线 (workstreams.py): long-running lines inside a project, at most two
+-- levels (a top-level line and its 子工作线 via parent_id). Materials and the
+-- owner's TODOs link to them (one primary plus related); weekly snapshots
+-- keep the per-line view across weeks.
 CREATE TABLE IF NOT EXISTS workstreams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     goal TEXT NOT NULL DEFAULT '',
     owner_label TEXT NOT NULL DEFAULT '',
@@ -432,6 +434,12 @@ def migrate_schema(conn):
     job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(generation_jobs)")}
     if "queued_at" not in job_columns:
         conn.execute("ALTER TABLE generation_jobs ADD COLUMN queued_at TEXT")
+    workstream_columns = {row["name"] for row in conn.execute("PRAGMA table_info(workstreams)")}
+    if "parent_id" not in workstream_columns:
+        conn.execute("ALTER TABLE workstreams ADD COLUMN parent_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL")
+    from .plans import ensure_milestone_ids
+
+    ensure_milestone_ids(conn)
     report_columns = {row["name"] for row in conn.execute("PRAGMA table_info(weekly_reports)")}
     if "supplement_json" not in report_columns:
         conn.execute("ALTER TABLE weekly_reports ADD COLUMN supplement_json TEXT NOT NULL DEFAULT ''")

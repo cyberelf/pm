@@ -1,4 +1,10 @@
-"""工作线: one flat level of long-running lines of work inside a project.
+"""工作线: long-running lines of work inside a project.
+
+A project has top-level workstreams and, one level down, 子工作线 (sub-
+workstreams, `parent_id`); deeper nesting is rejected. Names stay unique per
+project so a name always identifies one line. A parent's health rolls up
+from its active children, and its activity counts theirs, so classifying
+material to the most specific line never makes the parent look stale.
 
 Workstreams follow the project's roles. Materials link to workstreams of
 their own project, an account's TODOs link to workstreams of projects it can
@@ -79,10 +85,58 @@ def _target_date(value):
     return value
 
 
+def tree_order(rows):
+    """Top-level workstreams by position, each followed by its children."""
+    ids = {row["id"] for row in rows}
+    children = {}
+    for row in rows:
+        if row["parent_id"] in ids:
+            children.setdefault(row["parent_id"], []).append(row)
+    ordered = []
+    for row in rows:
+        if row["parent_id"] not in ids:
+            ordered.append(row)
+            ordered += children.get(row["id"], [])
+    return ordered
+
+
 def list_workstreams(conn, project_id):
-    return conn.execute(
+    """Workstreams in display order (tree order)."""
+    return tree_order(conn.execute(
         "SELECT * FROM workstreams WHERE project_id = ? ORDER BY position, id", (project_id,)
-    ).fetchall()
+    ).fetchall())
+
+
+def workstream_paths(rows):
+    """{id: "父 / 子"} display paths."""
+    names = {row["id"]: row["name"] for row in rows}
+    return {
+        row["id"]: f"{names[row['parent_id']]} / {row['name']}" if row["parent_id"] in names else row["name"]
+        for row in rows
+    }
+
+
+def _parent_id(conn, project_id, value, workstream_id=None):
+    """Validate a parent: same project, itself top-level, not the line
+    itself, and the line must not have children of its own."""
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        parent_id = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("invalid parent workstream id") from exc
+    if parent_id == workstream_id:
+        raise ValidationError("a workstream cannot be its own parent")
+    parent = conn.execute(
+        "SELECT parent_id FROM workstreams WHERE id = ? AND project_id = ?", (parent_id, project_id)
+    ).fetchone()
+    if not parent:
+        raise ValidationError("parent workstream does not belong to this project")
+    if parent["parent_id"]:
+        raise ValidationError("子工作线下不能再建子工作线（最多两级）")
+    if workstream_id and conn.execute("SELECT 1 FROM workstreams WHERE parent_id = ?", (workstream_id,)).fetchone():
+        raise ValidationError("这条工作线有子工作线，不能再挂到其他工作线下")
+    return parent_id
 
 
 def get_workstream(conn, project_id, workstream_id):
@@ -126,11 +180,12 @@ def create_workstream(conn, project_id, payload):
     ).fetchone()[0]
     cur = conn.execute(
         """
-        INSERT INTO workstreams (project_id, name, goal, owner_label, status, target_date, position, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO workstreams (project_id, parent_id, name, goal, owner_label, status, target_date, position, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
+            _parent_id(conn, project_id, payload.get("parent_id")),
             name,
             _text(payload.get("goal"), 2000),
             _text(payload.get("owner_label"), 60),
@@ -156,17 +211,26 @@ def update_workstream(conn, project_id, workstream_id, payload):
         _text(payload.get("owner_label", row["owner_label"]), 60),
         _status(payload.get("status", row["status"])),
         _target_date(payload.get("target_date", row["target_date"])),
+        _parent_id(conn, project_id, payload["parent_id"], workstream_id) if "parent_id" in payload else row["parent_id"],
     )
-    if values == (row["name"], row["goal"], row["owner_label"], row["status"], row["target_date"]):
+    if values == (row["name"], row["goal"], row["owner_label"], row["status"], row["target_date"], row["parent_id"]):
         return
     conn.execute(
-        "UPDATE workstreams SET name = ?, goal = ?, owner_label = ?, status = ?, target_date = ?, updated_at = ? WHERE id = ?",
+        "UPDATE workstreams SET name = ?, goal = ?, owner_label = ?, status = ?, target_date = ?, parent_id = ?, updated_at = ? WHERE id = ?",
         (*values, iso_now(), workstream_id),
     )
+    if values[5] != row["parent_id"]:
+        # a line that changes level goes last among its new siblings
+        conn.execute(
+            "UPDATE workstreams SET position = (SELECT COALESCE(MAX(position), -1) + 1 FROM workstreams WHERE project_id = ?) WHERE id = ?",
+            (project_id, workstream_id),
+        )
 
 
 def delete_workstream(conn, project_id, workstream_id):
+    """Children become top-level lines; nothing of theirs is removed."""
     get_workstream(conn, project_id, workstream_id)
+    conn.execute("UPDATE workstreams SET parent_id = NULL WHERE parent_id = ?", (workstream_id,))
     conn.execute("DELETE FROM workstreams WHERE id = ?", (workstream_id,))
     # milestones keep their place in the plan but lose the dangling link
     plan = conn.execute("SELECT milestones_json FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
@@ -198,12 +262,14 @@ def reorder_workstreams(conn, project_id, ids):
         conn.execute("UPDATE workstreams SET position = ? WHERE id = ?", (index, workstream_id))
 
 
-_LIST_MARKER = re.compile(r"^\s*(?:\d+[.、)）]|[（(]\d+[)）]|[-*•·])\s*")
+_LIST_MARKER = re.compile(r"^[ \t\u3000]*(?:\d+\.\d+[.、)）]?|\d+[.、)）]|[（(]\d+[)）]|[-*•·])\s*")
+_SUB_MARKER = re.compile(r"^(?:[ \t\u3000]+|\d+\.\d+)")
 
 
 def parse_objective_lines(text):
-    """(name, goal) per numbered or bulleted objective line; the name is the
-    first clause, the goal the whole line."""
+    """(name, goal, is_sub) per numbered or bulleted objective line; the name
+    is the first clause, the goal the whole line. An indented line or a
+    `1.1`-style number under a top-level line marks a 子工作线."""
     result = []
     for line in (text or "").splitlines():
         if not _LIST_MARKER.match(line):
@@ -212,7 +278,8 @@ def parse_objective_lines(text):
         if not goal:
             continue
         name = re.split(r"[，,：:；;。]", goal, maxsplit=1)[0].strip()[:SEED_NAME_LIMIT] or goal[:SEED_NAME_LIMIT]
-        result.append((name, goal))
+        is_sub = bool(result) and bool(_SUB_MARKER.match(line))
+        result.append((name, goal, is_sub))
     return result
 
 
@@ -221,13 +288,24 @@ def seed_from_objectives(conn, project_id):
     lines = parse_objective_lines(plan["objectives"] if plan else "")
     if not lines:
         raise ValidationError("项目目标里没有编号或列表行，无法生成工作线")
-    existing = {row["name"] for row in list_workstreams(conn, project_id)}
-    created = []
-    for name, goal in lines:
-        if name in existing:
+    rows = list_workstreams(conn, project_id)
+    existing = {row["name"]: row for row in rows}
+    created, parent = [], None
+    for name, goal, is_sub in lines:
+        row = existing.get(name)
+        if not is_sub:
+            parent = row["id"] if row and not row["parent_id"] else None
+            if row:
+                continue
+        elif row:
             continue
-        existing.add(name)
-        created.append(create_workstream(conn, project_id, {"name": name, "goal": goal}))
+        workstream_id = create_workstream(conn, project_id, {
+            "name": name, "goal": goal, "parent_id": parent if is_sub else None,
+        })
+        existing[name] = {"id": workstream_id, "parent_id": parent if is_sub else None}
+        if not is_sub:
+            parent = workstream_id
+        created.append(workstream_id)
     return created
 
 
@@ -356,11 +434,13 @@ def todo_links_map(conn, user_id):
     result = {}
     for row in conn.execute(
         """
-        SELECT tw.todo_id, tw.workstream_id, tw.is_primary, w.name, w.project_id, p.name AS project_name
+        SELECT tw.todo_id, tw.workstream_id, tw.is_primary, w.name, w.project_id, p.name AS project_name,
+               pw.name AS parent_name
         FROM todo_workstreams tw
         JOIN todos t ON t.id = tw.todo_id
         JOIN workstreams w ON w.id = tw.workstream_id
         JOIN projects p ON p.id = w.project_id
+        LEFT JOIN workstreams pw ON pw.id = w.parent_id
         WHERE t.user_id = ?
         ORDER BY tw.is_primary DESC, tw.workstream_id
         """,
@@ -368,7 +448,11 @@ def todo_links_map(conn, user_id):
     ):
         if project_role(conn, row["project_id"], user_id) is None:
             continue
-        item = {"id": row["workstream_id"], "name": row["name"], "project_id": row["project_id"], "project_name": row["project_name"]}
+        item = {
+            "id": row["workstream_id"], "name": row["name"], "project_id": row["project_id"],
+            "project_name": row["project_name"],
+            "path": f"{row['parent_name']} / {row['name']}" if row["parent_name"] else row["name"],
+        }
         entry = result.setdefault(row["todo_id"], {"primary": None, "related": []})
         if row["is_primary"]:
             entry["primary"] = item
@@ -389,9 +473,11 @@ def todo_workstream_options(conn, user_id):
         role = project_role(conn, project["id"], user_id)
         if role not in ("owner", "manage", "write"):
             continue
+        rows = list_workstreams(conn, project["id"])
+        paths = workstream_paths(rows)
         items = [
-            {"id": row["id"], "name": row["name"], "status": row["status"]}
-            for row in list_workstreams(conn, project["id"])
+            {"id": row["id"], "name": row["name"], "path": paths[row["id"]], "parent_id": row["parent_id"], "status": row["status"]}
+            for row in rows
             if row["status"] != "done"
         ]
         if items:
@@ -626,9 +712,17 @@ def _item_counts(conn, project_id, today):
 
 
 def _plan_milestones(conn, project_id):
-    plan = conn.execute("SELECT milestones_json FROM project_plans WHERE project_id = ?", (project_id,)).fetchone()
-    items = json.loads(plan["milestones_json"] or "[]") if plan else []
-    return [item for item in items if isinstance(item, dict)]
+    from .plans import load_plan
+
+    return load_plan(conn, project_id)["milestones"]
+
+
+def _children(rows):
+    result = {}
+    for row in rows:
+        if row["parent_id"]:
+            result.setdefault(row["parent_id"], []).append(row["id"])
+    return result
 
 
 def workstream_conditions(conn, project_id, tz_name):
@@ -650,8 +744,10 @@ def workstream_conditions(conn, project_id, tz_name):
         if created and week_key_for(created, tz_name) in window:
             recent[row["workstream_id"]] = recent.get(row["workstream_id"], 0) + 1
     items = _item_counts(conn, project_id, today)
+    rows = list_workstreams(conn, project_id)
+    children = _children(rows)
     result = {}
-    for row in list_workstreams(conn, project_id):
+    for row in rows:
         overdue, stale = [], False
         counts = items.get(row["id"], {"open": 0, "done": 0, "overdue": 0, "next_due": ""})
         if row["status"] == "active":
@@ -666,7 +762,8 @@ def workstream_conditions(conn, project_id, tz_name):
                     overdue.append(f"里程碑「{item.get('title', '')}」逾期（{item['target_date']}）")
             created = parse_iso(row["created_at"])
             older = bool(created and week_key_for(created, tz_name) < previous)
-            stale = older and not recent.get(row["id"])
+            activity = recent.get(row["id"], 0) + sum(recent.get(child, 0) for child in children.get(row["id"], []))
+            stale = older and not activity
         result[row["id"]] = {
             "overdue": overdue,
             "stale": stale,
@@ -689,13 +786,36 @@ def health_of(row, condition):
     return "on track"
 
 
+HEALTH_RANK = {"on track": 0, "at risk": 1, "blocked": 2}
+
+
+def roll_up(items):
+    """An active parent takes the worst health of itself and its active
+    children; `child_alerts` names the children that pulled it down."""
+    by_id = {item["id"]: item for item in items}
+    for item in items:
+        kids = [by_id[i] for i in item["children"] if i in by_id]
+        item["child_alerts"] = []
+        if item["status"] != "active":
+            continue
+        for kid in kids:
+            if kid["status"] == "active" and HEALTH_RANK.get(kid["health"], 0) > 0:
+                item["child_alerts"].append(f"子工作线「{kid['name']}」{'受阻' if kid['health'] == 'blocked' else '有风险'}")
+                if HEALTH_RANK[kid["health"]] > HEALTH_RANK.get(item["health"], 0):
+                    item["health"] = kid["health"]
+    return items
+
+
 # ---------------------------------------------------------------- payloads
 
 
-def _item(row, condition):
+def _item(row, condition, paths=None, children=None):
     return {
         "id": row["id"],
         "name": row["name"],
+        "parent_id": row["parent_id"],
+        "path": (paths or {}).get(row["id"], row["name"]),
+        "children": (children or {}).get(row["id"], []),
         "goal": row["goal"],
         "owner_label": row["owner_label"],
         "status": row["status"],
@@ -704,6 +824,7 @@ def _item(row, condition):
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "health": health_of(row, condition),
+        "own_health": health_of(row, condition),
         "overdue_reasons": condition["overdue"],
         "recent_materials": condition["recent_materials"],
         "items_open": condition["items"]["open"],
@@ -748,9 +869,10 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
             if row["created_at"] > last_at.get(row["workstream_id"], ""):
                 last_at[row["workstream_id"]] = row["created_at"]
     milestones = _plan_milestones(conn, project_id)
+    paths, children = workstream_paths(rows), _children(rows)
     items = []
     for row in rows:
-        item = _item(row, conditions[row["id"]])
+        item = _item(row, conditions[row["id"]], paths, children)
         item["material_total"] = totals.get(row["id"], 0)
         item["last_material_at"] = last_at.get(row["id"], "")
         item["milestones"] = [m for m in milestones if str(m.get("workstream_id") or "") == str(row["id"])]
@@ -763,6 +885,7 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
             for week in week_keys
         ]
         items.append(item)
+    roll_up(items)
     unassigned = conn.execute(
         """
         SELECT COUNT(*) FROM materials m WHERE m.project_id = ?
@@ -812,7 +935,17 @@ def timeline_weeks(week_keys, items, today):
 
 def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, material_limit=200):
     row = get_workstream(conn, project_id, workstream_id)
-    item = _item(row, workstream_conditions(conn, project_id, tz_name)[row["id"]])
+    rows = list_workstreams(conn, project_id)
+    conditions = workstream_conditions(conn, project_id, tz_name)
+    paths, children = workstream_paths(rows), _children(rows)
+    family = [r for r in rows if r["id"] == row["id"] or r["parent_id"] == row["id"]]
+    members = roll_up([_item(r, conditions[r["id"]], paths, children) for r in family])
+    item = next(m for m in members if m["id"] == row["id"])
+    item["child_items"] = [
+        {k: m[k] for k in ("id", "name", "status", "health", "owner_label", "target_date", "items_open", "items_overdue")}
+        for m in members if m["id"] != row["id"]
+    ]
+    item["parent"] = {"id": row["parent_id"], "name": paths[row["parent_id"]]} if row["parent_id"] in paths else None
     item["milestones"] = [m for m in _plan_milestones(conn, project_id) if str(m.get("workstream_id") or "") == str(row["id"])]
     item["snapshots"] = [
         dict(r)
@@ -850,8 +983,15 @@ def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, materia
 
 
 def workstreams_for_prompt(conn, project_id, include_inactive=False):
-    return [
-        {"id": row["id"], "name": row["name"], "goal": row["goal"][:300]}
-        for row in list_workstreams(conn, project_id)
-        if include_inactive or row["status"] == "active"
-    ]
+    """Active lines for agent prompts; a 子工作线 names its parent."""
+    rows = list_workstreams(conn, project_id)
+    names = {row["id"]: row["name"] for row in rows}
+    result = []
+    for row in rows:
+        if not (include_inactive or row["status"] == "active"):
+            continue
+        entry = {"id": row["id"], "name": row["name"], "goal": row["goal"][:300]}
+        if row["parent_id"] in names:
+            entry["parent"] = names[row["parent_id"]]
+        result.append(entry)
+    return result

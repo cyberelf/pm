@@ -33,6 +33,7 @@ from .workstreams import (
 )
 
 CLASSIFY_BATCH = 40
+PARENT_MATERIALS = 25
 REPORT_EXCERPT_CHARS = 12000
 
 
@@ -73,6 +74,7 @@ def fake_classify(text, workstreams):
 def build_classify_prompt(workstreams, items):
     return (
         "把每份项目资料归到最相关的一条工作线。只依据文件名和摘要判断；"
+        "带 parent 的是该父工作线下的子工作线：资料明确属于某条子工作线时归到子工作线，只与整条线总体相关时归到父工作线；"
         "无法判断或与所有工作线都无关时 workstream_id 填 null，不要勉强归类。"
         "只输出 JSON 数组，每项严格使用 {\"id\": 资料ID, \"workstream_id\": 工作线ID或null}，不要 Markdown。\n\n"
         f"工作线：\n{json.dumps(workstreams, ensure_ascii=False, indent=2)}\n\n"
@@ -143,6 +145,8 @@ def build_snapshot_prompt(week_key, workstreams, report_md, with_items=False):
         "只依据给出的证据，不要编造。status 取值：advanced（本周有实质进展）、steady（无明显进展或没有证据）、"
         "blocked（明确受阻或等待外部）。summary 用一句话写本周进展，不超过60个汉字；没有证据时写“本周无进展”。"
         "next_step 写证据中提到的下一步，不超过60个汉字，没有则留空。不要写风险预测。"
+        "带 parent 的是子工作线，只写它自己的进展；父工作线的资料里含其子工作线的资料（带 sub_workstream 字段），"
+        "父工作线的快照概括整条线，待跟踪项只写属于父工作线本身的事项。"
         f"{items_rule}"
         f"只输出 JSON 数组，每项严格使用 {shape}，不要 Markdown。\n\n"
         f"工作线及本周关联资料：\n{json.dumps(workstreams, ensure_ascii=False, indent=2)}\n\n"
@@ -155,7 +159,7 @@ FAKE_DONE = "已完成："
 
 
 def _fake_snapshot(item):
-    texts = [m["summary"] or "" for m in item["materials"]]
+    texts = [m["summary"] or "" for m in item["materials"] if not m.get("sub_workstream")]
     new_items = [re.split(r"[。\n]", t.split(FAKE_FOLLOW_UP, 1)[1])[0].strip() for t in texts if FAKE_FOLLOW_UP in t]
     done = [
         open_item["id"]
@@ -195,14 +199,27 @@ def extract_snapshots(conn, project_id, week_key, report_md, source="generated",
             return result
     with_items = week_key == current_week_key(project["timezone"])
     materials = week_materials_by_workstream(conn, project_id, project["timezone"], week_key)
+    every = list_workstreams(conn, project_id)
+    names = {r["id"]: r["name"] for r in every}
     evidence = []
     for r in rows:
+        own = [{"filename": m["filename"], "summary": m["summary"]} for m in materials.get(r["id"], [])]
+        seen = {m["id"] for m in materials.get(r["id"], [])}
+        for child in every:
+            if child["parent_id"] != r["id"]:
+                continue
+            for m in materials.get(child["id"], []):
+                if m["id"] not in seen and len(own) < PARENT_MATERIALS:
+                    seen.add(m["id"])
+                    own.append({"filename": m["filename"], "summary": m["summary"], "sub_workstream": child["name"]})
         entry = {
             "id": r["id"],
             "name": r["name"],
             "goal": (r["goal"] or "")[:300],
-            "materials": [{"filename": m["filename"], "summary": m["summary"]} for m in materials.get(r["id"], [])],
+            "materials": own,
         }
+        if r["parent_id"] in names:
+            entry["parent"] = names[r["parent_id"]]
         if with_items:
             entry["open_items"] = open_items_for_prompt(conn, r["id"])
         evidence.append(entry)
