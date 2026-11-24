@@ -1456,8 +1456,9 @@ body.logged-out .assistant-panel { display: none; }
 span.ws-tag { cursor: default; }
 .ws-tag.is-empty, .todo-ws-tag.is-empty { border-style: dashed; border-color: var(--hairline); background: transparent; color: var(--muted); }
 .todo-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.workstream-filter { margin-bottom: -8px; overflow-x: auto; }
-.workstream-filter button { flex: 0 0 auto; }
+.source-toolbar { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.workstream-filter { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.workstream-filter select { width: auto; min-width: 160px; max-width: 280px; min-height: 36px; padding: 6px 32px 6px 12px; }
 .workstream-related { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; margin: 0; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 10px 12px; }
 .workstream-related legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
 .workstream-related .checkbox-row { display: flex; align-items: center; gap: 8px; justify-content: flex-start; color: var(--ink); font-size: 13px; font-weight: 400; text-align: left; cursor: pointer; }

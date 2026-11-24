@@ -3017,16 +3017,15 @@ function renderWorkstreamFilter(ws) {
   if (!items.length) return "";
   const active = sourceFilterActive();
   const unassigned = ws.materials.filter((m) => !(m.workstreams || {}).primary).length;
-  const button = (value, label) => {
-    const key = typeof value === "number" ? value : `'${value}'`;
-    return `<button type="button" class="${active === value ? "active" : ""}" onclick="setSourceWorkstreamFilter(${key})">${label}</button>`;
-  };
+  const option = (value, label) => `<option value="${value}" ${active === value ? "selected" : ""}>${label}</option>`;
   return `
-    <div class="source-tabs workstream-filter" role="toolbar" aria-label="按工作线筛选">
-      ${button("all", "全部工作线")}
-      ${button("none", `未归类 ${unassigned}`)}
-      ${items.filter((item) => item.status !== "done" || active === item.id).map((item) => button(item.id, `${item.parent_id ? "└ " : ""}${escapeHtml(item.name)}`)).join("")}
-    </div>`;
+    <label class="workstream-filter"><span>工作线</span>
+      <select aria-label="按工作线筛选" onchange="setSourceWorkstreamFilter(this.value === 'all' || this.value === 'none' ? this.value : Number(this.value))">
+        ${option("all", "全部工作线")}
+        ${option("none", `未归类 (${unassigned})`)}
+        ${items.filter((item) => item.status !== "done" || active === item.id).map((item) => option(item.id, `${item.parent_id ? "　└ " : ""}${escapeHtml(item.name)}`)).join("")}
+      </select>
+    </label>`;
 }
 
 function materialWorkstreamTag(m, writable) {
@@ -3797,10 +3796,12 @@ function renderSources(ws) {
   const visible = ws.materials.filter((m) => materialMatchesWorkstream(m, wsFilter));
   const filterHint = typeof wsFilter === "number" ? `<p class="share-readonly-hint">当前筛选「${escapeHtml(workstreamById(wsFilter).name)}」：新增资料会归到这条工作线。</p>` : "";
   $("tab-sources").innerHTML = `
-    ${renderWorkstreamFilter(ws)}
-    <div class="source-tabs" role="tablist" aria-label="资料类型">
-      <button type="button" data-source-tab="manual" role="tab" onclick="switchSourceTab('manual')">手工资料</button>
-      <button type="button" data-source-tab="files" role="tab" onclick="switchSourceTab('files')">文件资料</button>
+    <div class="source-toolbar">
+      <div class="source-tabs" role="tablist" aria-label="资料类型">
+        <button type="button" data-source-tab="manual" role="tab" onclick="switchSourceTab('manual')">手工资料</button>
+        <button type="button" data-source-tab="files" role="tab" onclick="switchSourceTab('files')">文件资料</button>
+      </div>
+      ${renderWorkstreamFilter(ws)}
     </div>
     <section id="source-files" class="source-view" role="tabpanel">
       <div class="panel source-panel">
