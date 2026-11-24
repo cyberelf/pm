@@ -1556,6 +1556,15 @@ span.ws-tag { cursor: default; }
 .ws-item.is-editing .ws-milestone-form { grid-template-columns: 110px 150px 110px minmax(0, 1fr); }
 .ws-item.is-editing .ws-milestone-form > .row { grid-column: 1 / -1; }
 .ws-risks tr.is-resolved td { color: var(--muted); }
+.ws-git-list li { align-items: baseline; }
+.ws-git-item .status { flex: 0 0 auto; }
+.ws-git-item a { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws-git-title { min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.ws-git-unassigned { margin-top: 12px; }
+.ws-git-unassigned summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.ws-git-unassigned ul { margin-top: 8px; }
+.repo-workstream { display: grid; gap: 4px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.repo-workstream select { min-height: 30px; font-size: 13px; }
 @media (hover: none) {
   .ws-item-actions { visibility: visible; }
 }

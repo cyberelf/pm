@@ -1710,6 +1710,33 @@ globalThis.fetch = async (path, options) => {
     throw new Error(`unexpected milestone toggle ${done.path} ${done.options.body}`);
   }
 
+  // PR / issue activity: detail list, unassigned list, single-workstream assignment
+  state.workstreamDetail.git_items = [
+    { id: 41, repo: "CogDefend/cogdefend", kind: "pr", number: 12, title: "规则引擎重构", state: "merged", url: "https://x/12", author: "dev", week_key: "2026-W48", workstream_id: 11, link_source: "repo" },
+  ];
+  renderWorkstreamDetail();
+  const gitDetail = document.getElementById("workstream-detail").innerHTML;
+  for (const needle of ["PR / Issue <small>1</small>", "已合并", "cogdefend#12", "仓库默认", "openWorkstreamAssign('git', 41)"]) {
+    if (!gitDetail.includes(needle)) throw new Error(`git detail missing ${needle}`);
+  }
+  state.workspace.workstreams.unassigned_git = [
+    { id: 42, repo: "CogDefend/cloud", kind: "issue", number: 7, title: "升级依赖", state: "open", url: "https://x/7", author: "", week_key: "2026-W48", workstream_id: null, link_source: "" },
+  ];
+  state.workspace.workstreams.workstreams[0].cells[1].git = 3;
+  state.workstreamView = "matrix";
+  renderWorkstreams(state.workspace);
+  const board = document.getElementById("ws-board").innerHTML;
+  for (const needle of ["本周未归类 PR/Issue 1", "升级依赖", "归到工作线", "3 条 PR/Issue"]) {
+    if (!board.includes(needle)) throw new Error(`board missing ${needle}`);
+  }
+  state.workstreamView = "progress";
+  openWorkstreamAssign("git", 42);
+  document.getElementById("workstream-assign-primary").value = "13";
+  await submitWorkstreamAssign({ preventDefault() {} });
+  const link = fetchCalls.find((c) => c.path.endsWith("/workstreams/git/42/link"));
+  if (!link || link.options.method !== "PUT" || JSON.parse(link.options.body).workstream_id !== 13) throw new Error("git assignment call missing");
+  if (!renderRepoWorkstream({ id: 3, workstream_id: 11 }).includes('value="11" selected')) throw new Error("repo default workstream not preselected");
+
   // risks moved into the tab; a workstream warning links to its line
   state.workspace.progress_status = "at risk";
   state.workspace.risks = [{ rule: "workstream_item_overdue", severity: "medium", title: "工作线「东风交付」有 1 条待跟踪项逾期", details: "", status: "active", source_ref: "workstream:11" }];

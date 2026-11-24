@@ -2112,9 +2112,10 @@ function renderWorkstreamProgress(data, items) {
         return `<span class="ws-seg ${future ? "is-future" : "is-empty"}"></span>`;
       }
       const snap = cell.snapshot;
-      const status = snap ? snap.status : cell.materials ? "pending" : "empty";
-      const label = snap ? (WS_SNAPSHOT_LABELS[snap.status] || snap.status) : cell.materials ? "有资料、尚无快照" : "无记录";
-      const title = `${week.week_key} · ${label}${snap ? `：${snap.summary}` : ""}${cell.materials ? `\n${cell.materials} 份关联资料` : ""}`;
+      const active = cell.materials || cell.git;
+      const status = snap ? snap.status : active ? "pending" : "empty";
+      const label = snap ? (WS_SNAPSHOT_LABELS[snap.status] || snap.status) : active ? "有资料、尚无快照" : "无记录";
+      const title = `${week.week_key} · ${label}${snap ? `：${snap.summary}` : ""}${cell.materials ? `\n${cell.materials} 份关联资料` : ""}${cell.git ? `\n${cell.git} 条 PR/Issue` : ""}`;
       return `<span class="ws-seg is-${status}${week.week_key === data.current_week ? " is-current" : ""}" title="${escapeAttr(title)}"></span>`;
     }).join("");
     const markers = [];
@@ -2213,8 +2214,9 @@ function wsCell(cell, currentWeek) {
     const title = `${cell.week_key} · ${label}：${snap.summary}${snap.next_step ? `\n下一步：${snap.next_step}` : ""}`;
     return `<td class="ws-cell is-${escapeAttr(snap.status)}${current}" ${weekAttr} title="${escapeAttr(title)}"><span class="ws-cell-line"><span class="status-dot ${wsSnapshotTone(snap.status)}" aria-label="${escapeAttr(label)}"></span><span class="ws-cell-text">${escapeHtml(snap.summary)}</span></span></td>`;
   }
-  if (cell.materials) {
-    return `<td class="ws-cell is-pending${current}" ${weekAttr} title="${escapeAttr(`${cell.week_key} · ${cell.materials} 份关联资料，尚无快照`)}"><span class="ws-cell-text">${cell.materials} 份资料</span></td>`;
+  if (cell.materials || cell.git) {
+    const parts = [cell.materials ? `${cell.materials} 份资料` : "", cell.git ? `${cell.git} 条 PR/Issue` : ""].filter(Boolean).join(" · ");
+    return `<td class="ws-cell is-pending${current}" ${weekAttr} title="${escapeAttr(`${cell.week_key} · ${parts}，尚无快照`)}"><span class="ws-cell-text">${parts}</span></td>`;
   }
   return `<td class="ws-cell is-empty${current}" ${weekAttr}><span aria-label="无记录">—</span></td>`;
 }
@@ -2251,7 +2253,7 @@ function renderWorkstreams(ws) {
     <div class="row workstream-toolbar">
       <button class="primary" type="button" onclick="openWorkstreamDialog()">＋ 新建工作线</button>
       <button type="button" onclick="seedWorkstreams()" title="把下方项目目标里的编号行各生成一条工作线，缩进行或 1.1 编号生成子工作线">从目标生成</button>
-      <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="${data.organized_at ? "AI 归类本周未归类资料，更新本周快照和待跟踪项；过去的周已锁定" : "首次整理：AI 归类全部未归类资料、用历史周报补齐近 8 周快照，并整理本周"}">${organizing ? "整理中…" : "AI 整理"}</button>
+      <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="${data.organized_at ? "同步本周 PR/Issue，AI 归类本周未归类资料和 PR/Issue，更新本周快照和待跟踪项；过去的周已锁定" : "首次整理：同步本周 PR/Issue，AI 归类全部未归类资料、用历史周报补齐近 8 周快照，并整理本周"}">${organizing ? "整理中…" : "AI 整理"}</button>
       ${note}
     </div>` : "";
   if (!items.length) {
@@ -2307,6 +2309,7 @@ function renderWorkstreams(ws) {
         <button type="button" onclick="showWorkstreamMaterials('none')">未归类资料 ${data.unassigned_materials}</button>
         ${legend}
       </div>
+      ${renderUnassignedGit(data, writable)}
     </div>`;
   ensureTableScrollContainers();
   renderWorkstreamDetail();
@@ -2441,6 +2444,7 @@ function renderWorkstreamDetail() {
         <section>
           ${renderWorkstreamChildren(d, writable)}
           ${renderWorkstreamMilestones(d, writable)}
+          ${renderWorkstreamGit(d, writable)}
           <h3>关联资料 <small>${(d.materials || []).length}</small></h3>
           ${materials ? `<ul class="workstream-list">${materials}</ul>` : `<p class="workstream-empty">暂无关联资料。</p>`}
           <h3>我的 TODO</h3>
@@ -2449,6 +2453,41 @@ function renderWorkstreamDetail() {
       </div>
     </div>`;
   ensureTableScrollContainers();
+}
+
+const GIT_STATE_LABELS = { merged: "已合并", open: "进行中", closed: "已关闭", draft: "草稿" };
+const GIT_LINK_LABELS = { repo: "仓库默认", auto: "AI 归类", manual: "" };
+
+function gitItemLine(g, writable, extra = "") {
+  const tone = g.state === "merged" ? "success" : g.state === "closed" ? "" : g.state === "draft" ? "" : "running";
+  const ref = `${g.repo.split("/").pop()}#${g.number}`;
+  const meta = [g.kind === "pr" ? "PR" : "Issue", g.author, wsShortWeek(g.week_key), GIT_LINK_LABELS[g.link_source] || ""].filter(Boolean).map(escapeHtml).join(" · ");
+  return `
+    <li class="ws-git-item">
+      <span class="status ${tone}">${escapeHtml(GIT_STATE_LABELS[g.state] || g.state || "—")}</span>
+      <a href="${escapeAttr(g.url)}" target="_blank" rel="noopener" title="${escapeAttr(g.repo)}">${escapeHtml(ref)}</a>
+      <span class="ws-git-title">${escapeHtml(g.title)}</span>
+      <small>${meta}</small>
+      ${writable ? `<button type="button" class="link-button" onclick="openWorkstreamAssign('git', ${g.id})">${extra || "改归属"}</button>` : ""}
+    </li>`;
+}
+
+function renderWorkstreamGit(d, writable) {
+  const items = d.git_items || [];
+  if (!items.length) return "";
+  state.workstreamGitItems = Object.fromEntries(items.map((g) => [g.id, g]));
+  return `<h3>PR / Issue <small>${items.length}</small></h3><ul class="workstream-list ws-git-list">${items.slice(0, 20).map((g) => gitItemLine(g, writable)).join("")}</ul>`;
+}
+
+function renderUnassignedGit(data, writable) {
+  const items = data.unassigned_git || [];
+  if (!items.length) return "";
+  state.workstreamUnassignedGit = Object.fromEntries(items.map((g) => [g.id, g]));
+  return `
+    <details class="ws-git-unassigned">
+      <summary>本周未归类 PR/Issue ${items.length}</summary>
+      <ul class="workstream-list ws-git-list">${items.map((g) => gitItemLine(g, writable, "归到工作线")).join("")}</ul>
+    </details>`;
 }
 
 function renderWorkstreamChildren(d, writable) {
@@ -2911,7 +2950,13 @@ function openWorkstreamAssign(kind, id) {
   let primary = null;
   let related = [];
   let context = "";
-  if (kind === "material") {
+  if (kind === "git") {
+    const g = (state.workstreamGitItems || {})[id] || (state.workstreamUnassignedGit || {})[id];
+    if (!g) return;
+    primary = g.workstream_id || null;
+    groups = [{ project_name: "", workstreams: workstreamList().filter((item) => item.status !== "done" || item.id === primary) }];
+    context = `${g.repo}#${g.number} ${g.title}`;
+  } else if (kind === "material") {
     const m = (state.workspace?.materials || []).find((item) => item.id === id);
     if (!m) return;
     const links = m.workstreams || {};
@@ -2938,6 +2983,8 @@ function openWorkstreamAssign(kind, id) {
   const boxes = groups.flatMap((group) => group.workstreams.map((item) => `
     <label class="checkbox-row"><input type="checkbox" value="${item.id}" ${related.includes(item.id) ? "checked" : ""}>${group.project_name ? `${escapeHtml(group.project_name)} · ` : ""}${escapeHtml(item.path || item.name)}</label>`)).join("");
   $("workstream-assign-related").innerHTML = `<legend>同时关联</legend>${boxes || "<p class=\"workstream-empty\">暂无可选工作线。</p>"}`;
+  // a PR / issue belongs to one workstream only
+  $("workstream-assign-related").classList.toggle("hidden", kind === "git");
   $("workstream-assign-dialog").showModal();
 }
 
@@ -2953,7 +3000,11 @@ async function submitWorkstreamAssign(event) {
     return;
   }
   try {
-    if (target.kind === "material") {
+    if (target.kind === "git") {
+      await api(`/api/projects/${state.projectId}/workstreams/git/${target.id}/link`, { method: "PUT", body: JSON.stringify({ workstream_id: primary }) });
+      await loadWorkspace();
+      if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    } else if (target.kind === "material") {
       updateWorkspace(await api(`/api/projects/${state.projectId}/materials/${target.id}/workstreams`, {
         method: "PUT",
         body: JSON.stringify({ primary, related }),
@@ -3292,7 +3343,7 @@ function renderRepoRow(r, manage = true) {
       <td data-label="补充说明">${manage
         ? `<textarea id="repo-notes-${r.id}" class="table-textarea">${escapeHtml(r.notes || "")}</textarea>`
         : `<div class="locked-material">${escapeHtml(r.notes || "") || "—"}</div>`}</td>
-      <td data-label="抓取项"><div class="repo-fetch-flags">${renderRepoFetchFlags(r, manage)}</div></td>
+      <td data-label="抓取项"><div class="repo-fetch-flags">${renderRepoFetchFlags(r, manage)}</div>${renderRepoWorkstream(r, manage)}</td>
       <td data-label="启用">${enabled
         ? `<span class="status ${r.status}">${escapeHtml(r.status)}</span><br>${escapeHtml(r.status_message || "")}`
         : `<span class="status disabled">已停用</span><br>不参与周报生成`}</td>
@@ -3324,6 +3375,27 @@ function renderRepoFetchFlags(r, manage = true) {
         <span>${label}</span>
       </label>
     `).join("");
+}
+
+// PR / issue activity of the repository goes to this workstream unless the agent or a person chose another
+function renderRepoWorkstream(r, manage = true) {
+  const items = workstreamList();
+  if (!items.length) return "";
+  const current = Number(r.workstream_id) || null;
+  const options = items.filter((w) => w.status !== "done" || w.id === current)
+    .map((w) => `<option value="${w.id}" ${w.id === current ? "selected" : ""}>${w.parent_id ? "　└ " : ""}${escapeHtml(w.name)}</option>`).join("");
+  return `<label class="repo-workstream" title="开启 PR / Issue 抓取后，这个仓库的 PR 和 Issue 默认归到所选工作线；不选则由 AI 按标题归类">PR/Issue 归属
+    <select data-autosave-ignore ${manage ? "" : "disabled"} onchange="setRepoWorkstream(${r.id}, this)"><option value="">AI 按标题归类</option>${options}</select></label>`;
+}
+
+async function setRepoWorkstream(id, select) {
+  const value = Number(select.value) || null;
+  try {
+    updateWorkspace(await api(`/api/projects/${state.projectId}/repos/${id}`, { method: "PUT", body: JSON.stringify({ workstream_id: value }) }));
+    toast(value ? `该仓库的 PR/Issue 默认归到「${workstreamById(value)?.name || ""}」` : "该仓库的 PR/Issue 改由 AI 按标题归类");
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function toggleRepoFetch(id, key, input) {
