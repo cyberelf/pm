@@ -39,7 +39,7 @@ The system SHALL let a material carry at most one primary workstream and any num
 - **THEN** the archived material carries the same workstream links
 
 ### Requirement: Agent-assisted classification
-The system SHALL classify uploaded files to an active workstream in the same internal-agent call that summarises them when the project has active workstreams and the request names none, SHALL honour an explicit workstream in the request as a manual link, and SHALL never overwrite manual links automatically. A queued 「AI 整理」 job SHALL classify unassigned materials in bounded batches and backfill missing weekly snapshots for up to eight archived report weeks, sharing the task queue's capacity accounting.
+The system SHALL classify uploaded files to an active workstream in the same internal-agent call that summarises them when the project has active workstreams and the request names none, SHALL honour an explicit workstream in the request as a manual link, and SHALL never overwrite manual links automatically. A queued 「AI 整理」 job SHALL classify unassigned materials in bounded batches and update weekly snapshots as defined under locked past weeks, sharing the task queue's capacity accounting.
 
 #### Scenario: Upload classified automatically
 - **WHEN** a writer uploads a file without choosing a workstream in a project with active workstreams
@@ -54,7 +54,7 @@ The system SHALL classify uploaded files to an active workstream in the same int
 - **THEN** the system queues one job per project, rejects a second concurrent one, links unassigned materials, adds missing snapshots, and leaves manual links and manual snapshots unchanged
 
 ### Requirement: Weekly workstream snapshots
-The system SHALL keep at most one snapshot per workstream and project week with status (advanced, steady or blocked), a one-line progress summary and a next step. After a successful report generation in a project with workstreams the system SHALL extract snapshots for active workstreams from the report and the week's linked materials through the internal agent; a failed extraction SHALL NOT fail the report. Writers MAY edit a snapshot, which marks it manual. Generated risk forecasts SHALL stay in report Markdown.
+The system SHALL keep at most one snapshot per workstream and project week with status (advanced, steady or blocked), a one-line progress summary and a next step. After a successful report generation for the current week in a project with workstreams the system SHALL extract snapshots for active workstreams from the report and the week's linked materials through the internal agent; a failed extraction SHALL NOT fail the report. Writers MAY edit the current week's snapshot, which marks it manual. Generated risk forecasts SHALL stay in report Markdown.
 
 #### Scenario: Snapshots after generation
 - **WHEN** a weekly report is generated successfully for a project with active workstreams
@@ -83,7 +83,7 @@ The system SHALL include the project's workstreams and each new material's works
 - **THEN** the evidence lists the workstreams and tags each new material with its primary workstream name
 
 ### Requirement: Long-range workstream view
-The system SHALL provide a 工作线 workspace view showing a workstream × week matrix over the last eight project weeks (snapshot status and summary per cell, the current week's linked material count when no snapshot exists) and a detail panel with goal, fields, linked milestones, the snapshot timeline, linked materials and the viewer's own linked open TODOs. Sources SHALL be filterable by workstream (including 未归类), and materials added while a workstream filter is active SHALL be linked to it.
+The system SHALL provide a 工作线 workspace view with a workstream × week matrix (next to the progress view) over the last eight project weeks (snapshot status and summary per cell, the current week's linked material count when no snapshot exists) and a detail panel with goal, fields, linked milestones, the snapshot timeline, linked materials and the viewer's own linked open TODOs. Sources SHALL be filterable by workstream (including 未归类), and materials added while a workstream filter is active SHALL be linked to it.
 
 #### Scenario: Open the matrix
 - **WHEN** a reader opens the 工作线 tab
@@ -99,3 +99,33 @@ The system SHALL expose read-only `workstream_list` and `workstream_show` operat
 #### Scenario: Assistant answers per workstream
 - **WHEN** the assistant is asked about one workstream's progress
 - **THEN** it can call `workstream_show` for the bound project and receive that workstream's snapshots, milestones and linked materials
+
+### Requirement: Locked past weeks and incremental organisation
+The system SHALL treat past project weeks as locked for workstream snapshots: manual and agent snapshots SHALL only be written for the current project week, except the one-time history initialisation. The project's first successful 「AI 整理」 SHALL classify every unassigned material and fill snapshots that are missing for active workstreams from archived reports of the last eight weeks; every later run SHALL only classify materials created this week and refresh this week's snapshots and tracking items.
+
+#### Scenario: Manual snapshot for a past week
+- **WHEN** a writer records a snapshot for a week before the current one
+- **THEN** the system rejects it as locked and keeps that week unchanged
+
+#### Scenario: Incremental organisation
+- **WHEN** 「AI 整理」 runs for a project that was organised before
+- **THEN** only unassigned materials created this week are classified, past snapshots are left as they are, and the job summary starts with 本周
+
+### Requirement: Workstream tracking items
+The system SHALL keep shared tracking items (待跟踪项) per workstream with title, optional owner and due date, and open/done status, visible to every project member and editable by writers. The agent SHALL be able to add follow-ups found in the current week's evidence (marked as agent items, skipping titles that match an existing item of the workstream) and close only its own open items; a person's edit SHALL turn an item into a manual one. An open item past its due date SHALL mark the workstream at risk and raise a medium `workstream_item_overdue` warning that does not block the project status.
+
+#### Scenario: Agent follow-up
+- **WHEN** this week's evidence for a workstream mentions a new follow-up
+- **THEN** 「AI 整理」 adds it as an AI item, and a later run that sees it finished closes it while manual items stay open
+
+#### Scenario: Overdue item
+- **WHEN** an open item's due date has passed
+- **THEN** the workstream health is 有风险 and the risk list shows a medium warning for it
+
+### Requirement: Visual progress view
+The 工作线 tab SHALL offer a progress view, the default, next to the week matrix: a summary of workstream health counts, current-week progress and open or overdue tracking items, and one lane per workstream covering the last eight weeks plus the future weeks up to the latest target, milestone or due date (at least 4, at most 26), with past weeks colored by snapshot status, milestone and target markers placed by date, a today line, and tracking-item completion.
+
+#### Scenario: Reading the progress view
+- **WHEN** a member opens the 工作线 tab
+- **THEN** each workstream shows its weekly status lane, upcoming milestones and target date against today, and how many tracking items are open or overdue
+

@@ -33,3 +33,11 @@
 
 Validation (2026-11-23): all 257 unit tests (11 workstream backend tests, 2 workstream frontend tests) and `node --check` passed; OpenSpec validation passed with only long-requirement warnings. On a throwaway server against a snapshot of the live database (offline provider, no scheduler), seeding agent guard's objectives created 5 workstreams, 「AI 整理」 classified and backfilled 7 weeks, and headless Chrome exercised the matrix, detail panel, manual snapshot, milestone select, material and TODO assignment, the close-dialog default and deletion at desktop and phone widths with no page errors. The snapshot and session were deleted afterwards.
 Live check (2026-11-23, platform 1.3.21, real provider, service temporarily bound to 127.0.0.1 because the VPN address times out from this host): on a temporary project, seeding created 2 workstreams, an uploaded note was classified to 东风交付 in the summary call (5s), an explicit manual material stayed manual, `/api/ops/workstream_list` answered, the generated report had one sub-heading per workstream, snapshot extraction wrote advanced snapshots with next steps while keeping a manual one, and 「AI 整理」 succeeded. It also showed the job was marked successful before its snapshots existed, so the job now stays running until extraction finishes. The temporary project, uploads and session were removed and the 10.200.200.3 binding restored.
+
+## 6. Locked weeks, tracking items and progress view
+
+- [x] 6.1 Lock past weeks for snapshots; the first 「AI 整理」 initialises history once, later runs only classify and refresh the current week; report refresh skips past weeks
+- [x] 6.2 `workstream_items` (待跟踪项) with CRUD API, agent follow-ups from current-week evidence (dedupe, close only agent items), open items in report evidence and `workstream_show`
+- [x] 6.3 Overdue open items mark health 有风险 and raise the medium `workstream_item_overdue` warning
+- [x] 6.4 进展 view (default) with summary strip and week lanes, milestone/target/today markers and item completion; 周矩阵 kept as the second view; items section in the detail panel
+
