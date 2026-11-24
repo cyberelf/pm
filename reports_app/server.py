@@ -103,6 +103,7 @@ from .materials import (
     update_material_summary,
 )
 from .pdf_export import pdf_filename, report_pdf_bytes
+from .workstream_git import set_item_link as set_git_item_link, set_repo_workstream
 from .plans import create_milestone, delete_milestone, load_plan, save_plan, save_plan_payload, update_milestone
 from .reports import changed_since_last_success, fail_stale_generation_jobs, generate_report, repo_extras_context
 from .task_queue import enqueue_template_generation, enqueue_workstream_job
@@ -1434,6 +1435,11 @@ class Handler(BaseHTTPRequestHandler):
             reorder_workstreams(conn, project_id, self.body_json().get("ids"))
             overview()
             return True
+        if len(tail) == 3 and tail[0] == "git" and tail[1].isdigit() and tail[2] == "link" and method == "PUT":
+            require_role(role, "write")
+            set_git_item_link(conn, project_id, int(tail[1]), self.body_json().get("workstream_id"))
+            overview()
+            return True
         if tail == ["organize"] and method == "POST":
             require_role(role, "write")
             job_id = enqueue_workstream_job(conn, self.server.db_path, project_id)
@@ -1931,6 +1937,8 @@ def update_repo_notes(conn, project_id, repo_id, payload, auth_info=None):
     for key in FETCH_FLAG_KEYS:
         if key in payload:
             updates[key] = 1 if payload.get(key) else 0
+    if "workstream_id" in payload:
+        set_repo_workstream(conn, project_id, repo_id, payload.get("workstream_id"))
     git_mode = validate_git_mode(payload.get("git_mode")) if "git_mode" in payload else row["git_mode"]
     target_changed = git_mode != row["git_mode"]
     if target_changed:

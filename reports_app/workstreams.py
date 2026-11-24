@@ -727,7 +727,8 @@ def _children(rows):
 
 def workstream_conditions(conn, project_id, tz_name):
     """Per workstream: overdue / stale flags with reasons, from deterministic
-    rules over dates, milestones and linked material activity."""
+    rules over dates, milestones and linked material and PR / issue
+    activity."""
     today = local_today(tz_name).isoformat()
     window = {current_week_key(tz_name), previous_week_key(tz_name)}
     previous = previous_week_key(tz_name)
@@ -743,6 +744,10 @@ def workstream_conditions(conn, project_id, tz_name):
         created = parse_iso(row["created_at"])
         if created and week_key_for(created, tz_name) in window:
             recent[row["workstream_id"]] = recent.get(row["workstream_id"], 0) + 1
+    from .workstream_git import activity_counts
+
+    for workstream_id, weeks in activity_counts(conn, project_id).items():
+        recent[workstream_id] = recent.get(workstream_id, 0) + sum(n for week, n in weeks.items() if week in window)
     items = _item_counts(conn, project_id, today)
     rows = list_workstreams(conn, project_id)
     children = _children(rows)
@@ -868,12 +873,16 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
             counts[row["workstream_id"]][week] = counts[row["workstream_id"]].get(week, 0) + 1
             if row["created_at"] > last_at.get(row["workstream_id"], ""):
                 last_at[row["workstream_id"]] = row["created_at"]
+    from .workstream_git import activity_counts, unassigned_week_items
+
+    git = activity_counts(conn, project_id)
     milestones = _plan_milestones(conn, project_id)
     paths, children = workstream_paths(rows), _children(rows)
     items = []
     for row in rows:
         item = _item(row, conditions[row["id"]], paths, children)
         item["material_total"] = totals.get(row["id"], 0)
+        item["git_week"] = git.get(row["id"], {}).get(current, 0)
         item["last_material_at"] = last_at.get(row["id"], "")
         item["milestones"] = [m for m in milestones if str(m.get("workstream_id") or "") == str(row["id"])]
         item["cells"] = [
@@ -881,6 +890,7 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
                 "week_key": week,
                 "snapshot": snapshots.get(row["id"], {}).get(week),
                 "materials": counts.get(row["id"], {}).get(week, 0),
+                "git": git.get(row["id"], {}).get(week, 0),
             }
             for week in week_keys
         ]
@@ -904,6 +914,7 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
         "timeline": timeline_weeks(week_keys, items, local_today(tz_name)),
         "workstreams": items,
         "unassigned_materials": unassigned,
+        "unassigned_git": unassigned_week_items(conn, project_id, current),
         "organized_at": organized or "",
     }
 
@@ -965,6 +976,9 @@ def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, materia
             (workstream_id, material_limit),
         )
     ]
+    from .workstream_git import workstream_git_items
+
+    item["git_items"] = workstream_git_items(conn, workstream_id)
     item["items"] = list_items(conn, workstream_id)
     item["current_week"] = current_week_key(tz_name)
     item["todos"] = [

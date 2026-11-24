@@ -597,13 +597,14 @@ def risks_list(ctx, project):
     summary="list the project's workstreams with health and latest snapshot",
     description="List the project's workstreams (工作线, parallel long-running lines of work; a 子工作线 sits under its "
                 "parent, shown as `parent / name`) with status, health from deterministic rules (a parent rolls up its "
-                "children), linked material counts, open/overdue tracking items and each one's latest weekly snapshot.",
+                "children), linked material counts, open/overdue tracking items, this week's linked PR/issue count and each "
+                "one's latest weekly snapshot.",
     params=(PROJECT,),
     agent=True,
     render={"kind": "table", "items": "workstreams", "empty": "No workstreams.",
             "columns": [col("ID", "id"), col("WORKSTREAM", "label", "clip:28"), col("STATUS", "status"),
                         col("HEALTH", "health"), col("OWNER", "owner_label", "clip:12"), col("MATERIALS", "material_total"),
-                        col("OPEN", "items_open"), col("LATEST", "latest", "oneline|clip:60")]},
+                        col("OPEN", "items_open"), col("PR/ISSUE", "git_week"), col("LATEST", "latest", "oneline|clip:60")]},
 )
 def workstream_list(ctx, project):
     data = workstream_overview(ctx.conn, project["id"], project["timezone"])
@@ -614,7 +615,7 @@ def workstream_list(ctx, project):
             "label": f"└ {item['name']}" if item["parent_id"] else item["name"],
             **{k: item[k] for k in ("id", "name", "path", "parent_id", "goal", "owner_label", "status", "target_date", "health",
                                      "overdue_reasons", "child_alerts", "material_total", "last_material_at", "items_open",
-                                     "items_overdue", "next_due")},
+                                     "items_overdue", "next_due", "git_week")},
             "latest": f"{latest['week_key']} {latest['snapshot']['summary']}" if latest else "",
         })
     return {"project_name": project["name"], "week_key": data["current_week"], "workstreams": items,
@@ -626,8 +627,8 @@ def workstream_list(ctx, project):
     command=("project", "workstreams", "show"),
     summary="show one workstream: goal, sub-workstreams, tracking items, milestones, weekly snapshots and linked materials",
     description="Read one workstream (by ID or exact name) with its parent or sub-workstreams (子工作线), goal, "
-                "tracking items (待跟踪项, open first), milestones, weekly snapshots across weeks and linked materials "
-                "(newest first); use it for questions "
+                "tracking items (待跟踪项, open first), milestones, linked pull requests / issues, weekly snapshots "
+                "across weeks and linked materials (newest first); use it for questions "
                 "about one line of work over time or what is still open on it.",
     params=(Param("workstream", "string", "workstream ID or exact name", required=True, positional=True), PROJECT),
     agent=True,
@@ -638,7 +639,8 @@ def workstream_list(ctx, project):
                    {"label": "Target", "key": "target_date"}],
         "body": "goal",
         "after": [{"label": "Sub-workstreams", "key": "children_text"}, {"label": "Milestones", "key": "milestones_text"},
-                  {"label": "Tracking items", "key": "items_text"}, {"label": "Timeline", "key": "timeline"}],
+                  {"label": "Tracking items", "key": "items_text"},
+                  {"label": "Pull requests / issues", "key": "git_text"}, {"label": "Timeline", "key": "timeline"}],
     },
 )
 def workstream_show(ctx, workstream, project):
@@ -661,6 +663,11 @@ def workstream_show(ctx, workstream, project):
         f"[{'x' if m.get('status') == 'complete' else ' '}] {m.get('title', '')}"
         + (f" ({m['target_date']})" if m.get("target_date") else "")
         for m in sorted(item["milestones"], key=lambda m: m.get("target_date") or "9999")
+    )
+    if ctx.for_agent:
+        item["git_items"] = item["git_items"][:25]
+    item["git_text"] = "\n".join(
+        f"{g['repo']}#{g['number']} {g['kind']} [{g['state']}] {g['title']} ({g['week_key']})" for g in item["git_items"]
     )
     item["timeline"] = "\n".join(
         f"{s['week_key']} [{s['status']}] {s['summary']}" + (f" → {s['next_step']}" if s["next_step"] else "")

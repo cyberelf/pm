@@ -361,6 +361,32 @@ CREATE TABLE IF NOT EXISTS workstream_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_workstream_items_workstream ON workstream_items(workstream_id, status);
+
+-- PR / issue activity synced from connected repositories (workstream_git.py):
+-- one row per item and project week it was updated in, linked to one
+-- workstream by the repository default, the agent or a person.
+CREATE TABLE IF NOT EXISTS workstream_git_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    repo_id INTEGER NOT NULL REFERENCES github_repos(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    week_key TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT '',
+    merged INTEGER NOT NULL DEFAULT 0,
+    draft INTEGER NOT NULL DEFAULT 0,
+    author TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    workstream_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL,
+    link_source TEXT NOT NULL DEFAULT '',
+    synced_at TEXT NOT NULL,
+    UNIQUE(repo_id, kind, number, week_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workstream_git_items_project ON workstream_git_items(project_id, week_key);
+CREATE INDEX IF NOT EXISTS idx_workstream_git_items_ws ON workstream_git_items(workstream_id);
 """
 
 
@@ -437,6 +463,9 @@ def migrate_schema(conn):
     workstream_columns = {row["name"] for row in conn.execute("PRAGMA table_info(workstreams)")}
     if "parent_id" not in workstream_columns:
         conn.execute("ALTER TABLE workstreams ADD COLUMN parent_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL")
+    if "workstream_id" not in columns:
+        # default workstream for the repository's PR / issue activity
+        conn.execute("ALTER TABLE github_repos ADD COLUMN workstream_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL")
     from .plans import ensure_milestone_ids
 
     ensure_milestone_ids(conn)

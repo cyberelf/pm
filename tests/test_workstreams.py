@@ -523,6 +523,97 @@ class WorkstreamTest(unittest.TestCase):
         delete_milestone(self.conn, self.project, ws, 2)
         self.assertEqual(sorted(m["id"] for m in load_plan(self.conn, self.project)["milestones"]), [3, 4])
 
+    # ------------------------------------------------------------ PR / issue
+
+    def add_repo_row(self, repo, workstream_id=None, project=None):
+        cur = self.conn.execute(
+            """
+            INSERT INTO github_repos (project_id, repo, git_mode, enabled, fetch_pull_requests, fetch_issues, status, workstream_id, created_at, updated_at)
+            VALUES (?, ?, 'github', 1, 1, 1, 'connected', ?, ?, ?)
+            """,
+            (project or self.project, repo, workstream_id, iso_now(), iso_now()),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    @staticmethod
+    def extras(repo, pulls=(), issues=()):
+        def entry(number, title, state="open", merged=False):
+            return {"number": number, "title": title, "state": state, "merged": merged, "draft": False, "author": "dev",
+                    "updated_at": iso_now(), "url": f"https://github.com/{repo}/pull/{number}"}
+        return {"repo": repo, "git_mode": "github",
+                "pull_requests": {"status": "ok", "pull_requests": [entry(*p) for p in pulls]},
+                "issues": {"status": "ok", "issues": [entry(*i) for i in issues]}}
+
+    def test_git_activity_syncs_into_workstreams(self):
+        from reports_app.workstream_git import set_item_link, set_repo_workstream, unassigned_week_items
+
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        fund = create_workstream(self.conn, self.project, {"name": "融资"})
+        self.age(ws)
+        self.age(fund)
+        cog = self.add_repo_row("CogDefend/cogdefend", ws)
+        cloud = self.add_repo_row("CogDefend/cogdefend-cloud")
+        self.add_repo_row("other/repo", project=self.other)
+        fetched = {
+            "CogDefend/cogdefend": self.extras("CogDefend/cogdefend", pulls=[(12, "规则引擎重构", "closed", True)], issues=[(30, "排查告警误报")]),
+            "CogDefend/cogdefend-cloud": self.extras("CogDefend/cogdefend-cloud", pulls=[(5, "融资演示环境部署", "closed", True)], issues=[(7, "升级依赖")]),
+        }
+        calls = []
+
+        def fake_fetch(repo, since, until, flags, git_mode="github", auth_info=None, timeout=30):
+            calls.append((repo, flags))
+            return fetched[repo]
+
+        with mock.patch("reports_app.git_sources.fetch_repo_extras", side_effect=fake_fetch):
+            summary = self.queue_organize()
+        self.assertIn("同步 4 条 PR/Issue（AI 归类 1 条）", summary)
+        self.assertEqual(sorted(c[0] for c in calls), ["CogDefend/cogdefend", "CogDefend/cogdefend-cloud"])
+        self.assertEqual(calls[0][1], {"fetch_pull_requests": 1, "fetch_issues": 1})
+        links = {(r["repo_id"], r["number"]): (r["workstream_id"], r["link_source"]) for r in self.conn.execute("SELECT * FROM workstream_git_items")}
+        self.assertEqual(links, {(cog, 12): (ws, "repo"), (cog, 30): (ws, "repo"), (cloud, 5): (fund, "auto"), (cloud, 7): (None, "")})
+        week = current_week_key(self.tz)
+        self.assertEqual([g["number"] for g in unassigned_week_items(self.conn, self.project, week)], [7])
+        # PR / issue activity is evidence for the snapshot and keeps the line from looking stale
+        snapshot = self.conn.execute("SELECT status, summary FROM workstream_weekly WHERE workstream_id = ?", (fund,)).fetchone()
+        self.assertEqual((snapshot["status"], snapshot["summary"]), ("advanced", "本周 1 条 PR/Issue：融资演示环境部署"))
+        item = self.overview_item(ws)
+        self.assertEqual((item["health"], item["git_week"], item["cells"][-1]["git"]), ("on track", 2, 2))
+        detail = workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])
+        self.assertEqual({(g["number"], g["state"]) for g in detail["git_items"]}, {(12, "merged"), (30, "open")})
+
+        # a person's choice wins over the repository default, now and in later weeks
+        pr = self.conn.execute("SELECT id FROM workstream_git_items WHERE number = 30").fetchone()[0]
+        set_item_link(self.conn, self.project, pr, fund)
+        set_repo_workstream(self.conn, self.project, cog, None)
+        rows = {r["number"]: (r["workstream_id"], r["link_source"]) for r in self.conn.execute("SELECT * FROM workstream_git_items")}
+        self.assertEqual((rows[30], rows[12]), ((fund, "manual"), (None, "")))
+        with self.assertRaises(ValidationError):
+            set_item_link(self.conn, self.project, pr, create_workstream(self.conn, self.other, {"name": "外部"}))
+        self.conn.execute("UPDATE workstream_git_items SET week_key = '2026-W01'")
+        set_repo_workstream(self.conn, self.project, cog, ws)
+        with mock.patch("reports_app.git_sources.fetch_repo_extras", side_effect=fake_fetch):
+            self.queue_organize()
+        rows = {r["number"]: (r["workstream_id"], r["link_source"]) for r in self.conn.execute(
+            "SELECT * FROM workstream_git_items WHERE week_key = ?", (week,))}
+        self.assertEqual((rows[30], rows[12]), ((fund, "manual"), (ws, "repo")))
+
+    def test_report_reuses_fetched_git_extras(self):
+        from reports_app.workstream_agent import refresh_after_report
+        from reports_app.workstream_git import annotate_extras
+
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        self.add_repo_row("CogDefend/cogdefend", ws)
+        extras = [self.extras("CogDefend/cogdefend", pulls=[(12, "规则引擎重构", "open")])]
+        with mock.patch("reports_app.git_sources.fetch_repo_extras", side_effect=AssertionError("no remote call")):
+            refresh_after_report(self.conn, self.project, current_week_key(self.tz), "# 周报", git_extras=extras)
+        self.assertEqual(self.conn.execute("SELECT workstream_id FROM workstream_git_items").fetchone()[0], ws)
+        tagged = annotate_extras(self.conn, self.project, [self.extras("CogDefend/cogdefend", pulls=[(12, "规则引擎重构")])])
+        self.assertEqual(tagged[0]["pull_requests"]["pull_requests"][0]["workstream"], "东风交付")
+        ctx = OpContext(self.conn, self.owner["id"])
+        shown = invoke(ctx, "workstream_show", {"workstream": "东风交付", "project": "agent guard"})
+        self.assertEqual(shown["git_text"], f"CogDefend/cogdefend#12 pr [open] 规则引擎重构 ({current_week_key(self.tz)})")
+
     # ------------------------------------------------------------ operations
 
     def test_operations_list_show_and_materials_add(self):
@@ -641,6 +732,24 @@ class WorkstreamTest(unittest.TestCase):
         status, data = call("writer", "PUT", f"/api/projects/{self.project}/plan",
                             {"objectives": "目标", "project_milestones": [{"title": "发布", "target_date": "2030-03-01"}], "deliverables": []})
         self.assertEqual((status, [m["title"] for m in data["plan"]["milestones"]]), (200, ["发布"]))
+
+        # PR / issue links: repository default (manage) and per-item choice (write)
+        repo = self.add_repo_row("CogDefend/cogdefend")
+        self.assertEqual(call("writer", "PUT", f"/api/projects/{self.project}/repos/{repo}", {"workstream_id": ids[0]})[0], 403)
+        status, data = call("owner", "PUT", f"/api/projects/{self.project}/repos/{repo}", {"workstream_id": ids[0]})
+        self.assertEqual((status, next(r for r in data["repos"] if r["id"] == repo)["workstream_id"]), (200, ids[0]))
+        self.conn.execute(
+            "INSERT INTO workstream_git_items (project_id, repo_id, kind, number, week_key, title, synced_at) VALUES (?, ?, 'issue', 9, ?, '排查', ?)",
+            (self.project, repo, current_week_key(self.tz), iso_now()),
+        )
+        git_id = self.conn.execute("SELECT MAX(id) FROM workstream_git_items").fetchone()[0]
+        self.conn.commit()
+        self.assertEqual(call("reader", "PUT", f"{base}/git/{git_id}/link", {"workstream_id": ids[1]})[0], 403)
+        status, data = call("writer", "PUT", f"{base}/git/{git_id}/link", {"workstream_id": ids[1]})
+        self.assertEqual((status, data["unassigned_git"]), (200, []))
+        status, detail = call("reader", "GET", f"{base}/{ids[1]}")
+        self.assertEqual([(g["number"], g["link_source"]) for g in detail["git_items"]], [(9, "manual")])
+        self.assertEqual(call("writer", "PUT", f"{base}/git/999999/link", {"workstream_id": ids[1]})[0], 404)
 
 
 if __name__ == "__main__":

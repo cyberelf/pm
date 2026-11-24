@@ -167,6 +167,9 @@ def assemble_context(conn, project_id, week_key=None):
         "system_prompt": get_effective_prompt(project),
         "report_template": get_effective_template(project),
     }
+    from .workstream_git import annotate_extras
+
+    annotate_extras(conn, project_id, context["git_extras_this_week"])
     encoded = json.dumps(context, sort_keys=True, ensure_ascii=False)
     return context, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -341,7 +344,7 @@ def generate_report(conn, project_id, trigger_type="manual", force=False, timeou
         # workstream snapshots exist, so the page refreshes once with both
         from .workstream_agent import refresh_after_report
 
-        refresh_after_report(conn, project_id, week_key, output_md)
+        refresh_after_report(conn, project_id, week_key, output_md, git_extras=context.get("git_extras_this_week"))
         conn.execute(
             "UPDATE generation_jobs SET status = 'success', output_md = ?, completed_at = ? WHERE id = ?",
             (output_md, iso_now(), job_id),
@@ -411,7 +414,7 @@ def build_internal_evidence_prompt(context):
         "If workstreams is non-empty, the project runs these parallel lines of work: organise this week's progress by active workstream "
         "(one sub-heading per active top-level workstream, in the given order, inside the progress section of the required structure; "
         "a workstream with a parent is a sub-workstream and goes as a bold lead-in point under its parent's sub-heading), "
-        "use each new material's workstream tag to place it, and state 本周无进展 for an active workstream without evidence; "
+        "use each new material's and each pull request / issue's workstream tag to place it, and state 本周无进展 for an active workstream without evidence; "
         "untagged evidence goes under the workstream it clearly belongs to, otherwise under 其他. "
         "For every connected repository, include a short per-repo section. "
         "If a repository has commits, cite representative commit messages and dates; if it has none, say so explicitly. "

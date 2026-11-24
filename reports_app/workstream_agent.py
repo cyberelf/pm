@@ -1,6 +1,7 @@
 """Internal-agent work for 工作线: weekly snapshot extraction, batch
 classification of unassigned materials, follow-up (待跟踪项) suggestions and
-the queued 「AI 整理」 job.
+the queued 「AI 整理」 job, which also syncs this week's PR / issue activity
+(workstream_git.py) and uses it as snapshot evidence.
 
 Past weeks are locked. The first 「AI 整理」 of a project initialises history
 once (classify every unassigned material, fill missing snapshots from past
@@ -145,6 +146,8 @@ def build_snapshot_prompt(week_key, workstreams, report_md, with_items=False):
         "只依据给出的证据，不要编造。status 取值：advanced（本周有实质进展）、steady（无明显进展或没有证据）、"
         "blocked（明确受阻或等待外部）。summary 用一句话写本周进展，不超过60个汉字；没有证据时写“本周无进展”。"
         "next_step 写证据中提到的下一步，不超过60个汉字，没有则留空。不要写风险预测。"
+        "pull_requests_and_issues 是本周更新过的代码仓库 PR / Issue（state：merged 已合并、closed 已关闭、open 进行中、draft 草稿），"
+        "合并的 PR 和关闭的 Issue 算实质进展，长期 open 或明确卡住的算受阻证据；它们也是待跟踪项的证据来源。"
         "带 parent 的是子工作线，只写它自己的进展；父工作线的资料里含其子工作线的资料（带 sub_workstream 字段），"
         "父工作线的快照概括整条线，待跟踪项只写属于父工作线本身的事项。"
         f"{items_rule}"
@@ -166,6 +169,13 @@ def _fake_snapshot(item):
         for open_item in item.get("open_items", [])
         if any(FAKE_DONE + open_item["title"] in t for t in texts)
     ]
+    code = item.get("pull_requests_and_issues") or []
+    if not item["materials"] and code:
+        return {
+            "status": "advanced", "summary": f"本周 {len(code)} 条 PR/Issue：{code[0]['title']}", "next_step": "",
+            "new_items": [], "done_item_ids": [o["id"] for o in item.get("open_items", []) if any(
+                c["state"] in ("merged", "closed") and o["title"] in c["title"] for c in code)],
+        }
     return {
         "status": "advanced" if item["materials"] else "steady",
         "summary": f"本周 {len(item['materials'])} 份资料：{item['materials'][0]['filename']}" if item["materials"] else "本周无进展",
@@ -198,7 +208,10 @@ def extract_snapshots(conn, project_id, week_key, report_md, source="generated",
         if not rows:
             return result
     with_items = week_key == current_week_key(project["timezone"])
+    from .workstream_git import week_items_by_workstream
+
     materials = week_materials_by_workstream(conn, project_id, project["timezone"], week_key)
+    git = week_items_by_workstream(conn, project_id, week_key)
     every = list_workstreams(conn, project_id)
     names = {r["id"]: r["name"] for r in every}
     evidence = []
@@ -212,12 +225,18 @@ def extract_snapshots(conn, project_id, week_key, report_md, source="generated",
                 if m["id"] not in seen and len(own) < PARENT_MATERIALS:
                     seen.add(m["id"])
                     own.append({"filename": m["filename"], "summary": m["summary"], "sub_workstream": child["name"]})
+        code = list(git.get(r["id"], []))
+        for child in every:
+            if child["parent_id"] == r["id"]:
+                code += [{**g, "sub_workstream": child["name"]} for g in git.get(child["id"], [])][:PARENT_MATERIALS - len(code)]
         entry = {
             "id": r["id"],
             "name": r["name"],
             "goal": (r["goal"] or "")[:300],
             "materials": own,
         }
+        if code:
+            entry["pull_requests_and_issues"] = code
         if r["parent_id"] in names:
             entry["parent"] = names[r["parent_id"]]
         if with_items:
@@ -253,13 +272,18 @@ def current_report_md(conn, project_id, week_key):
     return row["content_md"] if row else ""
 
 
-def refresh_after_report(conn, project_id, week_key, report_md, timeout=120):
+def refresh_after_report(conn, project_id, week_key, report_md, timeout=120, git_extras=None):
     """Called after a successful report; never raises. Only the current week
-    is refreshed: past weeks are locked."""
+    is refreshed: past weeks are locked. The PR / issue extras the report
+    already fetched are stored and classified first, without new API calls."""
     try:
         project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
         if not project or week_key != current_week_key(project["timezone"]) or not list_workstreams(conn, project_id):
             return 0
+        if git_extras:
+            from .workstream_git import sync_week
+
+            sync_week(conn, project_id, timeout, extras_list=git_extras)
         written = extract_snapshots(conn, project_id, week_key, report_md, "generated", timeout)["snapshots"]
         conn.commit()
         return written
@@ -313,6 +337,9 @@ def run_workstream_job(db_path, job_id, project_id, timeout=180):
         try:
             tz_name = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
             week = current_week_key(tz_name)
+            from .workstream_git import sync_week
+
+            git = sync_week(conn, project_id, timeout)
             linked = classify_unassigned(conn, project_id, timeout, week_key=None if initial else week)
             filled = backfill_snapshots(conn, project_id, timeout) if initial else 0
             current = extract_snapshots(conn, project_id, week, current_report_md(conn, project_id, week), "generated", timeout)
@@ -328,6 +355,8 @@ def run_workstream_job(db_path, job_id, project_id, timeout=180):
         parts = [f"归类 {linked} 份资料"]
         if initial:
             parts.append(f"补齐 {filled} 周历史快照")
+        if git["items"]:
+            parts.append(f"同步 {git['items']} 条 PR/Issue（AI 归类 {git['linked']} 条）")
         parts.append(f"更新本周 {current['snapshots']} 条快照")
         if current["items_added"]:
             parts.append(f"新增 {current['items_added']} 条待跟踪项")
