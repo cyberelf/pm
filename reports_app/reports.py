@@ -103,6 +103,13 @@ def assemble_context(conn, project_id, week_key=None):
                 "owner_label": row["owner_label"],
                 "status": row["status"],
                 "target_date": row["target_date"],
+                "open_items": [
+                    {"title": item["title"], "due_date": item["due_date"]}
+                    for item in conn.execute(
+                        "SELECT title, due_date FROM workstream_items WHERE workstream_id = ? AND status = 'open' ORDER BY id LIMIT 10",
+                        (row["id"],),
+                    )
+                ],
             }
             for row in workstream_rows
         ],

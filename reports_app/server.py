@@ -128,7 +128,9 @@ from .timeutil import current_week_key, iso_now, week_bounds
 from .timeutil import get_zone, parse_iso
 from .todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
 from .workstreams import (
+    create_item,
     create_workstream,
+    delete_item,
     delete_workstream,
     material_links_map,
     reorder_workstreams,
@@ -137,6 +139,7 @@ from .workstreams import (
     set_material_links,
     set_todo_links,
     todo_workstream_options,
+    update_item,
     update_workstream,
     workstream_detail,
     workstream_overview,
@@ -1454,6 +1457,21 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
                 return True
+            item_route = tail[1:2] == ["items"] and (
+                (len(tail) == 2 and method == "POST") or (len(tail) == 3 and tail[2].isdigit() and method in ("PUT", "DELETE"))
+            )
+            if item_route:
+                require_role(role, "write")
+                if method == "POST":
+                    create_item(conn, project_id, workstream_id, self.body_json())
+                elif method == "PUT":
+                    update_item(conn, project_id, workstream_id, int(tail[2]), self.body_json())
+                else:
+                    delete_item(conn, project_id, workstream_id, int(tail[2]))
+                evaluate_risks(conn, project_id)
+                conn.commit()
+                self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
+                return True
         return False
 
     def json(self, payload, status=HTTPStatus.OK, extra_headers=None):
@@ -1551,7 +1569,7 @@ def workspace(conn, project_id, role="owner"):
         "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? AND trigger_type NOT IN ('template', 'workstreams') ORDER BY id DESC", (project_id, week_key))],
         "workstream_job": row_to_dict(conn.execute("SELECT id, status, output_md, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'workstreams' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
         "template_job": row_to_dict(conn.execute("SELECT id, week_key, trigger_type, provider, status, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'template' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
-        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue', 'workstream_stale') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
+        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue', 'workstream_stale', 'workstream_item_overdue') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "workstreams": workstream_overview(conn, project_id, project["timezone"]),
         "progress_status": progress_status(conn, project_id),

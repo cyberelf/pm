@@ -343,6 +343,22 @@ CREATE TABLE IF NOT EXISTS workstream_weekly (
     updated_at TEXT NOT NULL,
     UNIQUE(workstream_id, week_key)
 );
+
+CREATE TABLE IF NOT EXISTS workstream_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    owner_label TEXT NOT NULL DEFAULT '',
+    due_date TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_week TEXT NOT NULL DEFAULT '',
+    done_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workstream_items_workstream ON workstream_items(workstream_id, status);
 """
 
 

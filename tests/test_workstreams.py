@@ -22,7 +22,9 @@ from reports_app.todos import close_todo, create_todo, todo_rows
 from reports_app.validation import ValidationError
 from reports_app.workstream_agent import run_workstream_job
 from reports_app.workstreams import (
+    create_item,
     create_workstream,
+    delete_item,
     delete_workstream,
     parse_objective_lines,
     previous_week_key,
@@ -30,6 +32,7 @@ from reports_app.workstreams import (
     seed_from_objectives,
     set_material_links,
     set_todo_links,
+    update_item,
     update_workstream,
     workstream_detail,
     workstream_overview,
@@ -246,10 +249,10 @@ class WorkstreamTest(unittest.TestCase):
         create_workstream(self.conn, self.project, {"name": "东风交付"})
         seen = []
 
-        def spy(conn, project_id, week_key, report_md, source="generated", timeout=120):
+        def spy(conn, project_id, week_key, report_md, source="generated", timeout=120, **kwargs):
             seen.append(conn.execute("SELECT status FROM generation_jobs ORDER BY id DESC LIMIT 1").fetchone()[0])
             seen.append(bool(conn.execute("SELECT 1 FROM weekly_reports WHERE project_id = ?", (project_id,)).fetchone()))
-            return 0
+            return {"snapshots": 0, "items_added": 0, "items_closed": 0}
 
         with mock.patch("reports_app.workstream_agent.extract_snapshots", side_effect=spy):
             job = generate_report(self.conn, self.project, "manual", force=True)
@@ -262,15 +265,7 @@ class WorkstreamTest(unittest.TestCase):
             job = generate_report(self.conn, self.project, "manual", force=True)
         self.assertEqual(self.conn.execute("SELECT status FROM generation_jobs WHERE id = ?", (job,)).fetchone()[0], "success")
 
-    def test_organize_job_classifies_and_backfills(self):
-        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
-        material = store_manual_material(self.conn, self.project, {"title": "东风交付周会", "content": "联调完成"})
-        unrelated = store_manual_material(self.conn, self.project, {"title": "杂项", "content": "无关"})
-        last_week = previous_week_key(self.tz)
-        self.conn.execute(
-            "INSERT INTO weekly_reports (project_id, week_key, content_md, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (self.project, last_week, "# 周报\n东风交付推进", iso_now(), iso_now()),
-        )
+    def queue_organize(self):
         self.conn.execute(
             "INSERT INTO generation_jobs (project_id, week_key, trigger_type, provider, status, started_at) VALUES (?, ?, 'workstreams', 'internal', 'queued', ?)",
             (self.project, current_week_key(self.tz), iso_now()),
@@ -278,18 +273,129 @@ class WorkstreamTest(unittest.TestCase):
         job = self.conn.execute("SELECT MAX(id) FROM generation_jobs").fetchone()[0]
         self.conn.commit()
         run_workstream_job(self.db_path, job, self.project)
-        row = self.conn.execute("SELECT status, output_md FROM generation_jobs WHERE id = ?", (job,)).fetchone()
-        self.assertEqual(row["status"], "success")
-        self.assertIn("归类 1 份资料，补齐 1 周快照", row["output_md"])
+        row = self.conn.execute("SELECT status, output_md, failure_reason FROM generation_jobs WHERE id = ?", (job,)).fetchone()
+        self.assertEqual(row["status"], "success", row["failure_reason"])
+        return row["output_md"]
+
+    def backdate(self, material_id, weeks=1):
+        old = (utc_now() - timedelta(days=7 * weeks)).isoformat()
+        self.conn.execute("UPDATE materials SET created_at = ? WHERE id = ?", (old, material_id))
+        self.conn.commit()
+
+    def test_organize_job_initialises_history_once_then_only_current_week(self):
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        material = store_manual_material(self.conn, self.project, {"title": "东风交付周会", "content": "联调完成"})
+        unrelated = store_manual_material(self.conn, self.project, {"title": "杂项", "content": "无关"})
+        self.backdate(material)
+        last_week = previous_week_key(self.tz)
+        self.conn.execute(
+            "INSERT INTO weekly_reports (project_id, week_key, content_md, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (self.project, last_week, "# 周报\n东风交付推进", iso_now(), iso_now()),
+        )
+        self.conn.commit()
+        self.assertEqual(self.queue_organize(), "首次整理：归类 1 份资料，补齐 1 周历史快照，更新本周 1 条快照")
         links = dict(self.conn.execute("SELECT material_id, source FROM material_workstreams").fetchall())
         self.assertEqual(links, {material: "auto"})
         self.assertNotIn(unrelated, links)
-        self.assertEqual(
-            self.conn.execute("SELECT source FROM workstream_weekly WHERE workstream_id = ? AND week_key = ?", (ws, last_week)).fetchone()[0],
-            "backfill",
-        )
+        past = self.conn.execute(
+            "SELECT source, summary, updated_at FROM workstream_weekly WHERE workstream_id = ? AND week_key = ?", (ws, last_week)
+        ).fetchone()
+        self.assertEqual(past["source"], "backfill")
+        self.assertTrue(workstream_overview(self.conn, self.project, self.tz)["organized_at"])
         # a successful 「AI 整理」 job is not a report success
         self.assertIsNone(latest_success(self.conn, self.project, current_week_key(self.tz)))
+
+        # later runs: past weeks are locked, only this week is touched
+        new_ws = create_workstream(self.conn, self.project, {"name": "融资"})
+        old_note = store_manual_material(self.conn, self.project, {"title": "东风交付旧纪要", "content": "上周的"})
+        self.backdate(old_note)
+        fresh = store_manual_material(self.conn, self.project, {"title": "融资路演", "content": "本周两场"})
+        self.conn.commit()
+        self.assertEqual(self.queue_organize(), "本周：归类 1 份资料，更新本周 2 条快照")
+        links = dict(self.conn.execute("SELECT material_id, workstream_id FROM material_workstreams").fetchall())
+        self.assertEqual(links.get(fresh), new_ws)
+        self.assertNotIn(old_note, links)
+        self.assertEqual(
+            dict(self.conn.execute(
+                "SELECT source, summary, updated_at FROM workstream_weekly WHERE workstream_id = ? AND week_key = ?", (ws, last_week)
+            ).fetchone()),
+            dict(past),
+        )
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM workstream_weekly WHERE workstream_id = ? AND week_key = ?", (new_ws, last_week)
+        ).fetchone())
+
+    def test_past_weeks_are_locked_for_snapshots(self):
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        with self.assertRaises(ValidationError):
+            save_manual_snapshot(self.conn, self.project, ws, {"week_key": previous_week_key(self.tz), "status": "advanced", "summary": "补记"})
+        save_manual_snapshot(self.conn, self.project, ws, {"status": "advanced", "summary": "本周推进"})
+        row = self.conn.execute("SELECT week_key, source FROM workstream_weekly WHERE workstream_id = ?", (ws,)).fetchone()
+        self.assertEqual(tuple(row), (current_week_key(self.tz), "manual"))
+        # a report for a past week never rewrites that week's snapshots
+        from reports_app.workstream_agent import refresh_after_report
+
+        self.assertEqual(refresh_after_report(self.conn, self.project, previous_week_key(self.tz), "# 旧周报"), 0)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM workstream_weekly").fetchone()[0], 1)
+
+    def test_tracking_items_crud_health_and_warning(self):
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        first = create_item(self.conn, self.project, ws, {"title": "确认实车排期", "owner_label": "高鹏", "due_date": "2026-01-05"})
+        second = create_item(self.conn, self.project, ws, {"title": "提交安全报告"})
+        with self.assertRaises(ValidationError):
+            create_item(self.conn, self.project, ws, {"title": " "})
+        with self.assertRaises(ValidationError):
+            create_item(self.conn, self.project, ws, {"title": "x", "due_date": "明天"})
+        with self.assertRaises(LookupError):
+            update_item(self.conn, self.other, ws, first, {"status": "done"})
+        item = self.overview_item(ws)
+        self.assertEqual((item["items_open"], item["items_overdue"], item["health"]), (2, 1, "at risk"))
+        evaluate_risks(self.conn, self.project)
+        warning = self.conn.execute(
+            "SELECT severity, title FROM risk_warnings WHERE rule = 'workstream_item_overdue' AND status = 'active'"
+        ).fetchone()
+        self.assertEqual(warning["severity"], "medium")
+        self.assertIn("1 条待跟踪项逾期", warning["title"])
+        update_item(self.conn, self.project, ws, first, {"status": "done"})
+        items = workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])["items"]
+        self.assertEqual([(i["id"], i["status"]) for i in items], [(second, "open"), (first, "done")])
+        self.assertTrue(items[1]["done_at"])
+        evaluate_risks(self.conn, self.project)
+        self.assertIsNone(self.conn.execute(
+            "SELECT 1 FROM risk_warnings WHERE rule = 'workstream_item_overdue' AND status = 'active'"
+        ).fetchone())
+        self.assertEqual(self.overview_item(ws)["health"], "on track")
+        delete_item(self.conn, self.project, ws, second)
+        delete_workstream(self.conn, self.project, ws)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM workstream_items").fetchone()[0], 0)
+
+    def test_agent_adds_and_closes_only_its_own_items(self):
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        manual = create_item(self.conn, self.project, ws, {"title": "签署交付确认单"})
+        add_uploaded_materials(self.conn, self.project, [self.file("东风周会.txt", "东风交付 待跟进：确认实车排期")])
+        self.conn.commit()
+        self.assertIn("新增 1 条待跟踪项", self.queue_organize())
+        auto = self.conn.execute("SELECT id, source, title FROM workstream_items WHERE id != ?", (manual,)).fetchone()
+        self.assertEqual((auto["source"], auto["title"]), ("auto", "确认实车排期"))
+        # the same follow-up again is a duplicate; finished items close only when the agent created them
+        add_uploaded_materials(self.conn, self.project, [
+            self.file("东风周会2.txt", "东风交付 待跟进：确认 实车排期。已完成：确认实车排期 已完成：签署交付确认单"),
+        ])
+        self.conn.commit()
+        self.assertIn("关闭 1 条", self.queue_organize())
+        rows = dict(self.conn.execute("SELECT id, status FROM workstream_items").fetchall())
+        self.assertEqual(rows, {manual: "open", auto["id"]: "done"})
+        context, _hash = assemble_context(self.conn, self.project)
+        self.assertEqual(context["workstreams"][0]["open_items"], [{"title": "签署交付确认单", "due_date": ""}])
+
+    def test_timeline_reaches_latest_target(self):
+        create_workstream(self.conn, self.project, {"name": "东风交付", "target_date": (utc_now() + timedelta(days=70)).date().isoformat()})
+        data = workstream_overview(self.conn, self.project, self.tz)
+        weeks = [w["week_key"] for w in data["timeline"]]
+        self.assertEqual(weeks[:8], data["weeks"])
+        self.assertIn(len(weeks) - 8, (10, 11, 12))
+        create_workstream(self.conn, self.project, {"name": "远期", "target_date": "2030-01-01"})
+        self.assertEqual(len(workstream_overview(self.conn, self.project, self.tz)["timeline"]), 8 + 26)
 
     # ------------------------------------------------------------ operations
 
@@ -299,13 +405,16 @@ class WorkstreamTest(unittest.TestCase):
         result = invoke(ctx, "materials_add", {"project": "agent guard", "text": "联调完成", "title": "日报", "workstream": "东风交付"})
         listing = invoke(ctx, "materials_list", {"project": "agent guard"})
         self.assertEqual(listing["materials"][0]["workstream"], "东风交付")
-        save_manual_snapshot(self.conn, self.project, ws, {"week_key": "2026-W40", "status": "advanced", "summary": "完成联调", "next_step": "验收"})
+        create_item(self.conn, self.project, ws, {"title": "确认实车排期", "due_date": "2030-01-05"})
+        save_manual_snapshot(self.conn, self.project, ws, {"status": "advanced", "summary": "完成联调", "next_step": "验收"})
         rows = invoke(ctx, "workstream_list", {"project": "agent guard"})["workstreams"]
         self.assertEqual((rows[0]["name"], rows[0]["material_total"]), ("东风交付", 1))
         agent = OpContext(self.conn, self.owner["id"], bound_project_id=self.project, for_agent=True)
         shown = invoke(agent, "workstream_show", {"workstream": "东风交付", "project": "embody"})
         self.assertEqual(shown["materials"][0]["id"], result["id"])
-        self.assertIn("2026-W40 [advanced] 完成联调 → 验收", shown["timeline"])
+        self.assertIn(f"{current_week_key(self.tz)} [advanced] 完成联调 → 验收", shown["timeline"])
+        self.assertEqual(shown["items_text"], "[ ] 确认实车排期 (due 2030-01-05)")
+        self.assertEqual(rows[0]["items_open"], 1)
         with self.assertRaises(LookupError):
             invoke(ctx, "workstream_show", {"workstream": "不存在", "project": "agent guard"})
 
@@ -341,8 +450,19 @@ class WorkstreamTest(unittest.TestCase):
         self.assertEqual([w["id"] for w in data["workstreams"]], list(reversed(ids)))
         self.assertEqual(call("reader", "GET", f"{base}/{ids[0]}")[1]["name"], "东风交付")
         self.assertEqual(call("reader", "GET", f"{base}/999999")[0], 404)
-        status, detail = call("writer", "PUT", f"{base}/{ids[0]}/snapshots", {"week_key": "2026-W40", "status": "advanced", "summary": "推进"})
+        self.assertEqual(call("writer", "PUT", f"{base}/{ids[0]}/snapshots", {"week_key": "2026-W40", "status": "advanced", "summary": "推进"})[0], 400)
+        status, detail = call("writer", "PUT", f"{base}/{ids[0]}/snapshots", {"status": "advanced", "summary": "推进"})
         self.assertEqual((status, detail["snapshots"][0]["source"]), (200, "manual"))
+
+        self.assertEqual(call("reader", "POST", f"{base}/{ids[0]}/items", {"title": "确认排期"})[0], 403)
+        status, detail = call("writer", "POST", f"{base}/{ids[0]}/items", {"title": "确认排期", "due_date": "2030-01-01"})
+        self.assertEqual((status, [i["title"] for i in detail["items"]]), (200, ["确认排期"]))
+        item_id = detail["items"][0]["id"]
+        self.assertEqual(call("writer", "PUT", f"{base}/{ids[1]}/items/{item_id}", {"status": "done"})[0], 404)
+        status, detail = call("writer", "PUT", f"{base}/{ids[0]}/items/{item_id}", {"status": "done"})
+        self.assertEqual((status, detail["items"][0]["status"]), (200, "done"))
+        status, detail = call("writer", "DELETE", f"{base}/{ids[0]}/items/{item_id}")
+        self.assertEqual((status, detail["items"]), (200, []))
 
         upload = {"files": [{"filename": "周报.txt", "content_base64": base64.b64encode("浩瀚融资".encode()).decode()}], "workstream_id": ids[0]}
         status, created = call("writer", "POST", f"/api/projects/{self.project}/materials", upload)

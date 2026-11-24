@@ -596,13 +596,13 @@ def risks_list(ctx, project):
     command=("project", "workstreams", "list"),
     summary="list the project's workstreams with health and latest snapshot",
     description="List the project's workstreams (工作线, parallel long-running lines of work) with status, health from "
-                "deterministic rules, linked material counts and each one's latest weekly snapshot.",
+                "deterministic rules, linked material counts, open/overdue tracking items and each one's latest weekly snapshot.",
     params=(PROJECT,),
     agent=True,
     render={"kind": "table", "items": "workstreams", "empty": "No workstreams.",
             "columns": [col("ID", "id"), col("WORKSTREAM", "name", "clip:24"), col("STATUS", "status"),
                         col("HEALTH", "health"), col("OWNER", "owner_label", "clip:12"), col("MATERIALS", "material_total"),
-                        col("LATEST", "latest", "oneline|clip:60")]},
+                        col("OPEN", "items_open"), col("LATEST", "latest", "oneline|clip:60")]},
 )
 def workstream_list(ctx, project):
     data = workstream_overview(ctx.conn, project["id"], project["timezone"])
@@ -611,7 +611,8 @@ def workstream_list(ctx, project):
         latest = next((c for c in reversed(item["cells"]) if c["snapshot"]), None)
         items.append({
             **{k: item[k] for k in ("id", "name", "goal", "owner_label", "status", "target_date", "health",
-                                     "overdue_reasons", "material_total", "last_material_at")},
+                                     "overdue_reasons", "material_total", "last_material_at", "items_open",
+                                     "items_overdue", "next_due")},
             "latest": f"{latest['week_key']} {latest['snapshot']['summary']}" if latest else "",
         })
     return {"project_name": project["name"], "week_key": data["current_week"], "workstreams": items,
@@ -621,9 +622,10 @@ def workstream_list(ctx, project):
 @operation(
     name="workstream_show",
     command=("project", "workstreams", "show"),
-    summary="show one workstream: goal, milestones, weekly snapshots and linked materials",
-    description="Read one workstream (by ID or exact name) with its goal, milestones, weekly snapshots across weeks "
-                "and linked materials (newest first); use it for questions about one line of work over time.",
+    summary="show one workstream: goal, tracking items, milestones, weekly snapshots and linked materials",
+    description="Read one workstream (by ID or exact name) with its goal, tracking items (待跟踪项, open first), "
+                "milestones, weekly snapshots across weeks and linked materials (newest first); use it for questions "
+                "about one line of work over time or what is still open on it.",
     params=(Param("workstream", "string", "workstream ID or exact name", required=True, positional=True), PROJECT),
     agent=True,
     render={
@@ -632,7 +634,7 @@ def workstream_list(ctx, project):
                    {"label": "Health", "key": "health"}, {"label": "Owner", "key": "owner_label"},
                    {"label": "Target", "key": "target_date"}],
         "body": "goal",
-        "after": [{"label": "Timeline", "key": "timeline"}],
+        "after": [{"label": "Tracking items", "key": "items_text"}, {"label": "Timeline", "key": "timeline"}],
     },
 )
 def workstream_show(ctx, workstream, project):
@@ -642,6 +644,11 @@ def workstream_show(ctx, workstream, project):
     if ctx.for_agent:
         item["materials"] = [{**m, "summary": (m["summary"] or "")[:300]} for m in item["materials"]]
         item["snapshots"] = item["snapshots"][:26]
+    item["items_text"] = "\n".join(
+        f"[{'x' if i['status'] == 'done' else ' '}] {i['title']}"
+        + (f" (due {i['due_date']})" if i["due_date"] else "") + (f" @{i['owner_label']}" if i["owner_label"] else "")
+        for i in item["items"]
+    )
     item["timeline"] = "\n".join(
         f"{s['week_key']} [{s['status']}] {s['summary']}" + (f" → {s['next_step']}" if s["next_step"] else "")
         for s in item["snapshots"]

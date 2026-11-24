@@ -1,5 +1,10 @@
 """Internal-agent work for 工作线: weekly snapshot extraction, batch
-classification of unassigned materials and the queued 「AI 整理」 job.
+classification of unassigned materials, follow-up (待跟踪项) suggestions and
+the queued 「AI 整理」 job.
+
+Past weeks are locked. The first 「AI 整理」 of a project initialises history
+once (classify every unassigned material, fill missing snapshots from past
+reports); every later run is incremental and only touches the current week.
 
 The agent only sees bounded evidence assembled here (workstream names and
 goals, report Markdown, material filenames and summaries) and answers JSON;
@@ -12,12 +17,15 @@ import json
 import re
 
 from .db import connect
-from .timeutil import iso_now
+from .timeutil import current_week_key, iso_now, parse_iso, week_key_for
 from .workstreams import (
     MATRIX_WEEKS,
     SNAPSHOT_STATUSES,
+    add_agent_items,
     auto_link_material,
+    close_agent_items,
     list_workstreams,
+    open_items_for_prompt,
     recent_week_keys,
     upsert_snapshot,
     week_materials_by_workstream,
@@ -80,20 +88,25 @@ def _material_hint(row):
     return text[:400]
 
 
-def classify_unassigned(conn, project_id, timeout=120):
-    """Link materials without any workstream to the agent's choice; returns
-    how many were linked."""
+def classify_unassigned(conn, project_id, timeout=120, week_key=None):
+    """Link materials without any workstream to the agent's choice; with
+    week_key only materials created that week. Returns how many were linked."""
     workstreams = workstreams_for_prompt(conn, project_id)
     if not workstreams:
         return 0
-    rows = conn.execute(
-        """
-        SELECT m.id, m.filename, m.summary, m.extracted_text, m.source_type FROM materials m
-        WHERE m.project_id = ? AND NOT EXISTS (SELECT 1 FROM material_workstreams mw WHERE mw.material_id = m.id)
-        ORDER BY m.id DESC
-        """,
-        (project_id,),
-    ).fetchall()
+    tz_name = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
+    rows = [
+        r
+        for r in conn.execute(
+            """
+            SELECT m.id, m.filename, m.summary, m.extracted_text, m.source_type, m.created_at FROM materials m
+            WHERE m.project_id = ? AND NOT EXISTS (SELECT 1 FROM material_workstreams mw WHERE mw.material_id = m.id)
+            ORDER BY m.id DESC
+            """,
+            (project_id,),
+        ).fetchall()
+        if week_key is None or (parse_iso(r["created_at"]) and week_key_for(parse_iso(r["created_at"]), tz_name) == week_key)
+    ]
     linked = 0
     for start in range(0, len(rows), CLASSIFY_BATCH):
         batch = rows[start:start + CLASSIFY_BATCH]
@@ -115,66 +128,122 @@ def classify_unassigned(conn, project_id, timeout=120):
 # ---------------------------------------------------------------- snapshots
 
 
-def build_snapshot_prompt(week_key, workstreams, report_md):
+def build_snapshot_prompt(week_key, workstreams, report_md, with_items=False):
+    items_rule = (
+        "open_items 是该工作线尚未关闭的待跟踪项。new_items 写证据中明确提到、需要后续跟进且不在 open_items 里的事项，"
+        "每条不超过40个汉字，最多3条，没有就给空数组；done_item_ids 写证据明确表明已完成的 open_items 的 id，没有就给空数组。"
+        if with_items else ""
+    )
+    shape = (
+        '{"id": 工作线ID, "status": "...", "summary": "...", "next_step": "...", "new_items": ["..."], "done_item_ids": [ID]}'
+        if with_items else '{"id": 工作线ID, "status": "...", "summary": "...", "next_step": "..."}'
+    )
     return (
         f"根据 {week_key} 的项目周报和各工作线本周关联资料，为每条工作线写一条本周快照。"
         "只依据给出的证据，不要编造。status 取值：advanced（本周有实质进展）、steady（无明显进展或没有证据）、"
         "blocked（明确受阻或等待外部）。summary 用一句话写本周进展，不超过60个汉字；没有证据时写“本周无进展”。"
         "next_step 写证据中提到的下一步，不超过60个汉字，没有则留空。不要写风险预测。"
-        "只输出 JSON 数组，每项严格使用 {\"id\": 工作线ID, \"status\": \"...\", \"summary\": \"...\", \"next_step\": \"...\"}，不要 Markdown。\n\n"
+        f"{items_rule}"
+        f"只输出 JSON 数组，每项严格使用 {shape}，不要 Markdown。\n\n"
         f"工作线及本周关联资料：\n{json.dumps(workstreams, ensure_ascii=False, indent=2)}\n\n"
-        f"周报：\n{(report_md or '')[:REPORT_EXCERPT_CHARS]}"
+        f"周报：\n{(report_md or '（本周尚未生成周报）')[:REPORT_EXCERPT_CHARS]}"
     )
 
 
-def extract_snapshots(conn, project_id, week_key, report_md, source="generated", timeout=120):
+FAKE_FOLLOW_UP = "待跟进："
+FAKE_DONE = "已完成："
+
+
+def _fake_snapshot(item):
+    texts = [m["summary"] or "" for m in item["materials"]]
+    new_items = [re.split(r"[。\n]", t.split(FAKE_FOLLOW_UP, 1)[1])[0].strip() for t in texts if FAKE_FOLLOW_UP in t]
+    done = [
+        open_item["id"]
+        for open_item in item.get("open_items", [])
+        if any(FAKE_DONE + open_item["title"] in t for t in texts)
+    ]
+    return {
+        "status": "advanced" if item["materials"] else "steady",
+        "summary": f"本周 {len(item['materials'])} 份资料：{item['materials'][0]['filename']}" if item["materials"] else "本周无进展",
+        "next_step": "",
+        "new_items": new_items,
+        "done_item_ids": done,
+    }
+
+
+def extract_snapshots(conn, project_id, week_key, report_md, source="generated", timeout=120, only_missing=False):
     """Write one snapshot per active workstream for the week; manual
-    snapshots are kept. Returns how many were written."""
+    snapshots are kept. For the current week the agent also proposes new
+    待跟踪项 and closes its own finished ones; a past week (history
+    initialisation) only fills workstreams that have no snapshot yet.
+    Returns {"snapshots", "items_added", "items_closed"}."""
+    result = {"snapshots": 0, "items_added": 0, "items_closed": 0}
     project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
     rows = [r for r in list_workstreams(conn, project_id) if r["status"] == "active"]
     if not project or not rows:
-        return 0
+        return result
+    if only_missing:
+        have = {
+            r["workstream_id"]
+            for r in conn.execute(
+                f"SELECT workstream_id FROM workstream_weekly WHERE week_key = ? AND workstream_id IN ({','.join('?' for _ in rows)})",
+                (week_key, *[r["id"] for r in rows]),
+            )
+        }
+        rows = [r for r in rows if r["id"] not in have]
+        if not rows:
+            return result
+    with_items = week_key == current_week_key(project["timezone"])
     materials = week_materials_by_workstream(conn, project_id, project["timezone"], week_key)
-    evidence = [
-        {
+    evidence = []
+    for r in rows:
+        entry = {
             "id": r["id"],
             "name": r["name"],
             "goal": (r["goal"] or "")[:300],
             "materials": [{"filename": m["filename"], "summary": m["summary"]} for m in materials.get(r["id"], [])],
         }
-        for r in rows
-    ]
+        if with_items:
+            entry["open_items"] = open_items_for_prompt(conn, r["id"])
+        evidence.append(entry)
     if _fake():
-        answers = {
-            item["id"]: {
-                "status": "advanced" if item["materials"] else "steady",
-                "summary": f"本周 {len(item['materials'])} 份资料：{item['materials'][0]['filename']}" if item["materials"] else "本周无进展",
-                "next_step": "",
-            }
-            for item in evidence
-        }
+        answers = {item["id"]: _fake_snapshot(item) for item in evidence}
     else:
         answers = {
             entry.get("id"): entry
-            for entry in parse_json_array(_chat(conn, build_snapshot_prompt(week_key, evidence, report_md), timeout))
+            for entry in parse_json_array(_chat(conn, build_snapshot_prompt(week_key, evidence, report_md, with_items), timeout))
         }
-    written = 0
     for item in evidence:
         answer = answers.get(item["id"])
-        if not answer or not str(answer.get("summary") or "").strip():
+        if not answer:
             continue
-        status = answer.get("status") if answer.get("status") in SNAPSHOT_STATUSES else "steady"
-        if upsert_snapshot(conn, item["id"], week_key, status, answer.get("summary"), answer.get("next_step") or "", source=source):
-            written += 1
-    return written
+        if str(answer.get("summary") or "").strip():
+            status = answer.get("status") if answer.get("status") in SNAPSHOT_STATUSES else "steady"
+            if upsert_snapshot(conn, item["id"], week_key, status, answer.get("summary"), answer.get("next_step") or "", source=source):
+                result["snapshots"] += 1
+        if with_items:
+            new_items = answer.get("new_items") if isinstance(answer.get("new_items"), list) else []
+            done_ids = answer.get("done_item_ids") if isinstance(answer.get("done_item_ids"), list) else []
+            result["items_added"] += add_agent_items(conn, item["id"], week_key, [t for t in new_items if isinstance(t, str)])
+            result["items_closed"] += close_agent_items(conn, item["id"], done_ids)
+    return result
+
+
+def current_report_md(conn, project_id, week_key):
+    row = conn.execute(
+        "SELECT content_md FROM weekly_reports WHERE project_id = ? AND week_key = ?", (project_id, week_key)
+    ).fetchone()
+    return row["content_md"] if row else ""
 
 
 def refresh_after_report(conn, project_id, week_key, report_md, timeout=120):
-    """Called after a successful report; never raises."""
+    """Called after a successful report; never raises. Only the current week
+    is refreshed: past weeks are locked."""
     try:
-        if not list_workstreams(conn, project_id):
+        project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if not project or week_key != current_week_key(project["timezone"]) or not list_workstreams(conn, project_id):
             return 0
-        written = extract_snapshots(conn, project_id, week_key, report_md, "generated", timeout)
+        written = extract_snapshots(conn, project_id, week_key, report_md, "generated", timeout)["snapshots"]
         conn.commit()
         return written
     except Exception as exc:  # the report itself already succeeded
@@ -184,48 +253,53 @@ def refresh_after_report(conn, project_id, week_key, report_md, timeout=120):
 
 
 def backfill_snapshots(conn, project_id, timeout=120):
-    """Snapshots for recent report weeks where an active workstream has none."""
+    """History initialisation: snapshots from past reports of the matrix
+    weeks, only for active workstreams that have none that week."""
     project = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()
-    active = [r["id"] for r in list_workstreams(conn, project_id) if r["status"] == "active"]
-    if not project or not active:
+    if not project or not any(r["status"] == "active" for r in list_workstreams(conn, project_id)):
         return 0
-    weeks = set(recent_week_keys(project["timezone"], MATRIX_WEEKS))
+    current = current_week_key(project["timezone"])
+    weeks = set(recent_week_keys(project["timezone"], MATRIX_WEEKS)) - {current}
     filled = 0
     for report in conn.execute(
         "SELECT week_key, content_md FROM weekly_reports WHERE project_id = ? ORDER BY week_key DESC", (project_id,)
     ).fetchall():
         if report["week_key"] not in weeks:
             continue
-        have = {
-            r["workstream_id"]
-            for r in conn.execute(
-                f"SELECT workstream_id FROM workstream_weekly WHERE week_key = ? AND workstream_id IN ({','.join('?' for _ in active)})",
-                (report["week_key"], *active),
-            )
-        }
-        if have >= set(active):
-            continue
-        if extract_snapshots(conn, project_id, report["week_key"], report["content_md"], "backfill", timeout):
+        if extract_snapshots(conn, project_id, report["week_key"], report["content_md"], "backfill", timeout, only_missing=True)["snapshots"]:
             filled += 1
         conn.commit()
     return filled
+
+
+def project_was_organized(conn, project_id, exclude_job_id=None):
+    return bool(conn.execute(
+        "SELECT 1 FROM generation_jobs WHERE project_id = ? AND trigger_type = 'workstreams' AND status = 'success' AND id != ?",
+        (project_id, exclude_job_id or 0),
+    ).fetchone())
 
 
 # ---------------------------------------------------------------- queued job
 
 
 def run_workstream_job(db_path, job_id, project_id, timeout=180):
-    """Task-queue worker for 「AI 整理」: classify unassigned materials, then
-    backfill missing snapshots. Progress lands in generation_jobs."""
+    """Task-queue worker for 「AI 整理」. The project's first run initialises
+    history; later runs only touch the current week. Progress lands in
+    generation_jobs."""
     with connect(db_path) as conn:
+        initial = not project_was_organized(conn, project_id, job_id)
         conn.execute(
             "UPDATE generation_jobs SET status = 'running', input_summary = ?, started_at = ? WHERE id = ?",
-            ("workstreams: classify + backfill", iso_now(), job_id),
+            ("workstreams: initial history + current week" if initial else "workstreams: current week", iso_now(), job_id),
         )
         conn.commit()
         try:
-            linked = classify_unassigned(conn, project_id, timeout)
-            filled = backfill_snapshots(conn, project_id, timeout)
+            tz_name = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
+            week = current_week_key(tz_name)
+            linked = classify_unassigned(conn, project_id, timeout, week_key=None if initial else week)
+            filled = backfill_snapshots(conn, project_id, timeout) if initial else 0
+            current = extract_snapshots(conn, project_id, week, current_report_md(conn, project_id, week), "generated", timeout)
+            conn.commit()
         except Exception as exc:
             conn.rollback()
             conn.execute(
@@ -234,9 +308,18 @@ def run_workstream_job(db_path, job_id, project_id, timeout=180):
             )
             conn.commit()
             return
+        parts = [f"归类 {linked} 份资料"]
+        if initial:
+            parts.append(f"补齐 {filled} 周历史快照")
+        parts.append(f"更新本周 {current['snapshots']} 条快照")
+        if current["items_added"]:
+            parts.append(f"新增 {current['items_added']} 条待跟踪项")
+        if current["items_closed"]:
+            parts.append(f"关闭 {current['items_closed']} 条")
+        summary = ("首次整理：" if initial else "本周：") + "，".join(parts)
         conn.execute(
             "UPDATE generation_jobs SET status = 'success', output_md = ?, completed_at = ? WHERE id = ?",
-            (f"归类 {linked} 份资料，补齐 {filled} 周快照", iso_now(), job_id),
+            (summary, iso_now(), job_id),
         )
         from .risks import evaluate_risks
 

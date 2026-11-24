@@ -18,7 +18,11 @@ from .validation import ValidationError
 WORKSTREAM_STATUSES = ("active", "paused", "done")
 SNAPSHOT_STATUSES = ("advanced", "steady", "blocked")
 LINK_SOURCES = ("auto", "manual")
+ITEM_STATUSES = ("open", "done")
 MATRIX_WEEKS = 8
+TIMELINE_FUTURE_MIN = 4
+TIMELINE_FUTURE_MAX = 26
+ITEM_TITLE_LIMIT = 200
 NAME_LIMIT = 60
 SEED_NAME_LIMIT = 30
 
@@ -37,6 +41,17 @@ def recent_week_keys(tz_name, count=MATRIX_WEEKS, now=None):
 
 def local_today(tz_name):
     return utc_now().astimezone(get_zone(tz_name)).date()
+
+
+def week_monday(week_key):
+    year, week = week_key.split("-W")
+    return date.fromisocalendar(int(year), int(week), 1)
+
+
+def assert_current_week(tz_name, week_key):
+    """Past weeks are locked: only the current week takes new snapshots."""
+    if week_key != current_week_key(tz_name):
+        raise ValidationError("过去的周已锁定，只能记录本周进展")
 
 
 # ---------------------------------------------------------------- workstreams
@@ -409,9 +424,11 @@ def upsert_snapshot(conn, workstream_id, week_key, status, summary, next_step=""
 
 def save_manual_snapshot(conn, project_id, workstream_id, payload):
     get_workstream(conn, project_id, workstream_id)
-    week_key = str(payload.get("week_key") or "").strip()
+    tz_name = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
+    week_key = str(payload.get("week_key") or "").strip() or current_week_key(tz_name)
     if not re.fullmatch(r"\d{4}-W\d{2}", week_key):
         raise ValidationError("week_key must look like 2026-W47")
+    assert_current_week(tz_name, week_key)
     status = str(payload.get("status") or "steady")
     if status not in SNAPSHOT_STATUSES:
         raise ValidationError("snapshot status must be advanced, steady or blocked")
@@ -443,6 +460,168 @@ def week_materials_by_workstream(conn, project_id, tz_name, week_key, per_workst
     return result
 
 
+# ---------------------------------------------------------------- 待跟踪项
+
+
+def _due_date(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValidationError("due date must be YYYY-MM-DD") from exc
+    return value
+
+
+def normalize_title(title):
+    return re.sub(r"[\s，,。.;；:：!！?？、\"'“”‘’（）()]+", "", str(title or "")).lower()
+
+
+def list_items(conn, workstream_id):
+    """Open items first (earliest due first, undated last), then done ones
+    newest first."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            """
+            SELECT id, workstream_id, title, owner_label, due_date, status, source, created_week, done_at, created_at, updated_at
+            FROM workstream_items WHERE workstream_id = ?
+            ORDER BY status = 'done', CASE WHEN status = 'open' AND due_date = '' THEN 1 ELSE 0 END,
+                     CASE WHEN status = 'open' THEN due_date END, done_at DESC, id
+            """,
+            (workstream_id,),
+        )
+    ]
+
+
+def get_item(conn, project_id, workstream_id, item_id):
+    row = conn.execute(
+        """
+        SELECT i.* FROM workstream_items i JOIN workstreams w ON w.id = i.workstream_id
+        WHERE i.id = ? AND i.workstream_id = ? AND w.project_id = ?
+        """,
+        (item_id, workstream_id, project_id),
+    ).fetchone()
+    if not row:
+        raise LookupError("tracking item not found")
+    return row
+
+
+def create_item(conn, project_id, workstream_id, payload, source="manual"):
+    get_workstream(conn, project_id, workstream_id)
+    title = _text(payload.get("title"), ITEM_TITLE_LIMIT)
+    if not title:
+        raise ValidationError("tracking item title is required")
+    tz_name = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
+    now = iso_now()
+    cur = conn.execute(
+        """
+        INSERT INTO workstream_items (workstream_id, title, owner_label, due_date, status, source, created_week, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)
+        """,
+        (workstream_id, title, _text(payload.get("owner_label"), NAME_LIMIT), _due_date(payload.get("due_date")),
+         source, current_week_key(tz_name), now, now),
+    )
+    return cur.lastrowid
+
+
+def update_item(conn, project_id, workstream_id, item_id, payload):
+    """A person's edit; it turns an agent item into a manual one, so the
+    agent never closes it afterwards."""
+    row = get_item(conn, project_id, workstream_id, item_id)
+    title = _text(payload.get("title"), ITEM_TITLE_LIMIT) if "title" in payload else row["title"]
+    if not title:
+        raise ValidationError("tracking item title is required")
+    status = str(payload.get("status") or row["status"])
+    if status not in ITEM_STATUSES:
+        raise ValidationError("tracking item status must be open or done")
+    owner = _text(payload.get("owner_label"), NAME_LIMIT) if "owner_label" in payload else row["owner_label"]
+    due = _due_date(payload.get("due_date")) if "due_date" in payload else row["due_date"]
+    now = iso_now()
+    done_at = (row["done_at"] or now) if status == "done" else ""
+    conn.execute(
+        """
+        UPDATE workstream_items SET title = ?, owner_label = ?, due_date = ?, status = ?, source = 'manual',
+            done_at = ?, updated_at = ? WHERE id = ?
+        """,
+        (title, owner, due, status, done_at, now, item_id),
+    )
+
+
+def delete_item(conn, project_id, workstream_id, item_id):
+    get_item(conn, project_id, workstream_id, item_id)
+    conn.execute("DELETE FROM workstream_items WHERE id = ?", (item_id,))
+
+
+def add_agent_items(conn, workstream_id, week_key, titles, limit=3):
+    """New follow-ups the agent found in this week's evidence; a title that
+    matches any existing item of the workstream (open or done) is skipped."""
+    seen = {normalize_title(r["title"]) for r in conn.execute("SELECT title FROM workstream_items WHERE workstream_id = ?", (workstream_id,))}
+    added, now = 0, iso_now()
+    for title in titles or []:
+        title = _text(title, ITEM_TITLE_LIMIT)
+        key = normalize_title(title)
+        if not key or key in seen or added >= limit:
+            continue
+        conn.execute(
+            """
+            INSERT INTO workstream_items (workstream_id, title, status, source, created_week, created_at, updated_at)
+            VALUES (?, ?, 'open', 'auto', ?, ?, ?)
+            """,
+            (workstream_id, title, week_key, now, now),
+        )
+        seen.add(key)
+        added += 1
+    return added
+
+
+def close_agent_items(conn, workstream_id, item_ids):
+    """The agent may close only its own open items; a person's items stay
+    under their control."""
+    ids = [i for i in item_ids or [] if isinstance(i, int)]
+    if not ids:
+        return 0
+    now = iso_now()
+    cur = conn.execute(
+        f"""
+        UPDATE workstream_items SET status = 'done', done_at = ?, updated_at = ?
+        WHERE workstream_id = ? AND source = 'auto' AND status = 'open' AND id IN ({",".join("?" for _ in ids)})
+        """,
+        (now, now, workstream_id, *ids),
+    )
+    return cur.rowcount
+
+
+def open_items_for_prompt(conn, workstream_id, limit=20):
+    return [
+        {"id": r["id"], "title": r["title"], "due_date": r["due_date"]}
+        for r in conn.execute(
+            "SELECT id, title, due_date FROM workstream_items WHERE workstream_id = ? AND status = 'open' ORDER BY id LIMIT ?",
+            (workstream_id, limit),
+        )
+    ]
+
+
+def _item_counts(conn, project_id, today):
+    counts = {}
+    for r in conn.execute(
+        """
+        SELECT i.workstream_id, i.status, i.due_date FROM workstream_items i
+        JOIN workstreams w ON w.id = i.workstream_id WHERE w.project_id = ?
+        """,
+        (project_id,),
+    ):
+        c = counts.setdefault(r["workstream_id"], {"open": 0, "done": 0, "overdue": 0, "next_due": ""})
+        c[r["status"]] = c.get(r["status"], 0) + 1
+        if r["status"] == "open" and r["due_date"]:
+            if r["due_date"] < today:
+                c["overdue"] += 1
+            elif not c["next_due"] or r["due_date"] < c["next_due"]:
+                c["next_due"] = r["due_date"]
+    return counts
+
+
 # ---------------------------------------------------------------- health
 
 
@@ -470,9 +649,11 @@ def workstream_conditions(conn, project_id, tz_name):
         created = parse_iso(row["created_at"])
         if created and week_key_for(created, tz_name) in window:
             recent[row["workstream_id"]] = recent.get(row["workstream_id"], 0) + 1
+    items = _item_counts(conn, project_id, today)
     result = {}
     for row in list_workstreams(conn, project_id):
         overdue, stale = [], False
+        counts = items.get(row["id"], {"open": 0, "done": 0, "overdue": 0, "next_due": ""})
         if row["status"] == "active":
             if row["target_date"] and row["target_date"] < today:
                 overdue.append(f"目标日期 {row['target_date']} 已过")
@@ -486,7 +667,13 @@ def workstream_conditions(conn, project_id, tz_name):
             created = parse_iso(row["created_at"])
             older = bool(created and week_key_for(created, tz_name) < previous)
             stale = older and not recent.get(row["id"])
-        result[row["id"]] = {"overdue": overdue, "stale": stale, "recent_materials": recent.get(row["id"], 0)}
+        result[row["id"]] = {
+            "overdue": overdue,
+            "stale": stale,
+            "recent_materials": recent.get(row["id"], 0),
+            "items": counts,
+            "items_overdue": counts["overdue"] if row["status"] == "active" else 0,
+        }
     return result
 
 
@@ -497,7 +684,7 @@ def health_of(row, condition):
         return "paused"
     if condition["overdue"]:
         return "blocked"
-    if condition["stale"]:
+    if condition["stale"] or condition.get("items_overdue"):
         return "at risk"
     return "on track"
 
@@ -519,6 +706,10 @@ def _item(row, condition):
         "health": health_of(row, condition),
         "overdue_reasons": condition["overdue"],
         "recent_materials": condition["recent_materials"],
+        "items_open": condition["items"]["open"],
+        "items_done": condition["items"]["done"],
+        "items_overdue": condition["items"]["overdue"],
+        "next_due": condition["items"]["next_due"],
     }
 
 
@@ -579,7 +770,44 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
         """,
         (project_id,),
     ).fetchone()[0]
-    return {"weeks": week_keys, "current_week": current, "workstreams": items, "unassigned_materials": unassigned}
+    organized = conn.execute(
+        "SELECT MAX(completed_at) FROM generation_jobs WHERE project_id = ? AND trigger_type = 'workstreams' AND status = 'success'",
+        (project_id,),
+    ).fetchone()[0]
+    return {
+        "weeks": week_keys,
+        "current_week": current,
+        "today": local_today(tz_name).isoformat(),
+        "timeline": timeline_weeks(week_keys, items, local_today(tz_name)),
+        "workstreams": items,
+        "unassigned_materials": unassigned,
+        "organized_at": organized or "",
+    }
+
+
+def timeline_weeks(week_keys, items, today):
+    """Weeks for the progress view: the matrix weeks plus enough future weeks
+    to reach the latest target, milestone or due date (4 to 26 ahead)."""
+    dates = []
+    for item in items:
+        dates += [item["target_date"], item["next_due"]]
+        dates += [m.get("target_date") for m in item["milestones"]]
+    horizon = max([d for d in dates if d] or [""])
+    first = week_monday(week_keys[0])
+    current = week_monday(week_keys[-1])
+    future = TIMELINE_FUTURE_MIN
+    if horizon:
+        try:
+            future = (date.fromisoformat(horizon) - current).days // 7 + 1
+        except ValueError:
+            pass
+    future = max(TIMELINE_FUTURE_MIN, min(TIMELINE_FUTURE_MAX, future))
+    weeks = []
+    for offset in range(len(week_keys) + future):
+        monday = first + timedelta(days=7 * offset)
+        year, week, _ = monday.isocalendar()
+        weeks.append({"week_key": f"{year}-W{week:02d}", "start": monday.isoformat()})
+    return weeks
 
 
 def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, material_limit=200):
@@ -604,6 +832,8 @@ def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, materia
             (workstream_id, material_limit),
         )
     ]
+    item["items"] = list_items(conn, workstream_id)
+    item["current_week"] = current_week_key(tz_name)
     item["todos"] = [
         dict(r)
         for r in conn.execute(
