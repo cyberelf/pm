@@ -2414,11 +2414,6 @@ function renderWorkstreamDetail() {
       <input id="ws-snap-next" maxlength="300" placeholder="下一步（可选）">
       <button type="button" onclick="saveWorkstreamSnapshot(${d.id})">记录</button>
     </div>` : "";
-  const materials = (d.materials || []).slice(0, 30).map((m) => `
-    <li>
-      <button type="button" class="link-button" onclick="previewMaterial(${m.id})">${escapeHtml(m.filename)}</button>
-      <small>${m.is_primary ? "" : "关联 · "}${escapeHtml(formatChinaTime(m.created_at))}${m.link_source === "auto" ? " · AI 归类" : ""}</small>
-    </li>`).join("");
   const todos = (d.todos || []).map((t) => `<li><span class="status ${t.status === "doing" ? "running" : ""}">${t.status === "doing" ? "进行中" : "待办"}</span> ${escapeHtml(t.title)}</li>`).join("");
   el.innerHTML = `
     <div class="panel workstream-detail">
@@ -2444,9 +2439,7 @@ function renderWorkstreamDetail() {
         <section>
           ${renderWorkstreamChildren(d, writable)}
           ${renderWorkstreamMilestones(d, writable)}
-          ${renderWorkstreamGit(d, writable)}
-          <h3>关联资料 <small>${(d.materials || []).length}</small></h3>
-          ${materials ? `<ul class="workstream-list">${materials}</ul>` : `<p class="workstream-empty">暂无关联资料。</p>`}
+          ${renderWorkstreamEvidence(d, writable)}
           <h3>我的 TODO</h3>
           ${todos ? `<ul class="workstream-list">${todos}</ul>` : `<p class="workstream-empty">暂无关联的未关闭 TODO。</p>`}
         </section>
@@ -2455,28 +2448,98 @@ function renderWorkstreamDetail() {
   ensureTableScrollContainers();
 }
 
+// 关联资料与 PR / Issue as icon chips: the shape is the type, the color the
+// status; hovering (or tapping on touch screens) shows the details card
 const GIT_STATE_LABELS = { merged: "已合并", open: "进行中", closed: "已关闭", draft: "草稿" };
-const GIT_LINK_LABELS = { repo: "仓库默认", auto: "AI 归类", manual: "" };
+const GIT_LINK_LABELS = { repo: "仓库默认归属", auto: "AI 归类", manual: "手动归属" };
+const WS_CHIP_ICONS = {
+  file: `<path d="M4 1.75h5.25L12.5 5v9.25H4z"/><path d="M9.25 1.75V5h3.25"/>`,
+  note: `<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.25 6h5.5M5.25 8.5h5.5M5.25 11h3"/>`,
+  pr: `<circle cx="4.25" cy="3.75" r="1.75"/><circle cx="4.25" cy="12.25" r="1.75"/><circle cx="11.75" cy="12.25" r="1.75"/><path d="M4.25 5.5v5M11.75 10.5V7a2 2 0 0 0-2-2H7.5"/><path d="M9 3.5 7.5 5 9 6.5"/>`,
+  issue: `<circle cx="8" cy="8" r="6"/><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none"/>`,
+};
 
-function gitItemLine(g, writable, extra = "") {
-  const tone = g.state === "merged" ? "success" : g.state === "closed" ? "" : g.state === "draft" ? "" : "running";
-  const ref = `${g.repo.split("/").pop()}#${g.number}`;
-  const meta = [g.kind === "pr" ? "PR" : "Issue", g.author, wsShortWeek(g.week_key), GIT_LINK_LABELS[g.link_source] || ""].filter(Boolean).map(escapeHtml).join(" · ");
-  return `
-    <li class="ws-git-item">
-      <span class="status ${tone}">${escapeHtml(GIT_STATE_LABELS[g.state] || g.state || "—")}</span>
-      <a href="${escapeAttr(g.url)}" target="_blank" rel="noopener" title="${escapeAttr(g.repo)}">${escapeHtml(ref)}</a>
-      <span class="ws-git-title">${escapeHtml(g.title)}</span>
-      <small>${meta}</small>
-      ${writable ? `<button type="button" class="link-button" onclick="openWorkstreamAssign('git', ${g.id})">${extra || "改归属"}</button>` : ""}
-    </li>`;
+function wsChipIcon(shape) {
+  return `<svg class="ws-chip-icon" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${WS_CHIP_ICONS[shape]}</svg>`;
 }
 
-function renderWorkstreamGit(d, writable) {
-  const items = d.git_items || [];
-  if (!items.length) return "";
-  state.workstreamGitItems = Object.fromEntries(items.map((g) => [g.id, g]));
-  return `<h3>PR / Issue <small>${items.length}</small></h3><ul class="workstream-list ws-git-list">${items.slice(0, 20).map((g) => gitItemLine(g, writable)).join("")}</ul>`;
+function wsChip({ shape, tone, label, head, title, meta, body = "", actions = "", primary = "" }) {
+  return `
+    <span class="ws-chip-wrap" onmouseenter="wsPopPlace(this)" onfocusin="wsPopPlace(this)">
+      <button type="button" class="ws-chip is-${shape} is-${tone}" aria-label="${escapeAttr(label)}" onclick="wsChipClick(event, this)" data-primary="${escapeAttr(primary)}">${wsChipIcon(shape)}</button>
+      <span class="ws-pop">
+        <span class="ws-pop-head">${head}</span>
+        <span class="ws-pop-title">${escapeHtml(title)}</span>
+        ${meta ? `<span class="ws-pop-meta">${meta}</span>` : ""}
+        ${body ? `<span class="ws-pop-body">${escapeHtml(body)}</span>` : ""}
+        ${actions ? `<span class="ws-pop-actions">${actions}</span>` : ""}
+      </span>
+    </span>`;
+}
+
+function gitChip(g, writable, assignLabel = "改归属") {
+  const tone = g.state === "merged" ? "success" : g.state === "open" ? "active" : g.state === "draft" ? "draft" : "muted";
+  const kind = g.kind === "pr" ? "PR" : "Issue";
+  const state = GIT_STATE_LABELS[g.state] || g.state || "";
+  const ref = `${g.repo.split("/").pop()}#${g.number}`;
+  return wsChip({
+    shape: g.kind === "pr" ? "pr" : "issue",
+    tone,
+    label: `${kind} ${ref} ${state}：${g.title}`,
+    head: `<b>${kind} · ${escapeHtml(state)}</b><small>${escapeHtml(g.repo)}#${g.number}</small>`,
+    title: g.title,
+    meta: [g.author, g.week_key, GIT_LINK_LABELS[g.link_source] || ""].filter(Boolean).map(escapeHtml).join(" · "),
+    primary: g.url ? `git:${g.url}` : "",
+    actions: `${g.url ? `<a class="link-button" href="${escapeAttr(g.url)}" target="_blank" rel="noopener">打开 ↗</a>` : ""}${writable ? `<button type="button" class="link-button" onclick="openWorkstreamAssign('git', ${g.id})">${assignLabel}</button>` : ""}`,
+  });
+}
+
+function materialChip(m, currentWeek, writable) {
+  const failed = m.extraction_status === "failed";
+  const fresh = m.week_key && m.week_key === currentWeek;
+  const tone = failed ? "error" : fresh ? "active" : "muted";
+  const type = m.source_type === "manual" ? "手工资料" : "文件";
+  const state = failed ? "提取失败" : fresh ? "本周新增" : "往期";
+  return wsChip({
+    shape: m.source_type === "manual" ? "note" : "file",
+    tone,
+    label: `${type} ${state}：${m.filename}`,
+    head: `<b>${type} · ${state}</b><small>${escapeHtml(formatChinaTime(m.created_at))}</small>`,
+    title: m.filename,
+    meta: [m.is_primary ? "主归属" : "关联", m.link_source === "auto" ? "AI 归类" : "手动归属"].map(escapeHtml).join(" · "),
+    body: (m.summary || "").slice(0, 160),
+    primary: `material:${m.id}`,
+    actions: `<button type="button" class="link-button" onclick="previewMaterial(${m.id})">预览</button>${writable ? `<button type="button" class="link-button" onclick="openWorkstreamAssign('material', ${m.id})">改归属</button>` : ""}`,
+  });
+}
+
+const WS_CHIP_LIMIT = 60;
+
+function renderWorkstreamEvidence(d, writable) {
+  const git = d.git_items || [];
+  const materials = d.materials || [];
+  state.workstreamGitItems = Object.fromEntries(git.map((g) => [g.id, g]));
+  const currentWeek = d.current_week || "";
+  const time = (value) => Date.parse(value || "") || 0;
+  const entries = [
+    ...git.map((g) => ({ at: time(g.updated_at), html: () => gitChip(g, writable) })),
+    ...materials.map((m) => ({ at: time(m.created_at), html: () => materialChip(m, currentWeek, writable) })),
+  ].sort((a, b) => b.at - a.at);
+  const counts = [materials.length ? `${materials.length} 份资料` : "", git.length ? `${git.length} 条 PR/Issue` : ""].filter(Boolean).join(" · ");
+  if (!entries.length) return `<h3>关联资料</h3><p class="workstream-empty">暂无关联资料或 PR/Issue。</p>`;
+  const more = entries.length > WS_CHIP_LIMIT
+    ? `<button type="button" class="ws-chip-more" onclick="showWorkstreamMaterials(${d.id})">+${entries.length - WS_CHIP_LIMIT}</button>` : "";
+  return `
+    <h3>关联资料 <small>${counts}</small></h3>
+    <div class="ws-chips">${entries.slice(0, WS_CHIP_LIMIT).map((entry) => entry.html()).join("")}${more}</div>
+    ${wsChipLegend()}`;
+}
+
+function wsChipLegend() {
+  const key = (shape, label) => `<span class="ws-legend-key">${wsChipIcon(shape)}${label}</span>`;
+  const dot = (tone, label) => `<span class="ws-legend-key"><span class="ws-legend-dot is-${tone}"></span>${label}</span>`;
+  return `<div class="ws-chip-legend">${key("file", "文件")}${key("note", "手工")}${key("pr", "PR")}${key("issue", "Issue")}
+    <span class="ws-legend-sep"></span>${dot("active", "本周 / 进行中")}${dot("success", "已合并")}${dot("muted", "往期 / 已关闭")}${dot("error", "提取失败")}</div>`;
 }
 
 function renderUnassignedGit(data, writable) {
@@ -2484,10 +2547,50 @@ function renderUnassignedGit(data, writable) {
   if (!items.length) return "";
   state.workstreamUnassignedGit = Object.fromEntries(items.map((g) => [g.id, g]));
   return `
-    <details class="ws-git-unassigned">
-      <summary>本周未归类 PR/Issue ${items.length}</summary>
-      <ul class="workstream-list ws-git-list">${items.map((g) => gitItemLine(g, writable, "归到工作线")).join("")}</ul>
-    </details>`;
+    <div class="ws-git-unassigned">
+      <span>本周未归类 PR/Issue ${items.length}</span>
+      <div class="ws-chips">${items.map((g) => gitChip(g, writable, "归到工作线")).join("")}</div>
+    </div>`;
+}
+
+// a tap outside closes a card opened by touch
+document.addEventListener("click", (event) => {
+  if (event.target?.closest?.(".ws-chip-wrap")) return;
+  document.querySelectorAll(".ws-chip-wrap.is-open").forEach((item) => item.classList.remove("is-open"));
+});
+
+// keep the card inside the viewport: clamp it horizontally, open below near the top
+function wsPopPlace(wrap) {
+  const pop = wrap.querySelector(".ws-pop");
+  if (!pop) return;
+  const rect = wrap.getBoundingClientRect();
+  const gutter = 16;
+  const width = Math.min(280, window.innerWidth - gutter * 2);
+  let shift = 0;
+  if (rect.left + width > window.innerWidth - gutter) shift = window.innerWidth - gutter - width - rect.left;
+  if (rect.left + shift < gutter) shift = gutter - rect.left;
+  pop.style.width = `${width}px`;
+  pop.style.left = `${Math.round(shift)}px`;
+  wrap.classList.toggle("is-below", rect.top < 220);
+}
+
+function wsChipClick(event, button) {
+  const wrap = button.closest(".ws-chip-wrap");
+  const touch = window.matchMedia && window.matchMedia("(hover: none)").matches;
+  if (touch) {
+    // first tap shows the card; its buttons carry the actions
+    const open = wrap.classList.contains("is-open");
+    document.querySelectorAll(".ws-chip-wrap.is-open").forEach((item) => item.classList.remove("is-open"));
+    if (!open) {
+      wsPopPlace(wrap);
+      wrap.classList.add("is-open");
+    }
+    return;
+  }
+  const [kind, ...rest] = String(button.dataset.primary || "").split(":");
+  const value = rest.join(":");
+  if (kind === "material") previewMaterial(Number(value));
+  else if (kind === "git" && value) window.open(value, "_blank", "noopener");
 }
 
 function renderWorkstreamChildren(d, writable) {

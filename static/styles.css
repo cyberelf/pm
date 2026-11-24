@@ -1556,13 +1556,44 @@ span.ws-tag { cursor: default; }
 .ws-item.is-editing .ws-milestone-form { grid-template-columns: 110px 150px 110px minmax(0, 1fr); }
 .ws-item.is-editing .ws-milestone-form > .row { grid-column: 1 / -1; }
 .ws-risks tr.is-resolved td { color: var(--muted); }
-.ws-git-list li { align-items: baseline; }
-.ws-git-item .status { flex: 0 0 auto; }
-.ws-git-item a { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ws-git-title { min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
-.ws-git-unassigned { margin-top: 12px; }
-.ws-git-unassigned summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-.ws-git-unassigned ul { margin-top: 8px; }
+/* 关联资料 / PR / Issue chips: shape = type, color = status, card on hover */
+.ws-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.ws-chip-wrap { position: relative; display: inline-flex; }
+.ws-chip { --chip: var(--muted); display: inline-grid; place-items: center; width: 30px; height: 30px; min-height: 0; border: 1px solid color-mix(in srgb, var(--chip) 35%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--chip) 12%, transparent); padding: 0; color: var(--chip); }
+.ws-chip:hover, .ws-chip-wrap.is-open .ws-chip { border-color: var(--chip); background: color-mix(in srgb, var(--chip) 20%, transparent); }
+.ws-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ws-chip-icon { width: 16px; height: 16px; }
+.ws-chip.is-active { --chip: var(--accent); }
+.ws-chip.is-success { --chip: var(--success); }
+.ws-chip.is-error { --chip: var(--error); }
+.ws-chip.is-muted { --chip: var(--muted); }
+.ws-chip.is-draft { --chip: var(--muted); border-style: dashed; background: transparent; }
+.ws-chip-more { min-height: 30px; padding: 0 10px; color: var(--muted); font-size: 12px; }
+.ws-pop { position: absolute; bottom: 100%; left: 0; z-index: 30; display: none; width: 280px; padding-bottom: 6px; }
+.ws-pop::before { content: ""; position: absolute; inset: 0 0 6px; z-index: -1; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--canvas); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14); }
+.ws-pop > * { display: block; padding: 0 12px; }
+.ws-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-top: 10px; color: var(--ink); font-size: 12px; }
+.ws-pop-head small { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.ws-pop-title { margin-top: 4px; color: var(--ink); font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.ws-pop-meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.ws-pop-body { margin-top: 6px; color: var(--body, var(--ink)); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.ws-pop-actions { display: flex !important; gap: 14px; margin-top: 8px; padding-bottom: 10px !important; font-size: 12px; }
+.ws-pop > :last-child { padding-bottom: 10px; }
+.ws-chip-wrap.is-below .ws-pop { top: 100%; bottom: auto; padding-top: 6px; padding-bottom: 0; }
+.ws-chip-wrap.is-below .ws-pop::before { inset: 6px 0 0; }
+.ws-chip-wrap:focus-within .ws-pop, .ws-chip-wrap.is-open .ws-pop { display: block; }
+@media (hover: hover) {
+  .ws-chip-wrap:hover .ws-pop { display: block; }
+}
+.ws-chip-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 14px; color: var(--muted); font-size: 12px; }
+.ws-legend-key { display: inline-flex; align-items: center; gap: 4px; }
+.ws-legend-key .ws-chip-icon { width: 13px; height: 13px; }
+.ws-legend-sep { width: 1px; height: 12px; background: var(--hairline); }
+.ws-legend-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--muted); }
+.ws-legend-dot.is-active { background: var(--accent); }
+.ws-legend-dot.is-success { background: var(--success); }
+.ws-legend-dot.is-error { background: var(--error); }
+.ws-git-unassigned { margin-top: 12px; color: var(--muted); font-size: 13px; }
 .repo-workstream { display: grid; gap: 4px; margin-top: 8px; color: var(--muted); font-size: 12px; }
 .repo-workstream select { min-height: 30px; font-size: 13px; }
 @media (hover: none) {

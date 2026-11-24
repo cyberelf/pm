@@ -966,10 +966,15 @@ def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, materia
         )
     ]
     item["materials"] = [
-        {**dict(r), "is_primary": bool(r["is_primary"])}
+        {
+            **dict(r),
+            "is_primary": bool(r["is_primary"]),
+            "week_key": week_key_for(parse_iso(r["created_at"]), tz_name) if parse_iso(r["created_at"]) else "",
+        }
         for r in conn.execute(
             """
-            SELECT m.id, m.filename, m.source_type, m.summary, m.created_at, mw.is_primary, mw.source AS link_source
+            SELECT m.id, m.filename, m.source_type, m.summary, m.extraction_status, m.created_at, mw.is_primary,
+                   mw.source AS link_source
             FROM material_workstreams mw JOIN materials m ON m.id = mw.material_id
             WHERE mw.workstream_id = ? ORDER BY m.id DESC LIMIT ?
             """,

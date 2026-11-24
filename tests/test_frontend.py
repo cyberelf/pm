@@ -1712,13 +1712,25 @@ globalThis.fetch = async (path, options) => {
 
   // PR / issue activity: detail list, unassigned list, single-workstream assignment
   state.workstreamDetail.git_items = [
-    { id: 41, repo: "CogDefend/cogdefend", kind: "pr", number: 12, title: "规则引擎重构", state: "merged", url: "https://x/12", author: "dev", week_key: "2026-W48", workstream_id: 11, link_source: "repo" },
+    { id: 41, repo: "CogDefend/cogdefend", kind: "pr", number: 12, title: "规则引擎重构", state: "merged", url: "https://x/12", author: "dev", week_key: "2026-W48", updated_at: "2026-11-20T00:00:00Z", workstream_id: 11, link_source: "repo" },
   ];
   renderWorkstreamDetail();
   const gitDetail = document.getElementById("workstream-detail").innerHTML;
-  for (const needle of ["PR / Issue <small>1</small>", "已合并", "cogdefend#12", "仓库默认", "openWorkstreamAssign('git', 41)"]) {
+  for (const needle of ["1 条 PR/Issue", "PR · 已合并", "cogdefend#12", "仓库默认归属", "openWorkstreamAssign('git', 41)",
+                        'class="ws-chip is-pr is-success"', 'data-primary="git:https://x/12"', "ws-chip-legend"]) {
     if (!gitDetail.includes(needle)) throw new Error(`git detail missing ${needle}`);
   }
+  // materials share the chip grid: note vs file shape, this week vs older vs failed color, newest first
+  state.workstreamDetail.materials = [
+    { id: 5, filename: "周会纪要", source_type: "manual", summary: "联调完成", extraction_status: "success", created_at: "2026-11-24T02:00:00+00:00", week_key: "2026-W48", is_primary: true, link_source: "auto" },
+    { id: 6, filename: "方案.pdf", source_type: "upload", summary: "", extraction_status: "failed", created_at: "2026-10-01T02:00:00+00:00", week_key: "2026-W40", is_primary: false, link_source: "manual" },
+  ];
+  renderWorkstreamDetail();
+  const chips = document.getElementById("workstream-detail").innerHTML;
+  for (const needle of ['class="ws-chip is-note is-active"', 'class="ws-chip is-file is-error"', "手工资料 · 本周新增", "文件 · 提取失败", "2 份资料 · 1 条 PR/Issue", "previewMaterial(5)"]) {
+    if (!chips.includes(needle)) throw new Error(`chips missing ${needle}`);
+  }
+  if (chips.indexOf("周会纪要") > chips.indexOf("规则引擎重构") || chips.indexOf("规则引擎重构") > chips.indexOf("方案.pdf")) throw new Error("chips should be newest first");
   state.workspace.workstreams.unassigned_git = [
     { id: 42, repo: "CogDefend/cloud", kind: "issue", number: 7, title: "升级依赖", state: "open", url: "https://x/7", author: "", week_key: "2026-W48", workstream_id: null, link_source: "" },
   ];
