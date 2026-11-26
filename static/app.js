@@ -486,7 +486,7 @@ function toggleSettingsView(force) {
   updateThemeColorSurface();
 }
 
-async function switchAppMode(mode, persist = true) {
+async function switchAppMode(mode, persist = true, animate = persist) {
   state.mode = mode === "todos" ? "todos" : "reports";
   state.settingsView = false;
   if (persist) localStorage.setItem("workspaceMode", state.mode);
@@ -497,8 +497,9 @@ async function switchAppMode(mode, persist = true) {
   updateThemeColorSurface();
   $("page-current-label").textContent = showingTodos ? "TODO" : "周报";
   $("page-target-label").textContent = showingTodos ? "周报" : "TODO";
-  $("page-corner").setAttribute("aria-label", `当前页面：${showingTodos ? "TODO" : "周报"}；切换到${showingTodos ? "周报" : "TODO"}`);
-  if (persist) playPageTurn();
+  $("page-planet").classList.toggle("is-todo", showingTodos);
+  $("page-planet").setAttribute("aria-label", `当前页面：${showingTodos ? "TODO" : "周报"}；切换到${showingTodos ? "周报" : "TODO"}`);
+  if (animate) playViewEnter();
   if (showingTodos) {
     await loadTodos();
   } else if (state.projectId) {
@@ -506,12 +507,7 @@ async function switchAppMode(mode, persist = true) {
   }
 }
 
-function playPageTurn() {
-  const corner = $("page-corner");
-  corner.classList.remove("turning");
-  void corner.offsetWidth;
-  corner.classList.add("turning");
-  setTimeout(() => corner.classList.remove("turning"), 430);
+function playViewEnter() {
   const entering = document.querySelectorAll(state.mode === "todos" ? "#todo-view" : "#report-view, #project-sidebar");
   entering.forEach((el) => {
     el.classList.remove("view-enter");
@@ -519,6 +515,45 @@ function playPageTurn() {
     el.classList.add("view-enter");
     setTimeout(() => el.classList.remove("view-enter"), 320);
   });
+}
+
+// 左上角星球切换：当前页面旋转着被吸入星球，目标页面再从星球中旋转展开
+const PLANET_SWALLOW_MS = 260;
+const PLANET_EMIT_MS = 400;
+let planetWarping = false;
+
+function aimAtPlanet(el) {
+  const planet = $("page-planet").getBoundingClientRect();
+  const rect = el.getBoundingClientRect();
+  el.style.setProperty("--planet-x", `${planet.left + planet.width / 2 - rect.left}px`);
+  el.style.setProperty("--planet-y", `${planet.top + planet.height / 2 - rect.top}px`);
+}
+
+async function warpAppMode() {
+  if (planetWarping) return;
+  const target = state.mode === "todos" ? "reports" : "todos";
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    await switchAppMode(target);
+    return;
+  }
+  planetWarping = true;
+  const shell = document.querySelector(".app-shell");
+  const planet = $("page-planet");
+  planet.classList.add("warping");
+  document.body.classList.add("planet-warping");
+  aimAtPlanet(shell);
+  shell.classList.add("planet-out");
+  await new Promise((resolve) => setTimeout(resolve, PLANET_SWALLOW_MS));
+  const pending = switchAppMode(target, true, false);
+  aimAtPlanet(shell);
+  shell.classList.replace("planet-out", "planet-in");
+  setTimeout(() => {
+    shell.classList.remove("planet-in");
+    planet.classList.remove("warping");
+    document.body.classList.remove("planet-warping");
+    planetWarping = false;
+  }, PLANET_EMIT_MS + 40);
+  await pending;
 }
 
 function renderTodoBoard() {
@@ -5188,7 +5223,7 @@ $("project-form").onsubmit = async (event) => {
   await loadState();
   toast("项目已创建");
 };
-$("page-corner").onclick = () => switchAppMode(state.mode === "todos" ? "reports" : "todos");
+$("page-planet").onclick = () => warpAppMode();
 document.querySelectorAll("[data-mode-tab]").forEach((btn) => btn.onclick = () => {
   const target = btn.dataset.modeTab;
   if (target === "settings") {
@@ -5251,10 +5286,10 @@ $("user-delete-form").onsubmit = async (event) => {
 };
 setupVoiceTodoFab();
 restoreQueues();
-$("page-corner").onkeydown = (event) => {
+$("page-planet").onkeydown = (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    switchAppMode(state.mode === "todos" ? "reports" : "todos");
+    warpAppMode();
   }
 };
 $("cancel-report-generation").onclick = () => {

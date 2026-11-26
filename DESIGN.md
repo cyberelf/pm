@@ -1,7 +1,7 @@
 ---
 version: alpha
 name: reports-workspace-design-system
-description: A two-surface local reporting workspace. The 周报工作台 (weekly report workspace) is the primary light surface — white canvas, black primary CTAs, compact Cal Sans display typography, persistent project sidebar, soft-rounded cards (~12px), no decorative page footer. The TODO 看板 (TODO board) is the one intentionally inverted dark surface — a navy three-column kanban with its own board-* accent token set. Both surfaces share one foundation: the same color tokens, type families, button/input/dialog/toast/badge recipes, and the page-corner fold navigation. The weekly report workspace is the source of truth for everything shared. Interface icons come from locally embedded Font Awesome Free SVG definitions.
+description: A two-surface local reporting workspace. The 周报工作台 (weekly report workspace) is the primary light surface — white canvas, black primary CTAs, compact Cal Sans display typography, persistent project sidebar, soft-rounded cards (~12px), no decorative page footer. The TODO 看板 (TODO board) is the one intentionally inverted dark surface — a navy three-column kanban with its own board-* accent token set. Both surfaces share one foundation: the same color tokens, type families, button/input/dialog/toast/badge recipes, and the page-planet switch. The weekly report workspace is the source of truth for everything shared. Interface icons come from locally embedded Font Awesome Free SVG definitions.
 
 colors:
   primary: "#111111"
@@ -292,12 +292,11 @@ components:
     typography: "{typography.display-sm}"
     rounded: "{rounded.lg}"
     padding: 48px
-  page-corner:
-    position: fixed top-right
-    size: 188px x 162px
-    foldSize: 36px (resting) / 104px (hover, focus, turning)
-    typography: "{typography.caption}"
-    textColor: "{colors.ink}" / inverted on the board
+  page-planet:
+    position: fixed top-left (20px, 20px), over the sidebar brand-mark slot
+    size: 36px orb + tilted orbit ring
+    backgroundColor: "{colors.accent}" sphere gradient
+    textColor: "{colors.accent-contrast}"
   todo-column:
     backgroundColor: "{colors.board-column-fill}"
     borderColor: "{colors.board-line}"
@@ -353,7 +352,7 @@ The application built on that foundation is a **two-surface workspace**, and the
 
 **The consistency contract:** the two surfaces may differ in page floor, column composition, and accent mood, but everything shared — color tokens, font families and weights, button/input/dialog/toast/loading/badge/pill recipes, focus treatment, radius and spacing scales — is identical on both, and the weekly report workspace is the source of truth. The board gets its own `board-*` accent token set for column tints and dark-surface text; those tokens never appear on the light workspace, and shared controls are never restyled per-surface.
 
-Both surfaces are joined by the `{component.page-corner}` page fold — a fixed top-right paper fold that flips between the two views. It is the only page-level ornament in the app.
+Both surfaces are joined by the `{component.page-planet}` switch — a small accent planet fixed at the top-left that spins the page between the two views. It is the only page-level ornament in the app.
 
 The app is an operational shell, not a marketing page. Screens end with their working content area and never grow a decorative footer.
 
@@ -385,7 +384,7 @@ The app is an operational shell, not a marketing page. Screens end with their wo
 - Color tokens, font families, the type scale, radius + spacing scales.
 - Buttons (`button-primary`, `button-secondary`, danger), inputs, `text-input` focus treatment, dialogs, toast, loading overlay, badges/status pills.
 - Focus treatment: 2px `{colors.ink}` outline at 2px offset on the light surface; 2px `{colors.board-accent-blue-soft}` outline everywhere on the TODO board, where ink would disappear into the navy floor.
-- The `{component.page-corner}` fold navigation, with labels inverting to `{colors.on-dark}` on the board.
+- The `{component.page-planet}` switch; its hover hint uses the surface's own canvas / ink tokens.
 
 ### Rules
 1. The weekly report workspace wins every disagreement about a shared component. If the board needs a different treatment, that treatment becomes a documented board token or component — never an inline override of a shared recipe.
@@ -610,7 +609,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 ### Page Fold Navigation
 
-**`page-corner`** — The signature shared navigation device: a fixed 188 × 162px zone pinned to the top-right corner, acting as a `role="button"` page fold. At rest a 36px paper triangle (blue-gray gradient, component-scoped art constants — not system tokens) covers the corner; the current page label sits beside it in 17px strong + 9px tracked small caps. On hover / keyboard focus / turn, the fold animates to 104px over 360ms (`cubic-bezier(.25, .9, .3, 1)`), the current label fades out, and the target page label fades in on the fold itself. Clicking flips between 周报 and TODO with a 400ms peel animation and a 280ms view-enter fade on the incoming surface. All motion is disabled under `prefers-reduced-motion`.
+**`page-planet`** — The signature shared navigation device: a 36px accent-gradient orb fixed at the top-left (20px, 20px), a `role="button"` that takes the sidebar brand-mark's slot (the sidebar mark stays as an invisible spacer on desktop) and carries the current page label (周报 / TODO) in 11px display weight; a tilted orbit ring with one moon surrounds it. On hover / keyboard focus the orb scales to 1.08, its bands drift, the moon orbits, and a canvas pill "切换到 <target>" slides in to its right while the sidebar brand text fades out underneath. Clicking spins the orb once on its Y axis over 660ms (the label swaps while edge-on) while the whole `.app-shell` rotates −32° and shrinks into the planet's centre (260ms swallow), the mode switches, and the target page rotates back out of the planet from +32° (400ms emit). Other switches (mobile tab bar) keep the 280ms view-enter fade. Hidden below 768px, where the mobile tab bar switches pages. All motion is disabled under `prefers-reduced-motion`.
 
 - On the board, the labels invert to `{colors.on-dark}` with a text shadow for legibility on the fold.
 - The fold is decorative chrome: its SVG-free gradient + clip-path art is fixed; it never carries state beyond the two page labels.
@@ -665,7 +664,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 
 | Name | Width | Key Changes |
 |---|---|---|
-| Mobile | < 768px | Project switcher becomes horizontal; application title 28→24px; title metadata may wrap; content grids become 1-up; TODO board columns become `minmax(260px, 84vw)` and scroll horizontally; page-corner scales to 85% |
+| Mobile | < 768px | Project switcher becomes horizontal; application title 28→24px; title metadata may wrap; content grids become 1-up; TODO board columns become `minmax(260px, 84vw)` and scroll horizontally; page-planet is hidden (the tab bar switches pages) |
 | Tablet | 768–1024px | Top nav stays horizontal but tightens; nav-pill-group wraps; feature cards 2-up; pricing 2-up; TODO board keeps 3 columns and scrolls horizontally |
 | Desktop | 1024–1440px | Full top-nav with all menu items; 3-up feature cards; 4-up pricing tiers; TODO board 3-up columns at full width |
 | Wide | > 1440px | Same as desktop with more outer breathing room; max content width caps at 1200px (board caps at 1480px) |
@@ -709,7 +708,7 @@ Avatar photos use `{rounded.full}` (perfect circles) at 36px or 40px. Product UI
 - Cal Sans is licensed to Cal.com and not available as a public web font; substitutes are documented in the typography section.
 - The badge pastel set (orange / pink / violet / emerald) is documented from observed avatar fill colors; exact hex values may shift seasonally.
 - The `board-*` accent set is native to this application (tailwind blue/emerald/slate families at translucent alpha), not Cal.com-derived; it is tuned for contrast on `{colors.board-canvas}` and may be re-tuned as one set.
-- Animation and transition timings (calendar slot picker, schedule confirmation, integration grid hover-reveal) are not in scope. The page-fold timings (360ms fold, 400ms peel, 280ms view-enter) are implemented values, not analyzed ones.
+- Animation and transition timings (calendar slot picker, schedule confirmation, integration grid hover-reveal) are not in scope. The page-planet timings (660ms orb turn, 260ms swallow, 400ms emit, 280ms view-enter) are implemented values, not analyzed ones.
 - Form validation states beyond `{component.text-input-focused}` are not extracted — error / success states would need a sign-up or booking flow to confirm.
 - The actual booking widget surface (cal.com/{username}) is the product, not a marketing surface; its spec is out of scope.
 - Avatar photos in testimonial sections sometimes carry pastel circular fills with initials instead of photographs; both treatments coexist on the same page.

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=73" />
+    <link rel="stylesheet" href="/styles.css?v=74" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -28,16 +28,10 @@
         <span id="login-version" class="app-version"></span>
       </form>
     </div>
-    <div id="page-corner" class="page-corner" role="button" tabindex="0" aria-label="切换工作区页面">
-      <span class="page-corner-current">
-        <small>当前页面</small>
-        <strong id="page-current-label">周报</strong>
-      </span>
-      <span class="page-corner-fold">
-        <small>切换到</small>
-        <strong id="page-target-label">TODO</strong>
-      </span>
-      <span class="page-corner-shadow" aria-hidden="true"></span>
+    <div id="page-planet" class="page-planet" role="button" tabindex="0" aria-label="当前页面：周报；切换到 TODO">
+      <span class="planet-orbit" aria-hidden="true"><span class="planet-moon"></span></span>
+      <span class="planet-body" aria-hidden="true"><span id="page-current-label" class="planet-label">周报</span></span>
+      <span class="planet-hint" aria-hidden="true"><small>切换到</small><strong id="page-target-label">TODO</strong></span>
     </div>
     <div class="app-shell">
       <aside id="project-sidebar" class="sidebar">
@@ -552,6 +546,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=79"></script>
+    <script src="/app.js?v=80"></script>
   </body>
 </html>
