@@ -806,7 +806,7 @@ def repos_activity(ctx, project, repo=None):
         Param("workstream", "string", "workstream ID or exact name to file the material under"),
     ),
     read_only=False,
-    role="write",
+    role="upload",
     render={"kind": "message"},
 )
 def materials_add(ctx, project, text=None, title=None, file=None, workstream=None):
@@ -877,7 +877,7 @@ def todo_status(ctx, id, status):
             Param("project", "project", "project to archive into (ID or name)", required=True, flags=("-p", "--project")),
             Param("reason", "string", "closing reason", default="done", flags=("-r", "--reason"))),
     read_only=False,
-    role="write",
+    role="upload",
     render={"kind": "message"},
 )
 def todo_done(ctx, id, project, reason="done"):

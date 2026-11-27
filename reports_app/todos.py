@@ -145,11 +145,11 @@ def close_todo(conn, todo_id, payload, user_id):
         except (TypeError, ValueError) as exc:
             raise ValidationError("invalid project") from exc
         # closing into a project stores a manual material there, so shared
-        # collaborators need at least the write role; owners always can
+        # collaborators need at least the upload role; owners always can
         role = project_role(conn, project_id, user_id)
         if role is None:
             raise ValidationError("project not found")
-        require_role(role, "write")
+        require_role(role, "upload")
         project = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
         material_id = store_manual_material(
             conn,

@@ -1246,7 +1246,7 @@ class Handler(BaseHTTPRequestHandler):
                     if self.workstream_route(conn, method, parts, project_id, role, user_id):
                         return
                 if len(parts) == 6 and parts[3] == "materials" and parts[5] == "workstreams" and method == "PUT":
-                    require_role(role, "write")
+                    require_role(role, "upload")
                     payload = self.body_json()
                     set_material_links(conn, project_id, int(parts[4]), payload.get("primary"), payload.get("related") or [])
                     evaluate_risks(conn, project_id)
@@ -1254,7 +1254,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(workspace(conn, project_id, role))
                     return
                 if len(parts) == 4 and parts[3] == "materials" and method == "POST":
-                    require_role(role, "write")
+                    require_role(role, "upload")
                     payload = self.body_json()
                     chosen = payload.get("workstream_id")
                     if payload.get("source_type") == "manual":
@@ -1272,7 +1272,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.json({"id": material_ids[0], "ids": material_ids}, HTTPStatus.CREATED)
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "PUT":
-                    require_role(role, "write")
+                    require_role(role, "upload")
                     payload = self.body_json()
                     if "summary" in payload:
                         update_material_summary(conn, project_id, int(parts[4]), payload)

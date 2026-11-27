@@ -79,6 +79,7 @@ from reports_app.search_index import chunk_text, embed_texts, search
 from reports_app.server import Handler, LoginRateLimiter, MAX_BODY_BYTES, add_repo, build_tls_server, delete_repo, evaluate_schedules, material_detail, repo_activity_detail, save_plan, save_weekly_update, schedule_due, source_diagnostics, update_repo_notes, update_settings, workspace
 from reports_app.timeutil import current_week_key, iso_now, week_bounds
 import time
+from reports_app.workstreams import set_todo_links, todo_workstream_options
 from reports_app.todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
 from reports_app.voice_todos import (
     build_voice_todo_prompt,
@@ -5359,6 +5360,62 @@ class ProjectSharingTest(unittest.TestCase):
             self.assertEqual(payload["project"]["description"], "协作项目")
             status, _ = self.api(port, "DELETE", f"/api/projects/{self.project_id}/materials/{material_id}", tokens["manage"])
             self.assertEqual(status, 200)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_upload_role_contributes_materials_only(self):
+        uploader_id = auth.create_user(self.conn, "uploader", "secret1", is_admin=False)
+        self.grant(uploader_id, "upload")
+        server, thread = self.start_server()
+        try:
+            port = server.server_port
+            owner_token = self.token_for(port, "darren", "changeme")
+            token = self.token_for(port, "uploader", "secret1")
+            base = f"/api/projects/{self.project_id}"
+            status, payload = self.api(port, "POST", f"{base}/workstreams", owner_token, body=json.dumps({"name": "联调"}))
+            self.assertEqual(status, 201)
+            workstream_id = payload["id"]
+
+            # materials: add (filed under a workstream), edit, relink
+            status, payload = self.api(port, "POST", f"{base}/materials", token, body=json.dumps(
+                {"source_type": "manual", "title": "联调记录", "content": "接口打通", "workstream_id": workstream_id}))
+            self.assertEqual(status, 201)
+            material_id = payload["id"]
+            status, _ = self.api(port, "PUT", f"{base}/materials/{material_id}", token,
+                                 body=json.dumps({"title": "联调记录", "content": "接口打通，待压测"}))
+            self.assertEqual(status, 200)
+            status, payload = self.api(port, "PUT", f"{base}/materials/{material_id}/workstreams", token,
+                                       body=json.dumps({"primary": workstream_id, "related": []}))
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["role"], "upload")
+            status, _ = self.api(port, "DELETE", f"{base}/materials/{material_id}", token)
+            self.assertEqual(status, 403)
+
+            # report, plan, weekly update, generation and workstreams need write
+            denied = [
+                ("PUT", f"{base}/weekly-update", {"completed": "x"}),
+                ("PUT", f"{base}/plan", {"objectives": "x", "milestones": [], "deliverables": []}),
+                ("PUT", f"{base}/reports/{current_week_key('Asia/Shanghai')}", {"content_md": "# x"}),
+                ("POST", f"{base}/generate", {}),
+                ("POST", f"{base}/workstreams", {"name": "新线"}),
+                ("PUT", f"{base}/workstreams/{workstream_id}", {"name": "改名"}),
+                ("POST", f"{base}/workstreams/organize", {}),
+            ]
+            for method, path, body in denied:
+                status, payload = self.api(port, method, path, token, body=json.dumps(body))
+                self.assertEqual(status, 403, path)
+                self.assertIn("读写", payload["error"])
+
+            # TODO archiving and TODO workstream links accept the upload role
+            todo_id = create_todo(self.conn, {"title": "整理纪要"}, uploader_id)
+            self.conn.commit()
+            groups = todo_workstream_options(self.conn, uploader_id)
+            self.assertEqual([g["project_id"] for g in groups], [self.project_id])
+            set_todo_links(self.conn, uploader_id, todo_id, workstream_id)
+            material_id = close_todo(self.conn, todo_id, {"reason": "done", "project_id": self.project_id}, uploader_id)
+            self.assertTrue(material_id)
         finally:
             server.shutdown()
             server.server_close()

@@ -31,3 +31,8 @@
 ## 5. Last access
 
 - [x] `project_shares.last_accessed_at`, touched (throttled to five minutes) by a collaborator's project API requests and CLI operations; 上次访问 column in the share list
+
+## 6. Upload role
+
+- [x] New `upload` (上传资料) role between read and write: material add/edit/summary and material workstream links, TODO workstream links and TODO archiving need upload; weekly update, plan, report, generation, workstreams and 「AI 整理」 stay on write
+- [x] UI: role select and hint list 上传资料; 资料 tab and material 改归属 follow upload, close-TODO dropdown lists upload+ projects; tests cover the upload matrix

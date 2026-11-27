@@ -1,6 +1,9 @@
 """Project sharing: per-project collaborator roles granted by the owner.
 
-Roles are ordered read < write < manage; the project owner (projects.user_id)
+Roles are ordered read < upload < write < manage: upload contributes
+materials (and files them under workstreams) only, write additionally
+adjusts the weekly report, plan and workstreams (AI 整理 included). The
+project owner (projects.user_id)
 sits above every share role and is the only identity that can grant, change,
 or revoke shares. Access checks raise PermissionError so the HTTP layer maps
 them to 403; "no access at all" stays the caller's concern because routes
@@ -14,9 +17,9 @@ from datetime import timedelta
 from .timeutil import iso_now, utc_now
 from .validation import ValidationError
 
-ROLES = ("read", "write", "manage")
+ROLES = ("read", "upload", "write", "manage")
 # the implicit owner role outranks every share role
-ROLE_RANK = {"read": 0, "write": 1, "manage": 2, "owner": 3}
+ROLE_RANK = {"read": 0, "upload": 1, "write": 2, "manage": 3, "owner": 4}
 
 # SQL fragment selecting every project the user may see: owned projects plus
 # projects shared with them. Bind user_id twice.
@@ -24,7 +27,7 @@ ACCESSIBLE_PROJECTS_SQL = (
     "(SELECT id FROM projects WHERE user_id = ? UNION SELECT project_id FROM project_shares WHERE user_id = ?)"
 )
 
-ROLE_NEED_LABELS = {"read": "只读", "write": "读写", "manage": "管理"}
+ROLE_NEED_LABELS = {"read": "只读", "upload": "上传资料", "write": "读写", "manage": "管理"}
 
 # 上次访问 is recorded at most this often per collaborator and project, so
 # browsing a project does not turn every read into a write
@@ -70,10 +73,14 @@ def touch_share_access(conn, project_id, user_id):
     return True
 
 
+def role_at_least(role, need):
+    return role is not None and ROLE_RANK.get(role, -1) >= ROLE_RANK[need]
+
+
 def require_role(role, need):
     """Raise PermissionError (→ HTTP 403) when the role is below what the
     action needs."""
-    if role is None or ROLE_RANK.get(role, -1) < ROLE_RANK[need]:
+    if not role_at_least(role, need):
         if need == "read":
             raise PermissionError("没有访问该项目的权限")
         raise PermissionError(f"该操作需要{ROLE_NEED_LABELS[need]}权限")
@@ -127,7 +134,7 @@ def set_share(conn, project_id, payload):
     project owner."""
     role = payload.get("role") or ""
     if role not in ROLES:
-        raise ValidationError("invalid share role; use read, write, or manage")
+        raise ValidationError("invalid share role; use read, upload, write, or manage")
     target = auth.find_user(conn, payload.get("username"))
     if not target:
         raise ValidationError("user not found")

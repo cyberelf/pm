@@ -8,7 +8,7 @@ material to the most specific line never makes the parent look stale.
 
 Workstreams follow the project's roles. Materials link to workstreams of
 their own project, an account's TODOs link to workstreams of projects it can
-write (one primary plus any related, each marked auto or manual), and weekly
+upload materials to (one primary plus any related, each marked auto or manual), and weekly
 snapshots keep a structured per-line record so the long-range view never has
 to parse report Markdown. Health is derived deterministically.
 """
@@ -18,7 +18,7 @@ import re
 from datetime import date, timedelta
 
 from .members import resolve_owner
-from .sharing import project_role, require_role
+from .sharing import project_role, require_role, role_at_least
 from .timeutil import current_week_key, get_zone, iso_now, parse_iso, utc_now, week_key_for
 from .validation import ValidationError
 
@@ -378,7 +378,7 @@ def auto_link_material(conn, project_id, material_id, workstream_id):
 
 def set_todo_links(conn, user_id, todo_id, primary=None, related=()):
     """Replace a TODO's links; the TODO must be the caller's and every
-    workstream must sit in a project the caller can write."""
+    workstream must sit in a project the caller can upload materials to."""
     if not conn.execute("SELECT 1 FROM todos WHERE id = ? AND user_id = ?", (todo_id, user_id)).fetchone():
         raise ValidationError("TODO not found")
     primary_id, related_ids = _link_ids(primary, related)
@@ -387,7 +387,7 @@ def set_todo_links(conn, user_id, todo_id, primary=None, related=()):
         role = project_role(conn, row["project_id"], user_id) if row else None
         if role is None:
             raise ValidationError("workstream not found")
-        require_role(role, "write")
+        require_role(role, "upload")
     conn.execute("DELETE FROM todo_workstreams WHERE todo_id = ?", (todo_id,))
     now = iso_now()
     for workstream_id in ([primary_id] if primary_id else []) + related_ids:
@@ -476,7 +476,7 @@ def todo_workstream_options(conn, user_id):
         (user_id, user_id),
     ).fetchall():
         role = project_role(conn, project["id"], user_id)
-        if role not in ("owner", "manage", "write"):
+        if not role_at_least(role, "upload"):
             continue
         rows = list_workstreams(conn, project["id"])
         paths = workstream_paths(rows)

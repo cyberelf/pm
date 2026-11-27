@@ -1071,10 +1071,10 @@ function openCloseTodo(id) {
   $("close-todo-title").textContent = todo.title;
   $("close-todo-project").innerHTML = `
     <option value="">不归属项目</option>
-    ${state.projects.filter(projectCanWrite).map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("")}
+    ${state.projects.filter(projectCanUpload).map((project) => `<option value="${project.id}">${escapeHtml(project.name)}</option>`).join("")}
   `;
   const linked = todo.workstreams && todo.workstreams.primary;
-  if (linked && state.projects.some((project) => project.id === linked.project_id && projectCanWrite(project))) {
+  if (linked && state.projects.some((project) => project.id === linked.project_id && projectCanUpload(project))) {
     $("close-todo-project").value = String(linked.project_id);
   }
   $("close-todo-form").elements.reason.value = "";
@@ -1865,16 +1865,26 @@ function projectPaused(p) {
   return p.status === "paused";
 }
 
-// —— 项目共享：owner > manage > write > read，前端据此隐藏对应操作入口 ——
-const SHARE_ROLES = ["read", "write", "manage"];
-const SHARE_ROLE_LABELS = { owner: "所有者", read: "只读", write: "读写", manage: "管理" };
+// —— 项目共享：owner > manage > write > upload > read，前端据此隐藏对应操作入口 ——
+// upload 只能上传/编辑资料并设置资料归属工作线；write 另可调整周报、计划与工作线（含 AI 整理）
+const SHARE_ROLES = ["read", "upload", "write", "manage"];
+const SHARE_ROLE_LABELS = { owner: "所有者", read: "只读", upload: "上传资料", write: "读写", manage: "管理" };
+const SHARE_ROLE_RANK = { read: 0, upload: 1, write: 2, manage: 3, owner: 4 };
+
+function roleAtLeast(role, need) {
+  return (SHARE_ROLE_RANK[role] ?? -1) >= SHARE_ROLE_RANK[need];
+}
 
 function projectRoleOf(p) {
   return p && SHARE_ROLES.includes(p.role) ? p.role : "owner";
 }
 
+function projectCanUpload(p) {
+  return roleAtLeast(projectRoleOf(p), "upload");
+}
+
 function projectCanWrite(p) {
-  return projectRoleOf(p) !== "read";
+  return roleAtLeast(projectRoleOf(p), "write");
 }
 
 function projectCanManage(p) {
@@ -1888,8 +1898,12 @@ function currentProjectRole() {
   return projectRoleOf(state.projects.find((item) => item.id === state.projectId));
 }
 
+function canUploadWorkspace() {
+  return roleAtLeast(currentProjectRole(), "upload");
+}
+
 function canWriteWorkspace() {
-  return currentProjectRole() !== "read";
+  return roleAtLeast(currentProjectRole(), "write");
 }
 
 function canManageWorkspace() {
@@ -2545,7 +2559,7 @@ function materialChip(m, currentWeek, writable) {
     meta: [m.is_primary ? "主归属" : "关联", m.link_source === "auto" ? "AI 归类" : "手动归属"].map(escapeHtml).join(" · "),
     body: (m.summary || "").slice(0, 160),
     primary: `material:${m.id}`,
-    actions: `<button type="button" class="link-button" onclick="previewMaterial(${m.id})">预览</button>${writable ? `<button type="button" class="link-button" onclick="openWorkstreamAssign('material', ${m.id})">改归属</button>` : ""}`,
+    actions: `<button type="button" class="link-button" onclick="previewMaterial(${m.id})">预览</button>${canUploadWorkspace() ? `<button type="button" class="link-button" onclick="openWorkstreamAssign('material', ${m.id})">改归属</button>` : ""}`,
   });
 }
 
@@ -3263,14 +3277,12 @@ function renderSettings(ws) {
             <option value="">加载中…</option>
           </select>
           <select id="share-role-select" aria-label="共享权限">
-            <option value="read">只读</option>
-            <option value="write">读写</option>
-            <option value="manage">管理</option>
+            ${SHARE_ROLES.map((role) => `<option value="${role}">${SHARE_ROLE_LABELS[role]}</option>`).join("")}
           </select>
           <button type="button" id="share-add-button" class="primary" onclick="addProjectShare()">添加成员</button>
         </div>
         <table class="table"><thead><tr><th>成员</th><th>权限</th><th>添加时间</th><th>上次访问</th><th>操作</th></tr></thead><tbody id="share-table-body"><tr><td colspan="5">加载中…</td></tr></tbody></table>
-        <small>只读：查看周报、资料、计划与仓库状态；读写：上传资料、填写本周补充、调整计划和当前周报、生成周报；管理：项目设置、Git 仓库与资料删除。共享成员看不到共享管理入口，也无法把项目再共享给他人。</small>
+        <small>只读：查看周报、资料、计划与仓库状态；上传资料：上传和编辑资料、设置资料归属工作线、把 TODO 归档到项目；读写：另可填写本周补充、调整计划和当前周报、生成周报、维护工作线与 AI 整理；管理：项目设置、Git 仓库与资料删除。共享成员看不到共享管理入口，也无法把项目再共享给他人。</small>
       </div>
     </section>` : ""}
   `;
@@ -3949,7 +3961,7 @@ async function saveWeeklyUpdate(event) {
 }
 
 function renderSources(ws) {
-  const writable = canWriteWorkspace();
+  const writable = canUploadWorkspace();
   const manageable = canManageWorkspace();
   const wsFilter = sourceFilterActive();
   const visible = ws.materials.filter((m) => materialMatchesWorkstream(m, wsFilter));
@@ -3975,7 +3987,7 @@ function renderSources(ws) {
         ${filterHint}
         <div class="upload-actions">
           <button class="primary" type="button" onclick="uploadMaterial()">上传所选文件</button>
-        </div>` : `<p class="share-readonly-hint">只读权限：可预览和下载资料，需要读写权限才能上传。</p>`}
+        </div>` : `<p class="share-readonly-hint">只读权限：可预览和下载资料，需要上传资料权限才能上传。</p>`}
         <table class="table material-table"><thead><tr><th>文件</th><th>提取</th><th>摘要</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${visible.filter(m => m.source_type !== "manual").map((m) => renderUploadedMaterialRow(m, writable, manageable)).join("") || "<tr><td colspan='5'>暂无上传资料。</td></tr>"}</tbody></table>
       </div>
     </section>

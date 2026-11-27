@@ -76,8 +76,15 @@ class FrontendTest(unittest.TestCase):
 
     def test_project_sharing_ui_roles_and_owner_share_panel(self):
         source = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
-        # 角色判定助手：owner > manage > write > read，共享项目行带角色徽标
-        self.assertIn('const SHARE_ROLE_LABELS = { owner: "所有者", read: "只读", write: "读写", manage: "管理" }', source)
+        # 角色判定助手：owner > manage > write > upload > read，共享项目行带角色徽标
+        self.assertIn('const SHARE_ROLES = ["read", "upload", "write", "manage"];', source)
+        self.assertIn('const SHARE_ROLE_LABELS = { owner: "所有者", read: "只读", upload: "上传资料", write: "读写", manage: "管理" }', source)
+        # 上传资料角色：资料页、资料改归属与 TODO 归档按 upload 判定，周报/工作线仍需 write
+        self.assertIn("function canUploadWorkspace()", source)
+        self.assertIn("function projectCanUpload(p)", source)
+        self.assertIn("function renderSources(ws) {\n  const writable = canUploadWorkspace();", source)
+        self.assertIn("${state.projects.filter(projectCanUpload).map", source)
+        self.assertIn("${SHARE_ROLES.map((role) => `<option value=\"${role}\">${SHARE_ROLE_LABELS[role]}</option>`).join(\"\")}", source)
         self.assertIn("function projectRoleOf(p)", source)
         self.assertIn("function projectCanWrite(p)", source)
         self.assertIn("function projectCanManage(p)", source)
@@ -110,8 +117,8 @@ class FrontendTest(unittest.TestCase):
         self.assertIn("async function addProjectShare()", source)
         self.assertIn("async function changeShareRole(userId, role)", source)
         self.assertIn("async function removeProjectShare(userId)", source)
-        # 关闭 TODO 归档下拉只列出可写项目
-        self.assertIn("state.projects.filter(projectCanWrite)", source)
+        # 关闭 TODO 归档下拉只列出可上传资料的项目
+        self.assertIn("state.projects.filter(projectCanUpload)", source)
         # 周报编辑按钮需要写权限
         self.assertIn("${canWriteWorkspace() ? `<button onclick=\"openReportEditor()\">编辑</button>` : \"\"}", source)
 
