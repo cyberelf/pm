@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Flat workstreams inside a project
-The system SHALL let a project hold an ordered list of workstreams, each with a unique name within the project, goal, owner label, status (active, paused or done) and optional target date. Workstreams SHALL have at most two levels (see Sub-workstreams), SHALL follow the project's roles (read views, write creates, edits, reorders and deletes) and SHALL be deleted with their project. Deleting a workstream SHALL remove its links and snapshots but keep the linked materials and TODOs.
+The system SHALL let a project hold an ordered list of workstreams, each with a unique name within the project, goal, owner (a project team member, see Project team members), status (active, paused or done) and optional target date. Workstreams SHALL have at most two levels (see Sub-workstreams), SHALL follow the project's roles (read views, write creates, edits, reorders and deletes) and SHALL be deleted with their project. Deleting a workstream SHALL remove its links and snapshots but keep the linked materials and TODOs.
 
 #### Scenario: Create and edit a workstream
 - **WHEN** a project writer creates a workstream with a name not used in the project
@@ -161,3 +161,18 @@ The system SHALL sync, for each connected repository with its PR or issue switch
 #### Scenario: Manual choice survives
 - **WHEN** a writer moves an issue to another workstream
 - **THEN** later syncs keep that link even if the repository default changes
+
+### Requirement: Project team members
+The system SHALL keep a per-project team (项目组成员) in the project settings. A member SHALL be either linked to an enabled account (its name defaulting to the username) or a free-text name for someone without an account; names SHALL be unique within the project and an account SHALL appear at most once. Every project member SHALL see the team; only managers SHALL add, rename or remove members. A workstream's owner SHALL be chosen from the project's members; renaming a member SHALL rename the owner everywhere it is shown, and removing a member SHALL leave the workstreams it owned without an owner. Free-text owner labels from older data or clients SHALL be matched to, or create, a member of that name, linking an account whose username matches exactly.
+
+#### Scenario: Pick a workstream owner from the team
+- **WHEN** a writer edits a workstream
+- **THEN** the owner field offers the project's members and stores the chosen member
+
+#### Scenario: Migrate free-text owners
+- **WHEN** the service starts on data whose workstreams carry free-text owner labels
+- **THEN** each distinct label becomes a project member once and the workstreams point at it
+
+#### Scenario: Rename or remove a member
+- **WHEN** a manager renames a member or removes it from the team
+- **THEN** the workstreams it owns show the new name, or no owner after removal

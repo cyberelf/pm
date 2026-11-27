@@ -645,6 +645,53 @@ class WorkstreamTest(unittest.TestCase):
         with self.assertRaises(LookupError):
             invoke(ctx, "workstream_show", {"workstream": "不存在", "project": "agent guard"})
 
+    # ------------------------------------------------------------ members
+
+    def test_members_own_workstreams(self):
+        from reports_app.db import migrate_schema
+        from reports_app.members import add_member, list_members, member_candidates, remove_member, update_member
+
+        linked = add_member(self.conn, self.project, {"user_id": self.writer})
+        typed = add_member(self.conn, self.project, {"name": " 高鹏 "})
+        self.assertEqual([(m["name"], m["username"]) for m in list_members(self.conn, self.project)],
+                         [("writer", "writer"), ("高鹏", "")])
+        self.assertNotIn("writer", [u["username"] for u in member_candidates(self.conn, self.project)])
+        with self.assertRaises(ValidationError):
+            add_member(self.conn, self.project, {"name": "高鹏"})
+        with self.assertRaises(ValidationError):
+            add_member(self.conn, self.project, {"user_id": self.writer})
+        other_member = add_member(self.conn, self.other, {"name": "外部"})
+
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付", "owner_member_id": typed})
+        row = self.conn.execute("SELECT owner_member_id, owner_label FROM workstreams WHERE id = ?", (ws,)).fetchone()
+        self.assertEqual(tuple(row), (typed, "高鹏"))
+        with self.assertRaises(ValidationError):
+            update_workstream(self.conn, self.project, ws, {"owner_member_id": other_member})
+        update_workstream(self.conn, self.project, ws, {"goal": "交付"})
+        self.assertEqual(self.conn.execute("SELECT owner_member_id FROM workstreams WHERE id = ?", (ws,)).fetchone()[0], typed)
+        # legacy owner_label writes match or create a member
+        update_workstream(self.conn, self.project, ws, {"owner_label": "史哲昊"})
+        names = [m["name"] for m in list_members(self.conn, self.project)]
+        self.assertEqual(names, ["writer", "高鹏", "史哲昊"])
+        update_workstream(self.conn, self.project, ws, {"owner_member_id": linked})
+        update_member(self.conn, self.project, linked, {"name": "王写"})
+        self.assertEqual(self.conn.execute("SELECT owner_label FROM workstreams WHERE id = ?", (ws,)).fetchone()[0], "王写")
+        self.assertEqual(workstream_overview(self.conn, self.project, self.tz)["workstreams"][0]["owner_label"], "王写")
+        remove_member(self.conn, self.project, linked)
+        row = self.conn.execute("SELECT owner_member_id, owner_label FROM workstreams WHERE id = ?", (ws,)).fetchone()
+        self.assertEqual(tuple(row), (None, ""))
+
+        # migration: free-text owners become members, usernames link accounts
+        self.conn.execute("UPDATE workstreams SET owner_label = 'reader', owner_member_id = NULL WHERE id = ?", (ws,))
+        legacy = create_workstream(self.conn, self.project, {"name": "融资"})
+        self.conn.execute("UPDATE workstreams SET owner_label = '高鹏' WHERE id = ?", (legacy,))
+        migrate_schema(self.conn)
+        migrate_schema(self.conn)
+        members = {m["name"]: m for m in list_members(self.conn, self.project)}
+        self.assertEqual(members["reader"]["user_id"], self.reader)
+        self.assertEqual(members["高鹏"]["workstream_count"], 1)
+        self.assertEqual(self.conn.execute("SELECT owner_member_id FROM workstreams WHERE id = ?", (legacy,)).fetchone()[0], typed)
+
     # ------------------------------------------------------------ API
 
     def test_api_roles_routes_and_workspace(self):
@@ -666,6 +713,17 @@ class WorkstreamTest(unittest.TestCase):
             data = json.loads(response.read() or b"{}")
             client.close()
             return response.status, data
+
+        members = f"/api/projects/{self.project}/members"
+        self.assertEqual(call("writer", "POST", members, {"name": "高鹏"})[0], 403)
+        self.assertEqual(call("writer", "GET", f"{members}/candidates")[0], 403)
+        status, data = call("owner", "POST", members, {"name": "高鹏"})
+        self.assertEqual((status, [m["name"] for m in data["members"]]), (201, ["高鹏"]))
+        member_id = data["id"]
+        self.assertEqual(call("reader", "GET", members)[1]["members"][0]["id"], member_id)
+        self.assertEqual(call("owner", "PUT", f"{members}/{member_id}", {"name": ""})[0], 400)
+        self.assertEqual(call("owner", "DELETE", f"{members}/999999")[0], 404)
+        self.assertEqual(call("outsider", "GET", members)[0], 404)
 
         base = f"/api/projects/{self.project}/workstreams"
         self.assertEqual(call("reader", "POST", base, {"name": "x"})[0], 403)
@@ -698,6 +756,7 @@ class WorkstreamTest(unittest.TestCase):
         material = next(m for m in ws_payload["materials"] if m["id"] == created["id"])
         self.assertEqual(material["workstreams"], {"primary": ids[0], "related": [], "source": "manual"})
         self.assertEqual(len(ws_payload["workstreams"]["workstreams"]), 4)
+        self.assertEqual([m["name"] for m in ws_payload["members"]], ["高鹏"])
         self.conn.commit()  # workspace() evaluates risks on this connection
         status, _ = call("reader", "PUT", f"/api/projects/{self.project}/materials/{created['id']}/workstreams", {"primary": ids[1]})
         self.assertEqual(status, 403)

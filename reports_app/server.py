@@ -109,6 +109,7 @@ from .reports import changed_since_last_success, fail_stale_generation_jobs, gen
 from .task_queue import enqueue_template_generation, enqueue_workstream_job
 from .risks import evaluate_risks, progress_status
 from .search_index import search
+from .members import add_member, list_members, member_candidates, remove_member, update_member
 from .sharing import (
     ACCESSIBLE_PROJECTS_SQL,
     project_role,
@@ -1214,6 +1215,30 @@ class Handler(BaseHTTPRequestHandler):
                     conn.commit()
                     self.json({"shares": shares})
                     return
+                if len(parts) >= 4 and parts[3] == "members":
+                    tail = parts[4:]
+                    if not tail and method == "GET":
+                        self.json({"members": list_members(conn, project_id)})
+                        return
+                    if tail == ["candidates"] and method == "GET":
+                        require_role(role, "manage")
+                        self.json({"candidates": member_candidates(conn, project_id)})
+                        return
+                    if not tail and method == "POST":
+                        require_role(role, "manage")
+                        member_id = add_member(conn, project_id, self.body_json())
+                        conn.commit()
+                        self.json({"id": member_id, "members": list_members(conn, project_id)}, HTTPStatus.CREATED)
+                        return
+                    if len(tail) == 1 and tail[0].isdigit() and method in ("PUT", "DELETE"):
+                        require_role(role, "manage")
+                        if method == "PUT":
+                            update_member(conn, project_id, int(tail[0]), self.body_json())
+                        else:
+                            remove_member(conn, project_id, int(tail[0]))
+                        conn.commit()
+                        self.json({"members": list_members(conn, project_id)})
+                        return
                 if len(parts) >= 4 and parts[3] == "workstreams":
                     if self.workstream_route(conn, method, parts, project_id, role, user_id):
                         return
@@ -1598,6 +1623,7 @@ def workspace(conn, project_id, role="owner"):
         "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue', 'workstream_stale', 'workstream_item_overdue') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
         "workstreams": workstream_overview(conn, project_id, project["timezone"]),
+        "members": list_members(conn, project_id),
         "progress_status": progress_status(conn, project_id),
     }
 

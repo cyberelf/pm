@@ -17,6 +17,7 @@ import json
 import re
 from datetime import date, timedelta
 
+from .members import resolve_owner
 from .sharing import project_role, require_role
 from .timeutil import current_week_key, get_zone, iso_now, parse_iso, utc_now, week_key_for
 from .validation import ValidationError
@@ -178,17 +179,19 @@ def create_workstream(conn, project_id, payload):
     position = conn.execute(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM workstreams WHERE project_id = ?", (project_id,)
     ).fetchone()[0]
+    owner_member_id, owner_label = resolve_owner(conn, project_id, payload)
     cur = conn.execute(
         """
-        INSERT INTO workstreams (project_id, parent_id, name, goal, owner_label, status, target_date, position, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO workstreams (project_id, parent_id, name, goal, owner_member_id, owner_label, status, target_date, position, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
             _parent_id(conn, project_id, payload.get("parent_id")),
             name,
             _text(payload.get("goal"), 2000),
-            _text(payload.get("owner_label"), 60),
+            owner_member_id,
+            owner_label,
             _status(payload.get("status")),
             _target_date(payload.get("target_date")),
             position,
@@ -205,21 +208,23 @@ def update_workstream(conn, project_id, workstream_id, payload):
     if not name:
         raise ValidationError("workstream name is required")
     _assert_unique_name(conn, project_id, name, workstream_id)
+    owner_member_id, owner_label = resolve_owner(conn, project_id, payload, (row["owner_member_id"], row["owner_label"]))
     values = (
         name,
         _text(payload.get("goal", row["goal"]), 2000),
-        _text(payload.get("owner_label", row["owner_label"]), 60),
+        owner_member_id,
+        owner_label,
         _status(payload.get("status", row["status"])),
         _target_date(payload.get("target_date", row["target_date"])),
         _parent_id(conn, project_id, payload["parent_id"], workstream_id) if "parent_id" in payload else row["parent_id"],
     )
-    if values == (row["name"], row["goal"], row["owner_label"], row["status"], row["target_date"], row["parent_id"]):
+    if values == (row["name"], row["goal"], row["owner_member_id"], row["owner_label"], row["status"], row["target_date"], row["parent_id"]):
         return
     conn.execute(
-        "UPDATE workstreams SET name = ?, goal = ?, owner_label = ?, status = ?, target_date = ?, parent_id = ?, updated_at = ? WHERE id = ?",
+        "UPDATE workstreams SET name = ?, goal = ?, owner_member_id = ?, owner_label = ?, status = ?, target_date = ?, parent_id = ?, updated_at = ? WHERE id = ?",
         (*values, iso_now(), workstream_id),
     )
-    if values[5] != row["parent_id"]:
+    if values[6] != row["parent_id"]:
         # a line that changes level goes last among its new siblings
         conn.execute(
             "UPDATE workstreams SET position = (SELECT COALESCE(MAX(position), -1) + 1 FROM workstreams WHERE project_id = ?) WHERE id = ?",
@@ -822,6 +827,7 @@ def _item(row, condition, paths=None, children=None):
         "path": (paths or {}).get(row["id"], row["name"]),
         "children": (children or {}).get(row["id"], []),
         "goal": row["goal"],
+        "owner_member_id": row["owner_member_id"],
         "owner_label": row["owner_label"],
         "status": row["status"],
         "target_date": row["target_date"],

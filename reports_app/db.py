@@ -4,7 +4,7 @@ import secrets
 import sqlite3
 from pathlib import Path
 
-from . import auth
+from . import auth, members
 from .config import (
     ADMIN_PASSWORD_ENV_VAR,
     BOOTSTRAP_ADMIN_USERNAME,
@@ -311,6 +311,20 @@ CREATE TABLE IF NOT EXISTS workstreams (
     UNIQUE(project_id, name)
 );
 
+-- 项目组成员 (members.py): an account (user_id) or a free-text name;
+-- workstreams.owner_member_id points here (added by migrate_schema).
+CREATE TABLE IF NOT EXISTS project_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(project_id, name)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_members_user ON project_members(project_id, user_id) WHERE user_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS material_workstreams (
     material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
     workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
@@ -463,6 +477,8 @@ def migrate_schema(conn):
     workstream_columns = {row["name"] for row in conn.execute("PRAGMA table_info(workstreams)")}
     if "parent_id" not in workstream_columns:
         conn.execute("ALTER TABLE workstreams ADD COLUMN parent_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL")
+    if "owner_member_id" not in workstream_columns:
+        conn.execute("ALTER TABLE workstreams ADD COLUMN owner_member_id INTEGER REFERENCES project_members(id) ON DELETE SET NULL")
     if "workstream_id" not in columns:
         # default workstream for the repository's PR / issue activity
         conn.execute("ALTER TABLE github_repos ADD COLUMN workstream_id INTEGER REFERENCES workstreams(id) ON DELETE SET NULL")
@@ -513,6 +529,8 @@ def migrate_schema(conn):
         "UPDATE projects SET owner = ? WHERE owner = ?",
         (admin["username"], "local-user"),
     )
+    # free-text workstream owners become 项目组成员 (needs users bootstrapped)
+    members.migrate_workstream_owners(conn)
     # the Codex/Claude CLI providers are gone; every project now generates
     # through the internal agent
     conn.execute("UPDATE projects SET report_provider = ? WHERE report_provider != ?", (REPORT_PROVIDER, REPORT_PROVIDER))

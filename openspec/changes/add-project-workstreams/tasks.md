@@ -61,3 +61,9 @@ Live check (2026-11-23, platform 1.3.21, real provider, service temporarily boun
 ## 9. Project plan back in its own tab
 
 - [x] 9.1 项目计划 tab restored (objectives, project-level milestones, read-only workstream milestones linking to their workstream, deliverables, 按目标生成工作线); 风险提醒 stays in 工作线
+
+## 10. Project team members
+
+- [x] 10.1 `project_members` table (account or free-text name) and `workstreams.owner_member_id`; startup migration of free-text owner labels into members
+- [x] 10.2 Members API (list for every role; candidates, add, rename, remove for managers) and `members` in the workspace payload; legacy `owner_label` writes match or create a member
+- [x] 10.3 UI: 设置 → 项目组 sub-tab; the workstream dialog picks its 负责人 from the team; other 负责人 inputs suggest member names
