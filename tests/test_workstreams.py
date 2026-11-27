@@ -673,6 +673,12 @@ class WorkstreamTest(unittest.TestCase):
         update_workstream(self.conn, self.project, ws, {"owner_label": "史哲昊"})
         names = [m["name"] for m in list_members(self.conn, self.project)]
         self.assertEqual(names, ["writer", "高鹏", "史哲昊"])
+        # the linked account can change or be dropped later
+        update_member(self.conn, self.project, typed, {"user_id": self.reader})
+        with self.assertRaises(ValidationError):
+            update_member(self.conn, self.project, linked, {"user_id": self.reader})
+        update_member(self.conn, self.project, typed, {"user_id": None})
+        self.assertEqual([m["user_id"] for m in list_members(self.conn, self.project)][:2], [self.writer, None])
         update_workstream(self.conn, self.project, ws, {"owner_member_id": linked})
         update_member(self.conn, self.project, linked, {"name": "王写"})
         self.assertEqual(self.conn.execute("SELECT owner_label FROM workstreams WHERE id = ?", (ws,)).fetchone()[0], "王写")
@@ -722,6 +728,9 @@ class WorkstreamTest(unittest.TestCase):
         member_id = data["id"]
         self.assertEqual(call("reader", "GET", members)[1]["members"][0]["id"], member_id)
         self.assertEqual(call("owner", "PUT", f"{members}/{member_id}", {"name": ""})[0], 400)
+        status, data = call("owner", "PUT", f"{members}/{member_id}", {"user_id": self.writer})
+        self.assertEqual((status, data["members"][0]["username"]), (200, "writer"))
+        self.assertEqual(call("writer", "PUT", f"{members}/{member_id}", {"user_id": None})[0], 403)
         self.assertEqual(call("owner", "DELETE", f"{members}/999999")[0], 404)
         self.assertEqual(call("outsider", "GET", members)[0], 404)
 

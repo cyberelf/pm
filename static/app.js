@@ -3328,10 +3328,19 @@ function renderMemberRows(members, manage) {
       <td data-label="成员">${manage
         ? `<input value="${escapeAttr(m.name)}" maxlength="60" aria-label="成员名称" onchange="renameProjectMember(${m.id}, this)">`
         : `<strong>${escapeHtml(m.name)}</strong>`}</td>
-      <td data-label="关联账号">${m.username ? escapeHtml(m.username) : "—"}</td>
+      <td data-label="关联账号">${manage
+        ? `<select class="member-account-select" data-member-id="${m.id}" aria-label="${escapeAttr(m.name)} 的关联账号" onchange="relinkProjectMember(${m.id}, this)">${memberAccountOptions(m)}</select>`
+        : (m.username ? escapeHtml(m.username) : "—")}</td>
       <td data-label="负责工作线">${m.workstream_count || 0}</td>
       ${manage ? `<td data-label="操作"><div class="table-actions"><button type="button" class="danger" onclick="removeProjectMember(${m.id})">移除</button></div></td>` : ""}
     </tr>`).join("") || `<tr><td colspan="${manage ? 4 : 3}">还没有项目组成员。</td></tr>`;
+}
+
+// 每行的账号下拉：当前关联账号 + 尚未入组的账号
+function memberAccountOptions(m) {
+  const accounts = [...(m.user_id ? [{ id: m.user_id, username: m.username }] : []), ...(state.memberCandidates || [])];
+  return `<option value="">不关联账号</option>${accounts.map((u) =>
+    `<option value="${u.id}"${u.id === m.user_id ? " selected" : ""}>${escapeHtml(u.username)}</option>`).join("")}`;
 }
 
 async function loadMemberCandidates() {
@@ -3339,11 +3348,25 @@ async function loadMemberCandidates() {
   if (!select) return;
   try {
     const data = await api(`/api/projects/${state.projectId}/members/candidates`);
-    select.innerHTML = `<option value="">不关联账号</option>${(data.candidates || [])
+    state.memberCandidates = data.candidates || [];
+    select.innerHTML = `<option value="">不关联账号</option>${state.memberCandidates
       .map((u) => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join("")}`;
+    document.querySelectorAll(".member-account-select").forEach((el) => {
+      const member = projectMembers().find((m) => m.id === Number(el.dataset.memberId));
+      if (member) el.innerHTML = memberAccountOptions(member);
+    });
   } catch (error) {
     toast(error.message);
   }
+}
+
+async function relinkProjectMember(id, select) {
+  const member = projectMembers().find((m) => m.id === id);
+  if (!member) return;
+  const userId = Number(select.value) || null;
+  if (userId === (member.user_id || null)) return;
+  const ok = await memberRequest(`/${id}`, { method: "PUT", body: JSON.stringify({ user_id: userId }) }, userId ? "关联账号已更新" : "已取消关联账号");
+  if (!ok) select.value = String(member.user_id || "");
 }
 
 async function memberRequest(path, options, message) {
@@ -3351,6 +3374,7 @@ async function memberRequest(path, options, message) {
     await api(`/api/projects/${state.projectId}/members${path}`, options);
     await loadWorkspace();
     if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    if (canManageWorkspace()) loadMemberCandidates();
     toast(message);
     return true;
   } catch (error) {

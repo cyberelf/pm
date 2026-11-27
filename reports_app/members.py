@@ -98,44 +98,57 @@ def _insert(conn, project_id, name, user_id):
 def add_member(conn, project_id, payload):
     """``{"user_id": n}`` links an account (name defaults to its username),
     ``{"name": "..."}`` adds a free-text member. Returns the new id."""
-    user_id = payload.get("user_id")
+    user_id = _account(conn, project_id, payload.get("user_id"))
     name = _name(payload.get("name"))
-    if user_id not in (None, "", 0, "0"):
-        try:
-            user_id = int(user_id)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError("invalid user id") from exc
-        user = conn.execute("SELECT id, username, enabled FROM users WHERE id = ?", (user_id,)).fetchone()
-        if not user:
-            raise ValidationError("user not found")
-        if not user["enabled"]:
-            raise ValidationError("this account is disabled")
-        if conn.execute(
-            "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?", (project_id, user_id)
-        ).fetchone():
-            raise ValidationError(f"账号 {user['username']} 已在项目组中")
-        name = name or user["username"]
-    else:
-        user_id = None
-        if not name:
-            raise ValidationError("请填写成员名称或选择账号")
+    if user_id is not None:
+        name = name or conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()["username"]
+    elif not name:
+        raise ValidationError("请填写成员名称或选择账号")
     _assert_unique_name(conn, project_id, name)
     return _insert(conn, project_id, name, user_id)
 
 
+def _account(conn, project_id, user_id, exclude_member_id=None):
+    """Validated account id for a member link; None for an empty value."""
+    if user_id in (None, "", 0, "0"):
+        return None
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("invalid user id") from exc
+    user = conn.execute("SELECT id, username, enabled FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        raise ValidationError("user not found")
+    if not user["enabled"]:
+        raise ValidationError("this account is disabled")
+    if conn.execute(
+        "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? AND id != ?",
+        (project_id, user_id, exclude_member_id or 0),
+    ).fetchone():
+        raise ValidationError(f"账号 {user['username']} 已在项目组中")
+    return user_id
+
+
 def update_member(conn, project_id, member_id, payload):
+    """Rename a member and/or change its linked account (``user_id``,
+    empty unlinks). The name follows to every workstream it owns."""
     row = get_member(conn, project_id, member_id)
     name = _name(payload.get("name", row["name"]))
     if not name:
         raise ValidationError("成员名称不能为空")
-    if name == row["name"]:
+    user_id = _account(conn, project_id, payload["user_id"], row["id"]) if "user_id" in payload else row["user_id"]
+    if name == row["name"] and user_id == row["user_id"]:
         return
-    _assert_unique_name(conn, project_id, name, row["id"])
+    if name != row["name"]:
+        _assert_unique_name(conn, project_id, name, row["id"])
     now = iso_now()
-    conn.execute("UPDATE project_members SET name = ?, updated_at = ? WHERE id = ?", (name, now, row["id"]))
     conn.execute(
-        "UPDATE workstreams SET owner_label = ?, updated_at = ? WHERE owner_member_id = ?", (name, now, row["id"])
+        "UPDATE project_members SET name = ?, user_id = ?, updated_at = ? WHERE id = ?", (name, user_id, now, row["id"])
     )
+    if name != row["name"]:
+        conn.execute(
+            "UPDATE workstreams SET owner_label = ?, updated_at = ? WHERE owner_member_id = ?", (name, now, row["id"])
+        )
 
 
 def remove_member(conn, project_id, member_id):
