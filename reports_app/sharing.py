@@ -9,7 +9,9 @@ All helpers take an open connection, like auth.py.
 """
 
 from . import auth
-from .timeutil import iso_now
+from datetime import timedelta
+
+from .timeutil import iso_now, utc_now
 from .validation import ValidationError
 
 ROLES = ("read", "write", "manage")
@@ -23,6 +25,10 @@ ACCESSIBLE_PROJECTS_SQL = (
 )
 
 ROLE_NEED_LABELS = {"read": "只读", "write": "读写", "manage": "管理"}
+
+# 上次访问 is recorded at most this often per collaborator and project, so
+# browsing a project does not turn every read into a write
+ACCESS_TOUCH_INTERVAL = timedelta(minutes=5)
 
 
 def project_role(conn, project_id, user_id):
@@ -42,6 +48,28 @@ def project_role(conn, project_id, user_id):
     return share["role"] if share else None
 
 
+def touch_share_access(conn, project_id, user_id):
+    """Record a collaborator's access to a shared project (owners are not
+    tracked). Self-contained: it reads first, writes and commits only its own
+    update, and leaves a connection that already holds a transaction alone so
+    it never commits someone else's writes. Returns True when recorded."""
+    if user_id is None or conn.in_transaction:
+        return False
+    cutoff = (utc_now() - ACCESS_TOUCH_INTERVAL).isoformat()
+    row = conn.execute(
+        "SELECT last_accessed_at FROM project_shares WHERE project_id = ? AND user_id = ?",
+        (project_id, user_id),
+    ).fetchone()
+    if not row or row["last_accessed_at"] >= cutoff:
+        return False
+    conn.execute(
+        "UPDATE project_shares SET last_accessed_at = ? WHERE project_id = ? AND user_id = ?",
+        (iso_now(), project_id, user_id),
+    )
+    conn.commit()
+    return True
+
+
 def require_role(role, need):
     """Raise PermissionError (→ HTTP 403) when the role is below what the
     action needs."""
@@ -59,10 +87,11 @@ def share_rows(conn, project_id):
             "role": row["role"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "last_accessed_at": row["last_accessed_at"],
         }
         for row in conn.execute(
             """
-            SELECT ps.user_id, u.username, ps.role, ps.created_at, ps.updated_at
+            SELECT ps.user_id, u.username, ps.role, ps.created_at, ps.updated_at, ps.last_accessed_at
             FROM project_shares ps JOIN users u ON u.id = ps.user_id
             WHERE ps.project_id = ?
             ORDER BY u.username

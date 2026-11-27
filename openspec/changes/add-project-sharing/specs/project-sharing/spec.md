@@ -26,6 +26,10 @@ The system SHALL restrict viewing and changing the share list (grant, role chang
 - **WHEN** a write or manage collaborator calls the share management API
 - **THEN** the system rejects the request with a permission error
 
+#### Scenario: Owner sees each member's last access
+- **WHEN** the owner lists the share members
+- **THEN** each member shows when it last opened the project through the web UI or CLI (recorded at most every five minutes), or that it never has
+
 ### Requirement: Role-checked project access
 The system SHALL enforce the role hierarchy on every project-scoped API: read may view the workspace, materials, weekly reports, PDF export, repository configuration, and diagnostics; write additionally adds or edits materials and summaries, saves weekly updates and the plan, edits the current-week report, triggers generation, changes risk warning status, and archives TODOs into the project; manage additionally saves project settings and schedules, adds/updates/deletes repositories, refreshes repositories, deletes materials, and pauses or resumes the project.
 

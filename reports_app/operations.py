@@ -35,7 +35,7 @@ from .materials import add_uploaded_materials, store_manual_material
 from .reports import repo_commit_context, repo_extras_context, repo_fetch_switches_on
 from .risks import evaluate_risks
 from .search_index import search
-from .sharing import ACCESSIBLE_PROJECTS_SQL, project_role, require_role
+from .sharing import ACCESSIBLE_PROJECTS_SQL, project_role, require_role, touch_share_access
 from .timeutil import current_week_key, parse_iso, week_bounds, week_key_for
 from .todos import OPEN_STATUSES, close_todo, create_todo, update_todo
 from .validation import ValidationError
@@ -212,7 +212,11 @@ def resolve_project(ctx, ref, role="read"):
     project = next((r for r in rows if str(r["id"]) == ref), None) or next((r for r in rows if r["name"] == ref), None)
     if not project:
         raise LookupError(f"project not found: {ref} (see `project list`)")
-    require_role(project_role(ctx.conn, project["id"], ctx.user_id), role)
+    role_here = project_role(ctx.conn, project["id"], ctx.user_id)
+    require_role(role_here, role)
+    if role_here != "owner" and not ctx.for_agent:
+        # CLI use counts as 上次访问
+        touch_share_access(ctx.conn, project["id"], ctx.user_id)
     return project
 
 

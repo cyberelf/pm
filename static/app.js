@@ -3269,7 +3269,7 @@ function renderSettings(ws) {
           </select>
           <button type="button" id="share-add-button" class="primary" onclick="addProjectShare()">添加成员</button>
         </div>
-        <table class="table"><thead><tr><th>成员</th><th>权限</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="share-table-body"><tr><td colspan="4">加载中…</td></tr></tbody></table>
+        <table class="table"><thead><tr><th>成员</th><th>权限</th><th>添加时间</th><th>上次访问</th><th>操作</th></tr></thead><tbody id="share-table-body"><tr><td colspan="5">加载中…</td></tr></tbody></table>
         <small>只读：查看周报、资料、计划与仓库状态；读写：上传资料、填写本周补充、调整计划和当前周报、生成周报；管理：项目设置、Git 仓库与资料删除。共享成员看不到共享管理入口，也无法把项目再共享给他人。</small>
       </div>
     </section>` : ""}
@@ -3425,9 +3425,10 @@ function renderShareRows() {
         ${SHARE_ROLES.map((role) => `<option value="${role}" ${share.role === role ? "selected" : ""}>${SHARE_ROLE_LABELS[role]}</option>`).join("")}
       </select></td>
       <td data-label="添加时间">${escapeHtml(formatChinaTime(share.created_at))}</td>
+      <td data-label="上次访问">${share.last_accessed_at ? escapeHtml(formatChinaTime(share.last_accessed_at)) : "从未访问"}</td>
       <td data-label="操作"><div class="table-actions"><button type="button" class="danger" onclick="removeProjectShare(${share.user_id})">移除</button></div></td>
     </tr>
-  `).join("") || "<tr><td colspan='4'>还没有共享成员。</td></tr>";
+  `).join("") || "<tr><td colspan='5'>还没有共享成员。</td></tr>";
 }
 
 async function loadProjectShares() {
@@ -3437,7 +3438,7 @@ async function loadProjectShares() {
     renderShareRows();
   } catch (error) {
     const body = $("share-table-body");
-    if (body) body.innerHTML = `<tr><td colspan='4'>${escapeHtml(error.message)}</td></tr>`;
+    if (body) body.innerHTML = `<tr><td colspan='5'>${escapeHtml(error.message)}</td></tr>`;
   }
 }
 

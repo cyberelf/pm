@@ -27,3 +27,7 @@
 
 - [x] Bump `APP_VERSION` in `reports_app/config.py` (platform-only; no git tag, no PyPI release)
 - [x] README feature mention (共享一段)
+
+## 5. Last access
+
+- [x] `project_shares.last_accessed_at`, touched (throttled to five minutes) by a collaborator's project API requests and CLI operations; 上次访问 column in the share list

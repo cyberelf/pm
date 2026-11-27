@@ -118,6 +118,7 @@ from .sharing import (
     set_share,
     share_candidates,
     share_rows,
+    touch_share_access,
 )
 from .task_queue import (
     QueueFullError,
@@ -1083,6 +1084,8 @@ class Handler(BaseHTTPRequestHandler):
                 if role is None:
                     self.error(HTTPStatus.NOT_FOUND, "project not found")
                     return
+                if role != "owner":
+                    touch_share_access(conn, project_id, user_id)
                 if len(parts) == 4 and parts[3] == "workspace" and method == "GET":
                     self.json(workspace(conn, project_id, role))
                     return

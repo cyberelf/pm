@@ -274,6 +274,7 @@ CREATE TABLE IF NOT EXISTS project_shares (
     role TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL DEFAULT '',
     UNIQUE(project_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_project_shares_user ON project_shares(user_id);
@@ -522,6 +523,9 @@ def migrate_schema(conn):
         conn.execute("ALTER TABLE todos ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
     if "starred" not in table_columns["todos"]:
         conn.execute("ALTER TABLE todos ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    share_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project_shares)")}
+    if "last_accessed_at" not in share_columns:
+        conn.execute("ALTER TABLE project_shares ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''")
     assistant_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_messages)")}
     if "tool_trace_json" not in assistant_columns:
         conn.execute("ALTER TABLE assistant_messages ADD COLUMN tool_trace_json TEXT NOT NULL DEFAULT ''")

@@ -5218,6 +5218,18 @@ class ProjectSharingTest(unittest.TestCase):
             status, _ = self.api(port, "DELETE", f"/api/projects/{self.project_id}/shares/{self.read_id}", manage_token)
             self.assertEqual(status, 403)
 
+            # 上次访问: any project request by a collaborator records it (the
+            # manager's 403s above count); a member who never opened it stays empty
+            status, payload = self.api(port, "GET", f"/api/projects/{self.project_id}/shares", owner_token)
+            last = {s["username"]: s["last_accessed_at"] for s in payload["shares"]}
+            self.assertTrue(last["manager"])
+            self.assertEqual(last["reader"], "")
+            from reports_app.sharing import touch_share_access
+            self.assertTrue(touch_share_access(self.conn, self.project_id, self.read_id))
+            self.assertFalse(touch_share_access(self.conn, self.project_id, self.read_id))
+            self.assertFalse(touch_share_access(self.conn, self.project_id, self.owner_id))
+            self.conn.commit()
+
             # revoke cuts access
             status, payload = self.api(port, "DELETE", f"/api/projects/{self.project_id}/shares/{self.read_id}", owner_token)
             self.assertEqual(status, 200)
