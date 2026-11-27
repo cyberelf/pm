@@ -1992,6 +1992,7 @@ function render() {
   renderWorkstreams(ws);
   renderPlan(ws);
   renderSettings(ws);
+  renderMemberDatalist(ws);
   renderUpdates(ws);
   renderSources(ws);
   renderReport(ws);
@@ -2656,7 +2657,7 @@ function renderWorkstreamMilestone(d, m, writable, today) {
       <li class="ws-item is-editing">
         <form class="ws-item-form ws-milestone-form" onsubmit="saveWorkstreamMilestone(event, ${d.id}, ${m.id})">
           <input name="title" maxlength="200" required value="${escapeAttr(m.title || "")}" aria-label="里程碑">
-          <input name="owner_label" maxlength="60" value="${escapeAttr(m.owner_label || "")}" placeholder="负责人" aria-label="负责人">
+          <input name="owner_label" list="project-member-names" maxlength="60" value="${escapeAttr(m.owner_label || "")}" placeholder="负责人" aria-label="负责人">
           <input name="target_date" type="date" value="${escapeAttr(m.target_date || "")}" aria-label="目标日期">
           <select name="status" aria-label="状态">${statusOptions(m.status)}</select>
           ${milestoneMoveSelect(d.id)}
@@ -2694,7 +2695,7 @@ function renderWorkstreamMilestones(d, writable) {
   const addForm = writable ? `
     <form class="ws-item-form ws-item-add" onsubmit="addWorkstreamMilestone(event, ${d.id})">
       <input name="title" maxlength="200" required placeholder="新增里程碑" aria-label="新增里程碑">
-      <input name="owner_label" maxlength="60" placeholder="负责人" aria-label="负责人">
+      <input name="owner_label" list="project-member-names" maxlength="60" placeholder="负责人" aria-label="负责人">
       <input name="target_date" type="date" aria-label="目标日期">
       <button type="submit">添加</button>
     </form>` : "";
@@ -2761,7 +2762,7 @@ function renderWorkstreamItem(d, item, writable, today) {
       <li class="ws-item is-editing">
         <form class="ws-item-form" onsubmit="saveWorkstreamItem(event, ${d.id}, ${item.id})">
           <input name="title" maxlength="200" required value="${escapeAttr(item.title)}" aria-label="待跟踪项">
-          <input name="owner_label" maxlength="60" value="${escapeAttr(item.owner_label || "")}" placeholder="负责人" aria-label="负责人">
+          <input name="owner_label" list="project-member-names" maxlength="60" value="${escapeAttr(item.owner_label || "")}" placeholder="负责人" aria-label="负责人">
           <input name="due_date" type="date" value="${escapeAttr(item.due_date || "")}" aria-label="截止日期">
           <span class="row"><button class="primary" type="submit">保存</button><button type="button" onclick="editWorkstreamItem(null)">取消</button></span>
         </form>
@@ -2794,7 +2795,7 @@ function renderWorkstreamItems(d, writable) {
   const addForm = writable ? `
     <form class="ws-item-form ws-item-add" onsubmit="addWorkstreamItem(event, ${d.id})">
       <input name="title" maxlength="200" required placeholder="新增待跟踪项" aria-label="新增待跟踪项">
-      <input name="owner_label" maxlength="60" placeholder="负责人" aria-label="负责人">
+      <input name="owner_label" list="project-member-names" maxlength="60" placeholder="负责人" aria-label="负责人">
       <input name="due_date" type="date" aria-label="截止日期">
       <button type="submit">添加</button>
     </form>` : "";
@@ -2877,7 +2878,13 @@ function openWorkstreamDialog(id, parentId = null) {
   form.elements.id.value = item ? String(item.id) : "";
   form.elements.name.value = item?.name || "";
   form.elements.goal.value = item?.goal || "";
-  form.elements.owner_label.value = item?.owner_label || "";
+  const ownerSelect = form.elements.owner_member_id;
+  const members = projectMembers();
+  const ownerId = item?.owner_member_id || "";
+  ownerSelect.innerHTML = `<option value="">未指定</option>${members.map((m) =>
+    `<option value="${m.id}">${escapeHtml(m.name)}${m.username && m.username !== m.name ? `（${escapeHtml(m.username)}）` : ""}</option>`).join("")}`;
+  ownerSelect.value = String(ownerId);
+  $("workstream-owner-hint").classList.toggle("hidden", members.length > 0);
   form.elements.target_date.value = item?.target_date || "";
   form.elements.status.value = item?.status || "active";
   $("workstream-dialog").showModal();
@@ -2890,7 +2897,7 @@ async function submitWorkstreamForm(event) {
   const body = {
     name: form.elements.name.value.trim(),
     goal: form.elements.goal.value,
-    owner_label: form.elements.owner_label.value.trim(),
+    owner_member_id: Number(form.elements.owner_member_id.value) || null,
     target_date: form.elements.target_date.value,
     status: form.elements.status.value,
   };
@@ -3192,6 +3199,7 @@ function renderSettings(ws) {
   $("tab-settings").innerHTML = `
     <div class="source-tabs" role="tablist" aria-label="设置分类">
       <button type="button" data-subtab="project" role="tab" onclick="switchSettingsSubTab('project')">项目设置</button>
+      <button type="button" data-subtab="members" role="tab" onclick="switchSettingsSubTab('members')">项目组</button>
       <button type="button" data-subtab="git" role="tab" onclick="switchSettingsSubTab('git')">Git 仓库</button>
       <button type="button" data-subtab="diagnostics" role="tab" onclick="switchSettingsSubTab('diagnostics')">系统诊断</button>
       ${owner ? `<button type="button" data-subtab="sharing" role="tab" onclick="switchSettingsSubTab('sharing')">共享</button>` : ""}
@@ -3214,6 +3222,18 @@ function renderSettings(ws) {
           <button type="button" onclick="addSchedule()">+ 添加时间点</button>
         </div>
       </form>
+    </section>
+    <section id="settings-sub-members" class="source-view hidden" role="tabpanel">
+      <div class="panel">
+        <div class="panel-head"><h2>项目组成员</h2><span>工作线负责人从这里选择${manage ? "" : " · 只读"}</span></div>
+        ${manage ? `
+        <div class="row share-add-row member-add-row">
+          <select id="member-user-select" aria-label="选择账号"><option value="">不关联账号</option></select>
+          <input id="member-name-input" maxlength="60" placeholder="成员名称（选了账号可留空）" aria-label="成员名称" onkeydown="if (event.key === 'Enter') { event.preventDefault(); addProjectMember(); }">
+          <button type="button" class="primary" onclick="addProjectMember()">添加成员</button>
+        </div>` : ""}
+        <table class="table"><thead><tr><th>成员</th><th>关联账号</th><th>负责工作线</th>${manage ? "<th>操作</th>" : ""}</tr></thead><tbody id="member-table-body">${renderMemberRows(ws.members || [], manage)}</tbody></table>
+      </div>
     </section>
     <section id="settings-sub-git" class="source-view hidden" role="tabpanel">
       <div class="panel">
@@ -3280,7 +3300,7 @@ function switchSettingsSubTab(tab) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  ["project", "git", "diagnostics", "sharing"].forEach((name) => {
+  ["project", "members", "git", "diagnostics", "sharing"].forEach((name) => {
     const view = root.querySelector(`#settings-sub-${name}`);
     if (view) view.classList.toggle("hidden", name !== tab);
   });
@@ -3288,6 +3308,85 @@ function switchSettingsSubTab(tab) {
     loadProjectShares();
     loadShareCandidates();
   }
+  if (tab === "members" && canManageWorkspace()) loadMemberCandidates();
+}
+
+// —— 项目组成员：账号或手填姓名；工作线负责人从这里选择 ——
+
+function renderMemberDatalist(ws) {
+  const list = $("project-member-names");
+  if (list) list.innerHTML = (ws.members || []).map((m) => `<option value="${escapeAttr(m.name)}"></option>`).join("");
+}
+
+function projectMembers() {
+  return state.workspace?.members || [];
+}
+
+function renderMemberRows(members, manage) {
+  return members.map((m) => `
+    <tr>
+      <td data-label="成员">${manage
+        ? `<input value="${escapeAttr(m.name)}" maxlength="60" aria-label="成员名称" onchange="renameProjectMember(${m.id}, this)">`
+        : `<strong>${escapeHtml(m.name)}</strong>`}</td>
+      <td data-label="关联账号">${m.username ? escapeHtml(m.username) : "—"}</td>
+      <td data-label="负责工作线">${m.workstream_count || 0}</td>
+      ${manage ? `<td data-label="操作"><div class="table-actions"><button type="button" class="danger" onclick="removeProjectMember(${m.id})">移除</button></div></td>` : ""}
+    </tr>`).join("") || `<tr><td colspan="${manage ? 4 : 3}">还没有项目组成员。</td></tr>`;
+}
+
+async function loadMemberCandidates() {
+  const select = $("member-user-select");
+  if (!select) return;
+  try {
+    const data = await api(`/api/projects/${state.projectId}/members/candidates`);
+    select.innerHTML = `<option value="">不关联账号</option>${(data.candidates || [])
+      .map((u) => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join("")}`;
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function memberRequest(path, options, message) {
+  try {
+    await api(`/api/projects/${state.projectId}/members${path}`, options);
+    await loadWorkspace();
+    if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    toast(message);
+    return true;
+  } catch (error) {
+    toast(error.message);
+    return false;
+  }
+}
+
+async function addProjectMember() {
+  const userId = Number($("member-user-select")?.value) || null;
+  const name = ($("member-name-input")?.value || "").trim();
+  if (!userId && !name) {
+    toast("请选择账号或填写成员名称");
+    return;
+  }
+  await memberRequest("", { method: "POST", body: JSON.stringify({ user_id: userId, name }) }, "已添加项目组成员");
+}
+
+async function renameProjectMember(id, input) {
+  const name = input.value.trim();
+  const member = projectMembers().find((m) => m.id === id);
+  if (!member || name === member.name) return;
+  if (!name) {
+    input.value = member.name;
+    toast("成员名称不能为空");
+    return;
+  }
+  if (!(await memberRequest(`/${id}`, { method: "PUT", body: JSON.stringify({ name }) }, "成员名称已更新"))) input.value = member.name;
+}
+
+async function removeProjectMember(id) {
+  const member = projectMembers().find((m) => m.id === id);
+  if (!member) return;
+  const owned = member.workstream_count ? `，其负责的 ${member.workstream_count} 条工作线将变为未指定负责人` : "";
+  if (!window.confirm(`从项目组移除「${member.name}」${owned}？`)) return;
+  await memberRequest(`/${id}`, { method: "DELETE" }, "已移除项目组成员");
 }
 
 // —— 共享成员管理（仅项目所有者）：显式按钮即时保存，不走表单自动保存 ——
@@ -3725,7 +3824,7 @@ function renderPlanItems(items, withWorkstream = false) {
     <div class="row plan-item">
       ${withWorkstream ? `<input type="hidden" name="id" value="${escapeAttr(item.id || "")}">` : ""}
       <input name="title" placeholder="标题" value="${escapeAttr(item.title || "")}">
-      <input name="owner_label" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
+      <input name="owner_label" list="project-member-names" placeholder="负责人" value="${escapeAttr(item.owner_label || "")}">
       <input name="target_date" type="date" value="${escapeAttr(item.target_date || "")}">
       <select name="status">${statusOptions(item.status)}</select>
       ${withWorkstream ? milestoneWorkstreamSelect(item.workstream_id) : ""}

@@ -1696,8 +1696,11 @@ globalThis.fetch = async (path, options) => {
     throw new Error(`parent should move with its children: ${reorder.options.body}`);
   }
   document.getElementById("workstream-form").elements = Object.fromEntries(
-    ["id", "name", "goal", "owner_label", "target_date", "status"].map((name) => [name, { value: "" }]));
+    ["id", "name", "goal", "owner_member_id", "target_date", "status"].map((name) => [name, { value: "" }]));
+  state.workspace = { ...(state.workspace || {}), members: [{ id: 5, name: "高鹏", username: "", workstream_count: 1 }] };
   openWorkstreamDialog(null, 11);
+  const ownerSelect = document.getElementById("workstream-form").elements.owner_member_id;
+  if (!ownerSelect.innerHTML.includes('<option value="5">高鹏</option>')) throw new Error("owner select should list project members");
   const parentSelect = document.getElementById("workstream-parent-select");
   if (parentSelect.value !== "11" || parentSelect.innerHTML.includes('value="13"')) throw new Error("sub-workstream dialog should preset the parent and list only top-level lines");
 

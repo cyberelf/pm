@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>周报工作台</title>
     <meta name="theme-color" content="#ffffff" />
-    <link rel="stylesheet" href="/styles.css?v=74" />
+    <link rel="stylesheet" href="/styles.css?v=75" />
   </head>
   <body>
     <div id="login-view" class="login-view hidden">
@@ -367,6 +367,7 @@
       </form>
     </dialog>
 
+    <datalist id="project-member-names"></datalist>
     <dialog id="workstream-dialog">
       <form method="dialog" id="workstream-form" class="modal-form">
         <h2 id="workstream-dialog-title">新建工作线</h2>
@@ -374,7 +375,10 @@
         <label>名称 <input name="name" required maxlength="60" placeholder="例如：东风交付" /></label>
         <label>目标 <textarea name="goal" maxlength="2000" placeholder="这条线要达成什么、范围包括什么"></textarea></label>
         <div class="grid-2 workstream-form-row">
-          <label>负责人 <input name="owner_label" maxlength="60" /></label>
+          <label>负责人
+            <select name="owner_member_id" aria-label="负责人"><option value="">未指定</option></select>
+            <small id="workstream-owner-hint" class="hidden">在 设置 → 项目组 添加成员后可选</small>
+          </label>
           <label>目标日期 <input name="target_date" type="date" /></label>
         </div>
         <div class="grid-2 workstream-form-row">
@@ -546,6 +550,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=80"></script>
+    <script src="/app.js?v=81"></script>
   </body>
 </html>

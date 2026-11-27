@@ -924,6 +924,15 @@ span.autosave-status { text-align: left; }
 .share-readonly-hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
 .share-add-row { margin-bottom: 12px; }
 .share-add-row select { min-width: 150px; }
+.member-add-row { flex-wrap: nowrap; }
+#member-table-body td { vertical-align: middle; }
+.member-add-row select { flex: 0 0 180px; width: 180px; }
+.member-add-row input { flex: 1 1 auto; width: auto; min-width: 0; }
+.member-add-row button { flex: none; }
+@media (max-width: 640px) {
+  .member-add-row { flex-wrap: wrap; }
+  .member-add-row select, .member-add-row input { flex: 1 1 100%; width: 100%; }
+}
 .status {
   display: inline-flex;
   max-width: 100%;
