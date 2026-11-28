@@ -67,3 +67,8 @@ Live check (2026-11-23, platform 1.3.21, real provider, service temporarily boun
 - [x] 10.1 `project_members` table (account or free-text name) and `workstreams.owner_member_id`; startup migration of free-text owner labels into members
 - [x] 10.2 Members API (list for every role; candidates, add, rename, remove for managers) and `members` in the workspace payload; legacy `owner_label` writes match or create a member
 - [x] 10.3 UI: 设置 → 项目组 sub-tab; the workstream dialog picks its 负责人 from the team; other 负责人 inputs suggest member names
+
+## 11. Closing workstreams
+
+- [x] 11.1 关闭 / 重新打开 in the detail panel (status done shown as 已关闭); closing a parent closes its children, an open child reopens a closed parent
+- [x] 11.2 Progress view and matrix hide closed workstreams by default with a per-viewer 显示已关闭 toggle

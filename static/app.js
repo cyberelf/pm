@@ -62,6 +62,7 @@ const state = {
   workstreamItemEditing: null,
   todoWorkstreamOptions: [],
   workstreamCollapsed: readWorkstreamCollapsed(),
+  workstreamShowClosed: readWorkstreamShowClosed(),
   workstreamMilestoneEditing: null,
   settingsSubTab: "project",
   projectShares: [],
@@ -2097,14 +2098,44 @@ function toggleWorkstreamCollapse(event, id) {
   renderWorkstreams(state.workspace);
 }
 
+function readWorkstreamShowClosed() {
+  try {
+    return localStorage.getItem("workstreamShowClosed") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function toggleWorkstreamShowClosed() {
+  state.workstreamShowClosed = !state.workstreamShowClosed;
+  try {
+    localStorage.setItem("workstreamShowClosed", state.workstreamShowClosed ? "1" : "0");
+  } catch {
+    // per-viewer convenience only
+  }
+  renderWorkstreams(state.workspace);
+}
+
+// closed (done) lines are hidden unless the viewer asks to see them
+function wsShown(item) {
+  return state.workstreamShowClosed || item.status !== "done";
+}
+
+function wsShownKids(item) {
+  return (item.children || []).filter((id) => {
+    const kid = workstreamById(id);
+    return kid && wsShown(kid);
+  });
+}
+
 // children of a collapsed parent are hidden; the parent's health already rolls them up
 function wsVisible(items) {
-  return items.filter((item) => !item.parent_id || !state.workstreamCollapsed.has(item.parent_id));
+  return items.filter((item) => wsShown(item) && (!item.parent_id || !state.workstreamCollapsed.has(item.parent_id)));
 }
 
 // reserve: some line has children, so top-level lines keep the fold column aligned
 function wsNameLine(item, reserve = false) {
-  const kids = (item.children || []).length;
+  const kids = wsShownKids(item).length;
   const collapsed = state.workstreamCollapsed.has(item.id);
   const fold = kids
     ? `<button type="button" class="ws-fold" aria-expanded="${!collapsed}" aria-label="${collapsed ? "展开" : "收起"} ${kids} 条子工作线" onclick="toggleWorkstreamCollapse(event, ${item.id})" onkeydown="event.stopPropagation()"><span class="ws-chevron${collapsed ? " is-collapsed" : ""}"></span></button>`
@@ -2115,7 +2146,7 @@ function wsNameLine(item, reserve = false) {
 }
 
 function wsRowClass(item) {
-  return `${item.parent_id ? " is-child" : ""}${(item.children || []).length ? " is-parent" : ""}`;
+  return `${item.parent_id ? " is-child" : ""}${wsShownKids(item).length ? " is-parent" : ""}${item.status === "done" ? " is-closed" : ""}`;
 }
 
 function wsDay(value) {
@@ -2152,7 +2183,7 @@ function renderWorkstreamProgress(data, items) {
     const show = current || index % labelEvery === 0;
     return `<span class="ws-scale-week${current ? " is-current" : ""}" title="${escapeAttr(`${week.week_key}（${week.start} 起）`)}">${show ? escapeHtml(wsShortWeek(week.week_key)) : ""}</span>`;
   }).join("");
-  const reserve = items.some((item) => (item.children || []).length);
+  const reserve = items.some((item) => wsShown(item) && wsShownKids(item).length);
   const rows = wsVisible(items).map((item) => {
     const cells = Object.fromEntries((item.cells || []).map((cell) => [cell.week_key, cell]));
     const segments = timeline.map((week) => {
@@ -2214,8 +2245,9 @@ function renderWorkstreamSummary(data, items) {
     const cell = (item.cells || []).find((c) => c.week_key === data.current_week);
     return cell && cell.snapshot && cell.snapshot.status === "advanced";
   }).length;
-  const open = items.reduce((sum, item) => sum + (item.items_open || 0), 0);
-  const overdue = items.reduce((sum, item) => sum + (item.items_overdue || 0), 0);
+  const live = items.filter((item) => item.status !== "done");
+  const open = live.reduce((sum, item) => sum + (item.items_open || 0), 0);
+  const overdue = live.reduce((sum, item) => sum + (item.items_overdue || 0), 0);
   const risks = (state.workspace?.risks || []).filter((risk) => risk.status === "active").length;
   const stat = (value, label, tone = "") => `<div class="ws-stat${tone ? ` ${tone}` : ""}"><strong>${value}</strong><span>${label}</span></div>`;
   return `
@@ -2230,8 +2262,8 @@ function renderWorkstreamSummary(data, items) {
 }
 
 const WS_SNAPSHOT_LABELS = { advanced: "有进展", steady: "无明显进展", blocked: "受阻" };
-const WS_STATUS_LABELS = { active: "进行中", paused: "暂停", done: "已完成" };
-const WS_HEALTH_LABELS = { "on track": "进展顺利", "at risk": "有风险", blocked: "受阻", paused: "暂停", complete: "已完成" };
+const WS_STATUS_LABELS = { active: "进行中", paused: "暂停", done: "已关闭" };
+const WS_HEALTH_LABELS = { "on track": "进展顺利", "at risk": "有风险", blocked: "受阻", paused: "暂停", complete: "已关闭" };
 
 function workstreamList() {
   return state.workspace?.workstreams?.workstreams || [];
@@ -2319,7 +2351,7 @@ function renderWorkstreams(ws) {
   }
   const head = (data.weeks || []).map((week) =>
     `<th class="ws-week${week === data.current_week ? " is-current" : ""}" scope="col" title="${escapeAttr(week)}">${escapeHtml(wsShortWeek(week))}</th>`).join("");
-  const reserve = items.some((item) => (item.children || []).length);
+  const reserve = items.some((item) => wsShown(item) && wsShownKids(item).length);
   const rows = wsVisible(items).map((item) => {
     const meta = [item.owner_label, item.status !== "active" ? WS_STATUS_LABELS[item.status] : "", item.target_date ? `截止 ${item.target_date}` : ""]
       .filter(Boolean).map(escapeHtml).join(" · ");
@@ -2334,6 +2366,11 @@ function renderWorkstreams(ws) {
       </tr>`;
   }).join("");
   const progress = state.workstreamView !== "matrix";
+  const closedCount = items.filter((item) => item.status === "done").length;
+  const closedToggle = closedCount
+    ? `<button type="button" class="ws-closed-toggle" aria-pressed="${state.workstreamShowClosed}" onclick="toggleWorkstreamShowClosed()">${state.workstreamShowClosed ? "隐藏已关闭" : `显示已关闭 ${closedCount}`}</button>`
+    : "";
+  const shownCount = items.filter(wsShown).length;
   const viewSwitch = `
     <div class="source-tabs ws-view-switch" role="tablist" aria-label="工作线视图">
       <button type="button" role="tab" class="${progress ? "active" : ""}" aria-selected="${progress}" onclick="setWorkstreamView('progress')">进展</button>
@@ -2352,9 +2389,9 @@ function renderWorkstreams(ws) {
     <div class="panel">
       <div class="panel-head"><h2>工作线</h2><span>${progress ? "过去 8 周进展与后续节点" : `近 ${(data.weeks || []).length} 周`} · 点击一行查看详情</span></div>
       ${toolbar}
-      <div class="row ws-view-row">${viewSwitch}</div>
+      <div class="row ws-view-row">${viewSwitch}${closedToggle}</div>
       ${renderWorkstreamSummary(data, items)}
-      ${body}
+      ${shownCount ? body : `<p class="workstream-empty">工作线都已关闭。</p>`}
       <div class="row workstream-footer">
         <button type="button" onclick="showWorkstreamMaterials('none')">未归类资料 ${data.unassigned_materials}</button>
         ${legend}
@@ -2475,7 +2512,10 @@ function renderWorkstreamDetail() {
           <button type="button" onclick="openWorkstreamDialog(${d.id})">编辑</button>
           <button type="button" onclick="moveWorkstream(${d.id}, -1)" ${index <= 0 ? "disabled" : ""}>上移</button>
           <button type="button" onclick="moveWorkstream(${d.id}, 1)" ${index < 0 || index >= order.length - 1 ? "disabled" : ""}>下移</button>
-          ${d.parent ? "" : `<button type="button" onclick="openWorkstreamDialog(null, ${d.id})">＋ 子工作线</button>`}` : ""}
+          ${d.parent || d.status === "done" ? "" : `<button type="button" onclick="openWorkstreamDialog(null, ${d.id})">＋ 子工作线</button>`}
+          ${d.status === "done"
+            ? `<button type="button" onclick="setWorkstreamClosed(${d.id}, false)">重新打开</button>`
+            : `<button type="button" onclick="setWorkstreamClosed(${d.id}, true)">关闭</button>`}` : ""}
         <button type="button" onclick="showWorkstreamMaterials(${d.id})">在过程资料中查看</button>
         ${writable ? `<button type="button" class="danger" onclick="deleteWorkstream(${d.id})">删除</button>` : ""}
       </div>
@@ -3005,6 +3045,35 @@ async function moveWorkstream(id, delta) {
   items.forEach((w) => { if (!ids.includes(w.id)) ids.push(w.id); });
   await api(`/api/projects/${state.projectId}/workstreams/reorder`, { method: "POST", body: JSON.stringify({ ids }) });
   await loadWorkspace();
+}
+
+async function setWorkstreamClosed(id, closed) {
+  const item = workstreamById(id);
+  const name = item ? item.name : "";
+  if (closed) {
+    const open = item ? wsOpenKids(item) : 0;
+    const kids = open ? `它的 ${open} 条未关闭子工作线也会一起关闭。` : "";
+    if (!window.confirm(`关闭工作线「${name}」？关闭后默认不再展示，AI 整理也不再更新它。${kids}`)) return;
+  }
+  try {
+    await api(`/api/projects/${state.projectId}/workstreams/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ status: closed ? "done" : "active" }),
+    });
+    if (closed && !state.workstreamShowClosed && state.workstreamId === id) {
+      state.workstreamId = null;
+      state.workstreamDetail = null;
+    }
+    await loadWorkspace();
+    if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    toast(closed ? `工作线「${name}」已关闭` : `工作线「${name}」已重新打开`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function wsOpenKids(item) {
+  return (item.children || []).filter((kid) => workstreamById(kid)?.status !== "done").length;
 }
 
 async function deleteWorkstream(id) {

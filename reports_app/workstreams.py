@@ -180,6 +180,8 @@ def create_workstream(conn, project_id, payload):
         "SELECT COALESCE(MAX(position), -1) + 1 FROM workstreams WHERE project_id = ?", (project_id,)
     ).fetchone()[0]
     owner_member_id, owner_label = resolve_owner(conn, project_id, payload)
+    parent_id = _parent_id(conn, project_id, payload.get("parent_id"))
+    status = _status(payload.get("status"))
     cur = conn.execute(
         """
         INSERT INTO workstreams (project_id, parent_id, name, goal, owner_member_id, owner_label, status, target_date, position, created_at, updated_at)
@@ -187,19 +189,26 @@ def create_workstream(conn, project_id, payload):
         """,
         (
             project_id,
-            _parent_id(conn, project_id, payload.get("parent_id")),
+            parent_id,
             name,
             _text(payload.get("goal"), 2000),
             owner_member_id,
             owner_label,
-            _status(payload.get("status")),
+            status,
             _target_date(payload.get("target_date")),
             position,
             now,
             now,
         ),
     )
+    if status != "done" and parent_id:
+        _reopen_parent(conn, parent_id, now)
     return cur.lastrowid
+
+
+def _reopen_parent(conn, parent_id, now):
+    """An open sub-workstream never sits under a closed parent."""
+    conn.execute("UPDATE workstreams SET status = 'active', updated_at = ? WHERE id = ? AND status = 'done'", (now, parent_id))
 
 
 def update_workstream(conn, project_id, workstream_id, payload):
@@ -220,10 +229,19 @@ def update_workstream(conn, project_id, workstream_id, payload):
     )
     if values == (row["name"], row["goal"], row["owner_member_id"], row["owner_label"], row["status"], row["target_date"], row["parent_id"]):
         return
+    now = iso_now()
     conn.execute(
         "UPDATE workstreams SET name = ?, goal = ?, owner_member_id = ?, owner_label = ?, status = ?, target_date = ?, parent_id = ?, updated_at = ? WHERE id = ?",
-        (*values, iso_now(), workstream_id),
+        (*values, now, workstream_id),
     )
+    if values[4] == "done" and row["status"] != "done":
+        # closing a parent closes its sub-workstreams too
+        conn.execute(
+            "UPDATE workstreams SET status = 'done', updated_at = ? WHERE parent_id = ? AND status != 'done'",
+            (now, workstream_id),
+        )
+    elif values[4] != "done" and values[6] and (row["status"] == "done" or values[6] != row["parent_id"]):
+        _reopen_parent(conn, values[6], now)
     if values[6] != row["parent_id"]:
         # a line that changes level goes last among its new siblings
         conn.execute(

@@ -83,7 +83,7 @@ The system SHALL include the project's workstreams and each new material's works
 - **THEN** the evidence lists the workstreams and tags each new material with its primary workstream name
 
 ### Requirement: Long-range workstream view
-The system SHALL provide a 工作线 workspace view with a workstream × week matrix (next to the progress view) over the last eight project weeks (snapshot status and summary per cell, the current week's linked material count when no snapshot exists) and a detail panel with goal, fields, linked milestones, the snapshot timeline, linked materials and the viewer's own linked open TODOs. Sources SHALL be filterable by workstream (including 未归类), and materials added while a workstream filter is active SHALL be linked to it.
+The system SHALL provide a 工作线 workspace view with a workstream × week matrix (next to the progress view) over the last eight project weeks (snapshot status and summary per cell, the current week's linked material count when no snapshot exists) and a detail panel with goal, fields, linked milestones, the snapshot timeline, linked materials and the viewer's own linked open TODOs. Sources SHALL be filterable by workstream (including 未归类), and materials added while a workstream filter is active SHALL be linked to it. Writers SHALL close (关闭) or reopen (重新打开) a workstream from its detail panel; the progress view and matrix SHALL hide closed workstreams by default and offer a per-viewer 显示已关闭 toggle with the closed count.
 
 #### Scenario: Open the matrix
 - **WHEN** a reader opens the 工作线 tab
@@ -130,11 +130,15 @@ The 工作线 tab SHALL offer a progress view, the default, next to the week mat
 - **THEN** each workstream shows its weekly status lane, upcoming milestones and target date against today, and how many tracking items are open or overdue
 
 ### Requirement: Sub-workstreams
-The system SHALL let a top-level workstream hold sub-workstreams (子工作线) of the same project, one level deep: a sub-workstream SHALL NOT have children, a workstream with children SHALL NOT be placed under another, and names SHALL stay unique across both levels. Sub-workstreams SHALL carry their own links, snapshots, tracking items, milestones and warnings. An active parent's displayed health SHALL be the worst of its own and its active children's, naming the children that pulled it down, and a parent's staleness SHALL count material linked to its children. Deleting a parent SHALL turn its children into top-level workstreams. Lists SHALL show children right under their parent (`parent / name` as the path), the progress view and matrix SHALL let a viewer fold a parent's children, a parent's sources filter SHALL include its children's materials, and the agent SHALL prefer the most specific line when classifying and summarise a parent across its children without copying their follow-ups.
+The system SHALL let a top-level workstream hold sub-workstreams (子工作线) of the same project, one level deep: a sub-workstream SHALL NOT have children, a workstream with children SHALL NOT be placed under another, and names SHALL stay unique across both levels. Sub-workstreams SHALL carry their own links, snapshots, tracking items, milestones and warnings. An active parent's displayed health SHALL be the worst of its own and its active children's, naming the children that pulled it down, and a parent's staleness SHALL count material linked to its children. Deleting a parent SHALL turn its children into top-level workstreams. Closing a workstream (status done, shown as 已关闭) SHALL also close its open children, and reopening or creating an open child under a closed parent SHALL reopen the parent, so an open line never sits under a closed one. Lists SHALL show children right under their parent (`parent / name` as the path), the progress view and matrix SHALL let a viewer fold a parent's children, a parent's sources filter SHALL include its children's materials, and the agent SHALL prefer the most specific line when classifying and summarise a parent across its children without copying their follow-ups.
 
 #### Scenario: Nesting depth
 - **WHEN** a writer tries to create a workstream under a sub-workstream
 - **THEN** the system rejects it
+
+#### Scenario: Close and reopen a parent
+- **WHEN** a writer closes a parent workstream and later reopens one of its sub-workstreams
+- **THEN** closing marks the parent and all its children 已关闭, and reopening the child makes the parent active again while its other children stay closed
 
 #### Scenario: Parent rolls up a child at risk
 - **WHEN** a sub-workstream has an overdue tracking item

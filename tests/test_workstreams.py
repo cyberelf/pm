@@ -424,6 +424,22 @@ class WorkstreamTest(unittest.TestCase):
         delete_workstream(self.conn, self.project, parent)
         self.assertIsNone(self.overview_item(child)["parent_id"])
 
+    def test_closing_parent_closes_children_and_reopening_child_reopens_parent(self):
+        parent = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": parent})
+        paused = create_workstream(self.conn, self.project, {"name": "标定", "parent_id": parent, "status": "paused"})
+        status = lambda wid: self.overview_item(wid)["status"]
+        update_workstream(self.conn, self.project, parent, {"status": "done"})
+        self.assertEqual([status(w) for w in (parent, child, paused)], ["done", "done", "done"])
+        self.assertEqual(self.overview_item(parent)["health"], "complete")
+        update_workstream(self.conn, self.project, child, {"status": "active"})
+        self.assertEqual([status(w) for w in (parent, child, paused)], ["active", "active", "done"])
+        update_workstream(self.conn, self.project, parent, {"status": "done"})
+        create_workstream(self.conn, self.project, {"name": "新子线", "parent_id": parent})
+        self.assertEqual(status(parent), "active")  # a new open child reopens its parent
+        update_workstream(self.conn, self.project, child, {"status": "done"})
+        self.assertEqual(status(parent), "active")  # closing a child leaves the parent open
+
     def test_parent_health_rolls_up_and_counts_child_activity(self):
         parent = create_workstream(self.conn, self.project, {"name": "东风交付"})
         child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": parent})
