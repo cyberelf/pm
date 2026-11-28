@@ -72,3 +72,10 @@ Live check (2026-11-23, platform 1.3.21, real provider, service temporarily boun
 
 - [x] 11.1 关闭 / 重新打开 in the detail panel (status done shown as 已关闭); closing a parent closes its children, an open child reopens a closed parent
 - [x] 11.2 Progress view and matrix hide closed workstreams by default with a per-viewer 显示已关闭 toggle
+
+## 12. Workstream sub-tabs, project risks and TODO follow-ups
+
+- [x] 12.1 Opening a workstream shows its detail in a closable sub-tab of 工作线 next to 全部工作线
+- [x] 12.2 风险提醒 moves to the project's 总览 tab
+- [x] 12.3 待跟踪项 merged into TODO: `todos.source`, migration of open items to TODOs of the 负责人 account or project owner, `workstream_items` dropped, `workstream_item_overdue` retired
+- [x] 12.4 AI 整理 adds follow-ups as TODOs and closes only its own unedited ones; owner sees members' linked TODOs read-only; add a TODO from the workstream view

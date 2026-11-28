@@ -83,7 +83,7 @@ The system SHALL include the project's workstreams and each new material's works
 - **THEN** the evidence lists the workstreams and tags each new material with its primary workstream name
 
 ### Requirement: Long-range workstream view
-The system SHALL provide a 工作线 workspace view with a workstream × week matrix (next to the progress view) over the last eight project weeks (snapshot status and summary per cell, the current week's linked material count when no snapshot exists) and a detail panel with goal, fields, linked milestones, the snapshot timeline, linked materials and the viewer's own linked open TODOs. Sources SHALL be filterable by workstream (including 未归类), and materials added while a workstream filter is active SHALL be linked to it. Writers SHALL close (关闭) or reopen (重新打开) a workstream from its detail panel; the progress view and matrix SHALL hide closed workstreams by default and offer a per-viewer 显示已关闭 toggle with the closed count.
+The system SHALL provide a 工作线 workspace view with a workstream × week matrix (next to the progress view) over the last eight project weeks (snapshot status and summary per cell, the current week's linked material count when no snapshot exists) and a detail view with goal, fields, linked milestones, the snapshot timeline, linked materials and the linked TODOs (see Workstream TODOs). Opening a workstream SHALL show its detail in its own closable sub-tab of the 工作线 tab (next to a 全部工作线 tab holding the board), so several workstreams can stay open without scrolling below the board. Sources SHALL be filterable by workstream (including 未归类), and materials added while a workstream filter is active SHALL be linked to it. Writers SHALL close (关闭) or reopen (重新打开) a workstream from its detail panel; the progress view and matrix SHALL hide closed workstreams by default and offer a per-viewer 显示已关闭 toggle with the closed count.
 
 #### Scenario: Open the matrix
 - **WHEN** a reader opens the 工作线 tab
@@ -101,7 +101,7 @@ The system SHALL expose read-only `workstream_list` and `workstream_show` operat
 - **THEN** it can call `workstream_show` for the bound project and receive that workstream's snapshots, milestones and linked materials
 
 ### Requirement: Locked past weeks and incremental organisation
-The system SHALL treat past project weeks as locked for workstream snapshots: manual and agent snapshots SHALL only be written for the current project week, except the one-time history initialisation. The project's first successful 「AI 整理」 SHALL classify every unassigned material and fill snapshots that are missing for active workstreams from archived reports of the last eight weeks; every later run SHALL only classify materials created this week and refresh this week's snapshots and tracking items.
+The system SHALL treat past project weeks as locked for workstream snapshots: manual and agent snapshots SHALL only be written for the current project week, except the one-time history initialisation. The project's first successful 「AI 整理」 SHALL classify every unassigned material and fill snapshots that are missing for active workstreams from archived reports of the last eight weeks; every later run SHALL only classify materials created this week and refresh this week's snapshots and follow-up TODOs.
 
 #### Scenario: Manual snapshot for a past week
 - **WHEN** a writer records a snapshot for a week before the current one
@@ -111,26 +111,26 @@ The system SHALL treat past project weeks as locked for workstream snapshots: ma
 - **WHEN** 「AI 整理」 runs for a project that was organised before
 - **THEN** only unassigned materials created this week are classified, past snapshots are left as they are, and the job summary starts with 本周
 
-### Requirement: Workstream tracking items
-The system SHALL keep shared tracking items (待跟踪项) per workstream with title, optional owner and due date, and open/done status, visible to every project member and editable by writers. The agent SHALL be able to add follow-ups found in the current week's evidence (marked as agent items, skipping titles that match an existing item of the workstream) and close only its own open items; a person's edit SHALL turn an item into a manual one. An open item past its due date SHALL mark the workstream at risk and raise a medium `workstream_item_overdue` warning that does not block the project status.
+### Requirement: Workstream TODOs
+The system SHALL keep a workstream's follow-ups as ordinary TODOs linked to it (the former 待跟踪项 are migrated: each open item becomes an open TODO, done items are dropped). TODOs SHALL stay private to their account: the workstream view SHALL show a viewer their own linked TODOs, and the project owner SHALL also see the members' linked TODOs read-only. A member with upload access SHALL be able to add a TODO from the workstream view, which lands on their own TODO board linked to the workstream. 「AI 整理」 SHALL add follow-ups found in the current week's evidence as TODOs (marked AI 整理, skipping titles that match a TODO already linked to the workstream) on the board of the workstream 负责人's account when that account can open the project, else of the project owner, and SHALL close only its own TODOs that nobody has edited; a person's title or description edit SHALL take a TODO out of the agent's hands. TODOs carry no due date and raise no warnings.
 
 #### Scenario: Agent follow-up
 - **WHEN** this week's evidence for a workstream mentions a new follow-up
-- **THEN** 「AI 整理」 adds it as an AI item, and a later run that sees it finished closes it while manual items stay open
+- **THEN** 「AI 整理」 adds it as an AI TODO on the 负责人's (or project owner's) board linked to the workstream, and a later run that sees it finished closes it while manual or edited TODOs stay open
 
-#### Scenario: Overdue item
-- **WHEN** an open item's due date has passed
-- **THEN** the workstream health is 有风险 and the risk list shows a medium warning for it
+#### Scenario: Owner sees members' TODOs
+- **WHEN** a member links one of their TODOs to a workstream
+- **THEN** the project owner sees it read-only in the workstream view while other members do not
 
 ### Requirement: Visual progress view
-The 工作线 tab SHALL offer a progress view, the default, next to the week matrix: a summary of workstream health counts, current-week progress and open or overdue tracking items, and one lane per workstream covering the last eight weeks plus the future weeks up to the latest target, milestone or due date (at least 4, at most 26), with past weeks colored by snapshot status, milestone and target markers placed by date, a today line, and tracking-item completion.
+The 工作线 tab SHALL offer a progress view, the default, next to the week matrix: a summary of workstream health counts, current-week progress and open linked TODOs, and one lane per workstream covering the last eight weeks plus the future weeks up to the latest target or milestone date (at least 4, at most 26), with past weeks colored by snapshot status, milestone and target markers placed by date, a today line, and linked-TODO completion (counting the TODOs the viewer may see).
 
 #### Scenario: Reading the progress view
 - **WHEN** a member opens the 工作线 tab
-- **THEN** each workstream shows its weekly status lane, upcoming milestones and target date against today, and how many tracking items are open or overdue
+- **THEN** each workstream shows its weekly status lane, upcoming milestones and target date against today, and how many linked TODOs are open
 
 ### Requirement: Sub-workstreams
-The system SHALL let a top-level workstream hold sub-workstreams (子工作线) of the same project, one level deep: a sub-workstream SHALL NOT have children, a workstream with children SHALL NOT be placed under another, and names SHALL stay unique across both levels. Sub-workstreams SHALL carry their own links, snapshots, tracking items, milestones and warnings. An active parent's displayed health SHALL be the worst of its own and its active children's, naming the children that pulled it down, and a parent's staleness SHALL count material linked to its children. Deleting a parent SHALL turn its children into top-level workstreams. Closing a workstream (status done, shown as 已关闭) SHALL also close its open children, and reopening or creating an open child under a closed parent SHALL reopen the parent, so an open line never sits under a closed one. Lists SHALL show children right under their parent (`parent / name` as the path), the progress view and matrix SHALL let a viewer fold a parent's children, a parent's sources filter SHALL include its children's materials, and the agent SHALL prefer the most specific line when classifying and summarise a parent across its children without copying their follow-ups.
+The system SHALL let a top-level workstream hold sub-workstreams (子工作线) of the same project, one level deep: a sub-workstream SHALL NOT have children, a workstream with children SHALL NOT be placed under another, and names SHALL stay unique across both levels. Sub-workstreams SHALL carry their own links, snapshots, TODOs, milestones and warnings. An active parent's displayed health SHALL be the worst of its own and its active children's, naming the children that pulled it down, and a parent's staleness SHALL count material linked to its children. Deleting a parent SHALL turn its children into top-level workstreams. Closing a workstream (status done, shown as 已关闭) SHALL also close its open children, and reopening or creating an open child under a closed parent SHALL reopen the parent, so an open line never sits under a closed one. Lists SHALL show children right under their parent (`parent / name` as the path), the progress view and matrix SHALL let a viewer fold a parent's children, a parent's sources filter SHALL include its children's materials, and the agent SHALL prefer the most specific line when classifying and summarise a parent across its children without copying their follow-ups.
 
 #### Scenario: Nesting depth
 - **WHEN** a writer tries to create a workstream under a sub-workstream
@@ -141,11 +141,11 @@ The system SHALL let a top-level workstream hold sub-workstreams (子工作线) 
 - **THEN** closing marks the parent and all its children 已关闭, and reopening the child makes the parent active again while its other children stay closed
 
 #### Scenario: Parent rolls up a child at risk
-- **WHEN** a sub-workstream has an overdue tracking item
-- **THEN** the sub-workstream and its parent both show 有风险, and only the sub-workstream raises the warning
+- **WHEN** a sub-workstream's target date has passed
+- **THEN** the sub-workstream and its parent both show 受阻, and only the sub-workstream raises the warning
 
-### Requirement: Project plan tab and risks inside the workstream tab
-The 工作线 tab SHALL hold the risk list, and the project plan SHALL live in its own 项目计划 tab, which SHALL also list every workstream's milestones read-only with a link to their workstream. Each milestone SHALL have a stable id and belong to one workstream or to the project: a workstream's milestones SHALL be added, edited, completed, moved or deleted in its detail panel, and the 项目计划 tab SHALL edit the objectives, project-level milestones (assigning one to a workstream moves it there) and deliverables without touching workstream milestones. The 风险提醒 panel SHALL list this week's deterministic warnings with the project progress status, linking workstream warnings to their workstream. An overdue milestone of an active workstream SHALL be reported only by `workstream_overdue`; `overdue_milestone` SHALL cover project-level milestones and those of inactive workstreams.
+### Requirement: Project plan tab and project risks
+The project's 总览 tab SHALL hold the risk list, and the project plan SHALL live in its own 项目计划 tab, which SHALL also list every workstream's milestones read-only with a link to their workstream. Each milestone SHALL have a stable id and belong to one workstream or to the project: a workstream's milestones SHALL be added, edited, completed, moved or deleted in its detail panel, and the 项目计划 tab SHALL edit the objectives, project-level milestones (assigning one to a workstream moves it there) and deliverables without touching workstream milestones. The 风险提醒 panel SHALL list this week's deterministic warnings with the project progress status, linking workstream warnings to their workstream. An overdue milestone of an active workstream SHALL be reported only by `workstream_overdue`; `overdue_milestone` SHALL cover project-level milestones and those of inactive workstreams.
 
 #### Scenario: Move a project milestone into a workstream
 - **WHEN** a writer picks a workstream for a project-level milestone in 项目计划
@@ -156,7 +156,7 @@ The 工作线 tab SHALL hold the risk list, and the project plan SHALL live in i
 - **THEN** the risk list shows the workstream's overdue warning and no separate milestone warning
 
 ### Requirement: PR and issue activity per workstream
-The system SHALL sync, for each connected repository with its PR or issue switch on, the pull/merge requests and issues updated in the current project week during 「AI 整理」, and SHALL store those the report run already fetched without new remote calls. Each item SHALL be linked to at most one workstream: a person's choice first (kept for later weeks), else an earlier agent link, else the repository's default workstream, else the internal agent's classification. Linked items SHALL be snapshot and tracking-item evidence, SHALL count as activity for the staleness rule, and SHALL be listed in the workstream detail and per-week lanes; unlinked items of the week SHALL be listed for manual assignment.
+The system SHALL sync, for each connected repository with its PR or issue switch on, the pull/merge requests and issues updated in the current project week during 「AI 整理」, and SHALL store those the report run already fetched without new remote calls. Each item SHALL be linked to at most one workstream: a person's choice first (kept for later weeks), else an earlier agent link, else the repository's default workstream, else the internal agent's classification. Linked items SHALL be snapshot and follow-up evidence, SHALL count as activity for the staleness rule, and SHALL be listed in the workstream detail and per-week lanes; unlinked items of the week SHALL be listed for manual assignment.
 
 #### Scenario: Repository default
 - **WHEN** a repository has a default workstream and one of its PRs is merged this week

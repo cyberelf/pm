@@ -54,7 +54,7 @@ def assemble_context(conn, project_id, week_key=None):
     # three sections never diverge mid-assembly
     auth_info = git_auth_for_user(conn, project["user_id"])
     from .plans import load_plan, workstream_milestones
-    from .workstreams import list_workstreams, workstream_paths
+    from .workstreams import list_workstreams, open_todos_for_prompt, workstream_paths
 
     workstream_rows = list_workstreams(conn, project_id)
     workstream_names = workstream_paths(workstream_rows)
@@ -110,13 +110,7 @@ def assemble_context(conn, project_id, week_key=None):
                     {k: m.get(k, "") for k in ("title", "target_date", "status")}
                     for m in workstream_milestones(plan_milestones, row["id"])
                 ],
-                "open_items": [
-                    {"title": item["title"], "due_date": item["due_date"]}
-                    for item in conn.execute(
-                        "SELECT title, due_date FROM workstream_items WHERE workstream_id = ? AND status = 'open' ORDER BY id LIMIT 10",
-                        (row["id"],),
-                    )
-                ],
+                "open_items": [{"title": item["title"]} for item in open_todos_for_prompt(conn, row["id"], limit=10)],
             }
             for row in workstream_rows
         ],

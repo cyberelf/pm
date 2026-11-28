@@ -598,6 +598,7 @@ body.todo-drag-in-progress { cursor: grabbing; user-select: none; -webkit-user-s
 .todo-close-reason span { color: var(--muted); font-size: 11px; font-weight: 600; }
 .todo-project { width: fit-content; border-radius: 9999px; background: var(--success-soft); padding: 4px 10px; color: var(--success-ink); font-size: 12px; font-weight: 500; }
 .todo-card-meta { color: var(--muted-soft); font-size: 11px; }
+.todo-source { border-radius: 9999px; padding: 1px 7px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: inherit; font-size: 11px; white-space: nowrap; }
 .todo-card-star {
   position: absolute; top: 8px; right: 8px; z-index: 1;
   display: grid; place-items: center;
@@ -1522,6 +1523,17 @@ span.ws-tag { cursor: default; }
 
 /* 工作线进展视图: summary strip, week lanes with milestones/target markers, tracking items */
 .ws-view-row { margin-bottom: 12px; }
+.ws-subtabs { display: flex; gap: 4px; margin-bottom: 14px; overflow-x: auto; border-bottom: 1px solid var(--hairline); scrollbar-width: thin; }
+.ws-subtab { flex: none; display: inline-flex; align-items: center; max-width: 240px; margin-bottom: -1px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.ws-subtab > button[role="tab"] { min-width: 0; min-height: 36px; display: inline-flex; align-items: center; gap: 6px; border: 0; padding: 8px 12px; background: transparent; color: var(--muted); font-weight: 500; }
+.ws-subtab > button[role="tab"] > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-subtab:hover { background: var(--surface-soft); }
+.ws-subtab.active { border-color: var(--hairline); background: var(--canvas); }
+.ws-subtab.active > button[role="tab"] { color: var(--ink); font-weight: 600; }
+.ws-subtab-close { width: 22px; height: 22px; min-height: 0; flex: none; margin-right: 6px; border: 0; border-radius: 9999px; padding: 0; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; }
+.ws-subtab-close:hover { background: var(--surface-strong); color: var(--ink); }
+.ws-todo-add { grid-template-columns: minmax(0, 1fr) auto; }
+.ws-item.is-others .ws-item-title { color: var(--muted); }
 .ws-view-switch button { min-height: 30px; padding: 5px 14px; }
 .ws-closed-toggle { min-height: 30px; padding: 5px 12px; margin-left: auto; }
 .ws-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; }

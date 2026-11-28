@@ -55,11 +55,12 @@ const state = {
   tab: "overview",
   sourceTab: "manual",
   sourceWorkstreamFilter: "all",
-  workstreamId: null,
+  workstreamId: null, // the open 工作线 sub-tab; null shows the board
+  workstreamTabs: [],
+  workstreamTabsProject: null,
   workstreamDetail: null,
   workstreamAssign: null,
   workstreamView: readWorkstreamView(),
-  workstreamItemEditing: null,
   todoWorkstreamOptions: [],
   workstreamCollapsed: readWorkstreamCollapsed(),
   workstreamShowClosed: readWorkstreamShowClosed(),
@@ -948,7 +949,7 @@ function renderTodoCard(todo) {
         ${todo.close_reason ? `<div class="todo-close-reason"><span>关闭原因</span><div class="todo-markdown">${todo.close_reason_html}</div></div>` : ""}
         ${todo.project_name ? `<span class="todo-project">${escapeHtml(todo.project_name)}</span>` : ""}
       ` : ""}
-      <div class="todo-card-meta"><span>更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</span>${todoWorkstreamTag(todo)}</div>
+      <div class="todo-card-meta"><span>更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</span>${todo.source === "auto" ? `<span class="todo-source" title="AI 整理从工作线资料中提取，编辑后不再被 AI 自动关闭">AI 整理</span>` : ""}${todoWorkstreamTag(todo)}</div>
       ${(openActions || archive || remove) ? `<div class="todo-card-actions">${openActions}${archive}${remove}</div>` : ""}
     </article>
   `;
@@ -2052,6 +2053,7 @@ function renderOverview(ws) {
         <div class="row"><button onclick="switchTab('report')">打开周报</button></div>
       </div>
     </div>
+    ${renderProjectRisks(ws)}
     ${renderOverviewWorkstreams(ws)}
   `;
 }
@@ -2155,12 +2157,12 @@ function wsDay(value) {
 }
 
 function wsItemsSide(item) {
-  const total = (item.items_open || 0) + (item.items_done || 0);
+  const total = (item.todos_open || 0) + (item.todos_done || 0);
   if (!total) return `<span class="ws-progress-none">—</span>`;
-  const pct = Math.round(((item.items_done || 0) / total) * 100);
+  const pct = Math.round(((item.todos_done || 0) / total) * 100);
   return `
-    <span class="ws-items-bar" role="img" aria-label="待跟踪项完成 ${item.items_done}/${total}"><span style="width:${pct}%"></span></span>
-    <small>${item.items_open} 待跟踪${item.items_overdue ? ` · <b class="is-overdue">${item.items_overdue} 逾期</b>` : ""}</small>`;
+    <span class="ws-items-bar" role="img" aria-label="TODO 完成 ${item.todos_done}/${total}"><span style="width:${pct}%"></span></span>
+    <small>${item.todos_open} 未完成</small>`;
 }
 
 function renderWorkstreamProgress(data, items) {
@@ -2230,7 +2232,7 @@ function renderWorkstreamProgress(data, items) {
         <div class="ws-progress-row ws-progress-head">
           <div class="ws-progress-name">工作线</div>
           <div class="ws-progress-track ws-progress-scale">${scale}${todayLine}</div>
-          <div class="ws-progress-side">待跟踪项</div>
+          <div class="ws-progress-side">TODO</div>
         </div>
         ${rows}
       </div>
@@ -2245,9 +2247,7 @@ function renderWorkstreamSummary(data, items) {
     const cell = (item.cells || []).find((c) => c.week_key === data.current_week);
     return cell && cell.snapshot && cell.snapshot.status === "advanced";
   }).length;
-  const live = items.filter((item) => item.status !== "done");
-  const open = live.reduce((sum, item) => sum + (item.items_open || 0), 0);
-  const overdue = live.reduce((sum, item) => sum + (item.items_overdue || 0), 0);
+  const open = items.filter((item) => item.status !== "done").reduce((sum, item) => sum + (item.todos_open || 0), 0);
   const risks = (state.workspace?.risks || []).filter((risk) => risk.status === "active").length;
   const stat = (value, label, tone = "") => `<div class="ws-stat${tone ? ` ${tone}` : ""}"><strong>${value}</strong><span>${label}</span></div>`;
   return `
@@ -2256,7 +2256,7 @@ function renderWorkstreamSummary(data, items) {
       ${stat(count("at risk"), "有风险", count("at risk") ? "is-warning" : "")}
       ${stat(count("blocked"), "受阻", count("blocked") ? "is-error" : "")}
       ${stat(`${advanced}/${active.length}`, "本周有进展")}
-      ${stat(open, overdue ? `待跟踪 · ${overdue} 逾期` : "待跟踪", overdue ? "is-error" : "")}
+      ${stat(open, "未完成 TODO")}
       ${stat(risks, "风险提醒", risks ? "is-warning" : "")}
     </div>`;
 }
@@ -2303,25 +2303,93 @@ function wsCell(cell, currentWeek) {
   return `<td class="ws-cell is-empty${current}" ${weekAttr}><span aria-label="无记录">—</span></td>`;
 }
 
-// board, detail and risks render into their own slots so one re-render never resets the others
+// sub-tabs, board and detail render into their own slots so one re-render never resets the others
 function workstreamLayout() {
   const root = $("tab-workstreams");
   if (!root) return false;
   if (!$("ws-board")) {
-    root.innerHTML = `<div id="ws-board"></div><div id="workstream-detail"></div><div id="ws-risks"></div>`;
+    root.innerHTML = `<div id="ws-subtabs"></div><div id="ws-board"></div><div id="workstream-detail"></div>`;
   }
   return true;
+}
+
+// each opened workstream gets a closable sub-tab next to the board
+function renderWorkstreamSubtabs() {
+  const el = $("ws-subtabs");
+  if (!el) return;
+  const tabs = state.workstreamTabs.map((id) => workstreamById(id)).filter(Boolean);
+  $("ws-board").classList.toggle("hidden", !!state.workstreamId);
+  $("workstream-detail").classList.toggle("hidden", !state.workstreamId);
+  if (!tabs.length) {
+    el.innerHTML = "";
+    return;
+  }
+  const tab = (active, label, open, close = "") => `
+    <span class="ws-subtab${active ? " active" : ""}">
+      <button type="button" role="tab" aria-selected="${active}" onclick="${open}">${label}</button>${close}
+    </span>`;
+  el.innerHTML = `
+    <div class="ws-subtabs" role="tablist" aria-label="工作线页签">
+      ${tab(!state.workstreamId, "全部工作线", "showWorkstreamBoard()")}
+      ${tabs.map((w) => tab(state.workstreamId === w.id,
+        `${wsHealthDot(w.health)}<span>${escapeHtml(w.name)}</span>`,
+        `openWorkstreamTab(${w.id})`,
+        `<button type="button" class="ws-subtab-close" aria-label="关闭页签：${escapeAttr(w.name)}" onclick="closeWorkstreamTab(${w.id})">×</button>`)).join("")}
+    </div>`;
+}
+
+function scrollWorkstreamsIntoView() {
+  const root = $("tab-workstreams");
+  if (root?.getBoundingClientRect && root.getBoundingClientRect().top < 0) root.scrollIntoView({ block: "start" });
+}
+
+async function openWorkstreamTab(id) {
+  if (!workstreamById(id)) return;
+  if (!state.workstreamTabs.includes(id)) state.workstreamTabs.push(id);
+  state.workstreamId = id;
+  if (state.workstreamDetail?.id !== id) state.workstreamDetail = null;
+  renderWorkstreamSubtabs();
+  renderWorkstreamDetail();
+  scrollWorkstreamsIntoView();
+  await loadWorkstreamDetail(id);
+}
+
+function showWorkstreamBoard() {
+  state.workstreamId = null;
+  renderWorkstreamSubtabs();
+  scrollWorkstreamsIntoView();
+}
+
+function closeWorkstreamTab(id) {
+  const index = state.workstreamTabs.indexOf(id);
+  if (index < 0) return;
+  state.workstreamTabs.splice(index, 1);
+  if (state.workstreamId !== id) {
+    renderWorkstreamSubtabs();
+    return;
+  }
+  const next = state.workstreamTabs[Math.min(index, state.workstreamTabs.length - 1)];
+  if (next) openWorkstreamTab(next);
+  else showWorkstreamBoard();
 }
 
 function renderWorkstreams(ws) {
   if (!workstreamLayout()) return;
   const board = $("ws-board");
-  if (state.workstreamDetail && state.workstreamDetail.projectId !== ws.project.id) {
+  const data = ws.workstreams || { workstreams: [], weeks: [], unassigned_materials: 0 };
+  const items = data.workstreams || [];
+  if (state.workstreamTabsProject !== ws.project.id) {
+    state.workstreamTabsProject = ws.project.id;
+    state.workstreamTabs = [];
     state.workstreamId = null;
     state.workstreamDetail = null;
   }
-  const data = ws.workstreams || { workstreams: [], weeks: [], unassigned_materials: 0 };
-  const items = data.workstreams || [];
+  // deleted lines drop their tab
+  state.workstreamTabs = state.workstreamTabs.filter((id) => items.some((item) => item.id === id));
+  if (state.workstreamId && !state.workstreamTabs.includes(state.workstreamId)) {
+    state.workstreamId = null;
+    state.workstreamDetail = null;
+  }
   const writable = canWriteWorkspace();
   const job = ws.workstream_job;
   const organizing = !!(job && ["queued", "running"].includes(job.status));
@@ -2335,7 +2403,7 @@ function renderWorkstreams(ws) {
     <div class="row workstream-toolbar">
       <button class="primary" type="button" onclick="openWorkstreamDialog()">＋ 新建工作线</button>
       <button type="button" onclick="seedWorkstreams()" title="把「项目计划」页签中项目目标的编号行各生成一条工作线，缩进行或 1.1 编号生成子工作线；已有同名工作线跳过">按项目目标生成</button>
-      <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="${data.organized_at ? "同步本周 PR/Issue，AI 归类本周未归类资料和 PR/Issue，更新本周快照和待跟踪项；过去的周已锁定" : "首次整理：同步本周 PR/Issue，AI 归类全部未归类资料、用历史周报补齐近 8 周快照，并整理本周"}">${organizing ? "整理中…" : "AI 整理"}</button>
+      <button type="button" id="workstream-organize-btn" onclick="organizeWorkstreams()" ${hasActive && !organizing ? "" : "disabled"} title="${data.organized_at ? "同步本周 PR/Issue，AI 归类本周未归类资料和 PR/Issue，更新本周快照，把需要跟进的事项加为 TODO；过去的周已锁定" : "首次整理：同步本周 PR/Issue，AI 归类全部未归类资料、用历史周报补齐近 8 周快照，并整理本周"}">${organizing ? "整理中…" : "AI 整理"}</button>
       ${note}
     </div>` : "";
   if (!items.length) {
@@ -2345,8 +2413,8 @@ function renderWorkstreams(ws) {
         ${toolbar}
         <p class="workstream-empty">还没有工作线。${writable ? "可以新建，或在「项目计划」页签写好编号的项目目标后“按项目目标生成”。" : ""}</p>
       </div>`;
+    renderWorkstreamSubtabs();
     renderWorkstreamDetail();
-    renderWorkstreamRisks(ws);
     return;
   }
   const head = (data.weeks || []).map((week) =>
@@ -2399,8 +2467,8 @@ function renderWorkstreams(ws) {
       ${renderUnassignedGit(data, writable)}
     </div>`;
   ensureTableScrollContainers();
+  renderWorkstreamSubtabs();
   renderWorkstreamDetail();
-  renderWorkstreamRisks(ws);
 }
 
 const RISK_RULE_LABELS = {
@@ -2408,7 +2476,7 @@ const RISK_RULE_LABELS = {
   overdue_milestone: "项目里程碑逾期",
   workstream_overdue: "工作线逾期",
   workstream_stale: "工作线停滞",
-  workstream_item_overdue: "待跟踪项逾期",
+  workstream_item_overdue: "待跟踪项逾期（已停用）",
 };
 
 function riskWorkstreamId(risk) {
@@ -2416,15 +2484,13 @@ function riskWorkstreamId(risk) {
   return match ? Number(match[1]) : null;
 }
 
-function renderWorkstreamRisks(ws) {
-  const el = $("ws-risks");
-  if (!el) return;
+function renderProjectRisks(ws) {
   const risks = ws.risks || [];
   const active = risks.filter((risk) => risk.status === "active").length;
   const rows = risks.map((risk) => {
     const id = riskWorkstreamId(risk);
     const title = id && workstreamById(id)
-      ? `<button type="button" class="link-button" onclick="focusWorkstream(${id})">${escapeHtml(risk.title)}</button>`
+      ? `<button type="button" class="link-button" onclick="openWorkstreamFromOverview(${id})">${escapeHtml(risk.title)}</button>`
       : escapeHtml(risk.title);
     return `<tr class="${risk.status === "active" ? "" : "is-resolved"}">
       <td data-label="严重度"><span class="status ${risk.severity}">${escapeHtml(statusLabel(risk.severity))}</span></td>
@@ -2433,29 +2499,15 @@ function renderWorkstreamRisks(ws) {
       <td data-label="状态">${escapeHtml(statusLabel(risk.status))}</td>
     </tr>`;
   }).join("");
-  el.innerHTML = `
+  return `
     <div class="panel ws-risks">
       <div class="panel-head"><h2>风险提醒</h2><span>确定性规则 · 本周 ${active} 条活跃 · 项目进度 <span class="status ${String(ws.progress_status || "").replace(" ", "-")}">${escapeHtml(statusLabel(ws.progress_status))}</span></span></div>
       <table class="table"><thead><tr><th>严重度</th><th>规则</th><th>内容</th><th>状态</th></tr></thead><tbody>${rows || "<tr><td colspan='4'>暂无风险。</td></tr>"}</tbody></table>
     </div>`;
-  ensureTableScrollContainers();
 }
 
-async function focusWorkstream(id) {
-  if (state.workstreamId !== id) await selectWorkstream(id);
-  $("workstream-detail")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-}
-
-async function selectWorkstream(id) {
-  if (state.workstreamId === id) {
-    state.workstreamId = null;
-    state.workstreamDetail = null;
-    renderWorkstreams(state.workspace);
-    return;
-  }
-  state.workstreamId = id;
-  document.querySelectorAll(".ws-row, .ws-progress-row[data-workstream-id]").forEach((row) => row.classList.toggle("is-selected", Number(row.dataset.workstreamId) === id));
-  await loadWorkstreamDetail(id);
+function selectWorkstream(id) {
+  return openWorkstreamTab(id);
 }
 
 async function loadWorkstreamDetail(id) {
@@ -2470,8 +2522,12 @@ function renderWorkstreamDetail() {
   const el = $("workstream-detail");
   if (!el) return;
   const d = state.workstreamDetail;
-  if (!d || d.id !== state.workstreamId) {
+  if (!state.workstreamId) {
     el.innerHTML = "";
+    return;
+  }
+  if (!d || d.id !== state.workstreamId) {
+    el.innerHTML = `<div class="panel workstream-detail"><p class="workstream-empty">加载中…</p></div>`;
     return;
   }
   const writable = canWriteWorkspace();
@@ -2501,7 +2557,6 @@ function renderWorkstreamDetail() {
       <input id="ws-snap-next" maxlength="300" placeholder="下一步（可选）">
       <button type="button" onclick="saveWorkstreamSnapshot(${d.id})">记录</button>
     </div>` : "";
-  const todos = (d.todos || []).map((t) => `<li><span class="status ${t.status === "doing" ? "running" : ""}">${t.status === "doing" ? "进行中" : "待办"}</span> ${escapeHtml(t.title)}</li>`).join("");
   el.innerHTML = `
     <div class="panel workstream-detail">
       <div class="panel-head"><h2>${escapeHtml(d.name)}</h2><span>${meta}${parentLink ? ` · ${parentLink}` : ""}</span></div>
@@ -2521,7 +2576,7 @@ function renderWorkstreamDetail() {
       </div>
       <div class="grid-2 workstream-detail-grid">
         <section>
-          ${renderWorkstreamItems(d, writable)}
+          ${renderWorkstreamTodos(d)}
           <h3>周进展 <small>过去的周已锁定</small></h3>
           ${snapshotForm}
           <ol class="workstream-timeline">${timeline}</ol>
@@ -2530,8 +2585,6 @@ function renderWorkstreamDetail() {
           ${renderWorkstreamChildren(d, writable)}
           ${renderWorkstreamMilestones(d, writable)}
           ${renderWorkstreamEvidence(d, writable)}
-          <h3>我的 TODO</h3>
-          ${todos ? `<ul class="workstream-list">${todos}</ul>` : `<p class="workstream-empty">暂无关联的未关闭 TODO。</p>`}
         </section>
       </div>
     </div>`;
@@ -2691,7 +2744,7 @@ function renderWorkstreamChildren(d, writable) {
     <li class="ws-child">
       ${wsHealthDot(kid.health)}
       <button type="button" class="link-button" onclick="selectWorkstream(${kid.id})">${escapeHtml(kid.name)}</button>
-      <small>${[kid.status !== "active" ? WS_STATUS_LABELS[kid.status] : "", kid.owner_label, kid.items_open ? `${kid.items_open} 待跟踪` : "", kid.items_overdue ? `${kid.items_overdue} 逾期` : ""]
+      <small>${[kid.status !== "active" ? WS_STATUS_LABELS[kid.status] : "", kid.owner_label, kid.todos_open ? `${kid.todos_open} 项 TODO` : ""]
         .filter(Boolean).map(escapeHtml).join(" · ")}</small>
     </li>`).join("");
   return `<h3>子工作线 <small>${kids.length}</small></h3><ul class="workstream-list ws-children">${rows}</ul>`;
@@ -2800,78 +2853,84 @@ function deleteWorkstreamMilestone(workstreamId, id) {
   workstreamSubRequest(workstreamId, "milestones", `/${id}`, { method: "DELETE" }, "里程碑已删除");
 }
 
-function wsItemMeta(item, today) {
-  const late = item.status === "open" && item.due_date && item.due_date < today;
-  return [
-    item.owner_label ? escapeHtml(item.owner_label) : "",
-    item.due_date ? `<span class="${late ? "is-overdue" : ""}">${late ? "已逾期 · " : "截止 "}${escapeHtml(item.due_date)}</span>` : "",
-    item.status === "done" && item.done_at ? `完成于 ${escapeHtml(formatChinaTime(item.done_at))}` : "",
-    item.source === "auto" ? "AI 提取" : "",
+// follow-ups are TODOs linked to the line: the viewer's own (editable on
+// their board), plus the members' ones read-only for the project owner
+function renderWorkstreamTodo(t) {
+  const closed = t.status === "closed";
+  const meta = [
+    closed ? (t.closed_at ? `关闭于 ${escapeHtml(formatChinaTime(t.closed_at))}` : "已关闭") : t.status === "doing" ? "进行中" : "待办",
+    t.source === "auto" ? "AI 整理" : "",
+    t.mine ? "" : escapeHtml(t.username || ""),
   ].filter(Boolean).join(" · ");
-}
-
-function renderWorkstreamItem(d, item, writable, today) {
-  if (writable && state.workstreamItemEditing === item.id) {
-    return `
-      <li class="ws-item is-editing">
-        <form class="ws-item-form" onsubmit="saveWorkstreamItem(event, ${d.id}, ${item.id})">
-          <input name="title" maxlength="200" required value="${escapeAttr(item.title)}" aria-label="待跟踪项">
-          <input name="owner_label" list="project-member-names" maxlength="60" value="${escapeAttr(item.owner_label || "")}" placeholder="负责人" aria-label="负责人">
-          <input name="due_date" type="date" value="${escapeAttr(item.due_date || "")}" aria-label="截止日期">
-          <span class="row"><button class="primary" type="submit">保存</button><button type="button" onclick="editWorkstreamItem(null)">取消</button></span>
-        </form>
-      </li>`;
-  }
-  const done = item.status === "done";
-  const late = !done && item.due_date && item.due_date < today;
-  const meta = wsItemMeta(item, today);
+  const mark = t.mine && !closed
+    ? `<input type="checkbox" aria-label="关闭：${escapeAttr(t.title)}" onclick="event.preventDefault(); closeWorkstreamTodo(${t.id})">`
+    : `<span class="ws-item-mark" aria-hidden="true">${closed ? "✓" : "○"}</span>`;
+  const actions = t.mine && !closed
+    ? `<span class="ws-item-actions"><button type="button" class="link-button" onclick="moveWorkstreamTodo(${t.id}, '${t.status === "doing" ? "todo" : "doing"}')">${t.status === "doing" ? "移回待办" : "开始"}</button></span>`
+    : "";
   return `
-    <li class="ws-item${done ? " is-done" : ""}${late ? " is-late" : ""}">
-      ${writable
-        ? `<input type="checkbox" ${done ? "checked" : ""} aria-label="${done ? "重新打开" : "标记完成"}：${escapeAttr(item.title)}" onchange="toggleWorkstreamItem(${d.id}, ${item.id}, this.checked)">`
-        : `<span class="ws-item-mark" aria-hidden="true">${done ? "✓" : "○"}</span>`}
+    <li class="ws-item${closed ? " is-done" : ""}${t.mine ? "" : " is-others"}">
+      ${mark}
       <div class="ws-item-body">
-        <span class="ws-item-title">${escapeHtml(item.title)}</span>
-        ${meta ? `<small>${meta}</small>` : ""}
+        <span class="ws-item-title">${escapeHtml(t.title)}</span>
+        <small>${meta}</small>
       </div>
-      ${writable ? `<span class="ws-item-actions">
-        <button type="button" class="link-button" onclick="editWorkstreamItem(${item.id})">编辑</button>
-        <button type="button" class="link-button is-danger" onclick="deleteWorkstreamItem(${d.id}, ${item.id})">删除</button>
-      </span>` : ""}
+      ${actions}
     </li>`;
 }
 
-function renderWorkstreamItems(d, writable) {
-  const today = state.workspace?.workstreams?.today || "";
-  const items = d.items || [];
-  const open = items.filter((item) => item.status === "open");
-  const done = items.filter((item) => item.status === "done");
-  const addForm = writable ? `
-    <form class="ws-item-form ws-item-add" onsubmit="addWorkstreamItem(event, ${d.id})">
-      <input name="title" maxlength="200" required placeholder="新增待跟踪项" aria-label="新增待跟踪项">
-      <input name="owner_label" list="project-member-names" maxlength="60" placeholder="负责人" aria-label="负责人">
-      <input name="due_date" type="date" aria-label="截止日期">
+function renderWorkstreamTodos(d) {
+  const todos = d.todos || [];
+  const open = todos.filter((t) => t.status !== "closed");
+  const closed = todos.filter((t) => t.status === "closed");
+  const addForm = canUploadWorkspace() && d.status !== "done" ? `
+    <form class="ws-item-form ws-todo-add" onsubmit="addWorkstreamTodo(event, ${d.id})">
+      <input name="title" maxlength="200" required placeholder="新增 TODO（加到我的看板）" aria-label="新增 TODO">
       <button type="submit">添加</button>
     </form>` : "";
-  const pct = items.length ? Math.round((done.length / items.length) * 100) : 0;
+  const scope = isProjectOwner() ? "含成员的 TODO" : "我的 TODO";
   return `
-    <h3>待跟踪项 <small>${open.length} 项待跟踪${items.length ? ` · 已完成 ${done.length}/${items.length}` : ""}</small></h3>
-    ${items.length ? `<span class="ws-items-bar is-wide" role="img" aria-label="完成 ${pct}%"><span style="width:${pct}%"></span></span>` : ""}
+    <h3>TODO <small>${open.length} 项未完成 · ${scope}</small></h3>
     ${addForm}
-    ${open.length ? `<ul class="ws-items">${open.map((item) => renderWorkstreamItem(d, item, writable, today)).join("")}</ul>` : `<p class="workstream-empty">没有待跟踪项。${writable ? "AI 整理也会从本周资料中提取。" : ""}</p>`}
-    ${done.length ? `<details class="ws-items-done"><summary>已完成 ${done.length}</summary><ul class="ws-items">${done.map((item) => renderWorkstreamItem(d, item, writable, today)).join("")}</ul></details>` : ""}`;
+    ${open.length ? `<ul class="ws-items">${open.map(renderWorkstreamTodo).join("")}</ul>` : `<p class="workstream-empty">没有未完成的 TODO。AI 整理会把需要跟进的事项加为 TODO。</p>`}
+    ${closed.length ? `<details class="ws-items-done"><summary>最近关闭 ${closed.length}</summary><ul class="ws-items">${closed.map(renderWorkstreamTodo).join("")}</ul></details>` : ""}`;
 }
 
-function workstreamItemBody(form) {
-  return {
-    title: form.elements.title.value.trim(),
-    owner_label: form.elements.owner_label.value.trim(),
-    due_date: form.elements.due_date.value,
-  };
+async function refreshWorkstreamTodos() {
+  if (state.mode !== "reports" || !state.projectId) return;
+  await loadWorkspace();
+  if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
 }
 
-function workstreamItemRequest(workstreamId, path, options, message) {
-  return workstreamSubRequest(workstreamId, "items", path, options, message);
+async function addWorkstreamTodo(event, workstreamId) {
+  event.preventDefault();
+  const title = event.target.elements.title.value.trim();
+  if (!title) return;
+  try {
+    updateTodos(await api("/api/todos", { method: "POST", body: JSON.stringify({ title, workstream_id: workstreamId }) }));
+    await refreshWorkstreamTodos();
+    toast("TODO 已添加到我的看板");
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function moveWorkstreamTodo(id, status) {
+  try {
+    await moveTodo(id, status);
+    await refreshWorkstreamTodos();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function closeWorkstreamTodo(id) {
+  try {
+    if (!state.todos.some((todo) => todo.id === id)) await loadTodos();
+    openCloseTodo(id);
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function workstreamSubRequest(workstreamId, kind, path, options, message) {
@@ -2879,7 +2938,6 @@ async function workstreamSubRequest(workstreamId, kind, path, options, message) 
   try {
     const detail = await api(`/api/projects/${projectId}/workstreams/${workstreamId}/${kind}${path}`, options);
     if (state.projectId !== projectId) return;
-    state.workstreamItemEditing = null;
     state.workstreamMilestoneEditing = null;
     if (state.workstreamId === workstreamId) state.workstreamDetail = { ...detail, projectId };
     await loadWorkspace();
@@ -2887,34 +2945,6 @@ async function workstreamSubRequest(workstreamId, kind, path, options, message) 
   } catch (error) {
     toast(error.message);
   }
-}
-
-function addWorkstreamItem(event, workstreamId) {
-  event.preventDefault();
-  const body = workstreamItemBody(event.target);
-  if (!body.title) return;
-  workstreamItemRequest(workstreamId, "", { method: "POST", body: JSON.stringify(body) }, "已添加待跟踪项");
-}
-
-function editWorkstreamItem(itemId) {
-  state.workstreamItemEditing = itemId;
-  renderWorkstreamDetail();
-}
-
-function saveWorkstreamItem(event, workstreamId, itemId) {
-  event.preventDefault();
-  const body = workstreamItemBody(event.target);
-  if (!body.title) return;
-  workstreamItemRequest(workstreamId, `/${itemId}`, { method: "PUT", body: JSON.stringify(body) }, "待跟踪项已更新");
-}
-
-function toggleWorkstreamItem(workstreamId, itemId, done) {
-  workstreamItemRequest(workstreamId, `/${itemId}`, { method: "PUT", body: JSON.stringify({ status: done ? "done" : "open" }) }, "");
-}
-
-function deleteWorkstreamItem(workstreamId, itemId) {
-  if (!window.confirm("删除这条待跟踪项？")) return;
-  workstreamItemRequest(workstreamId, `/${itemId}`, { method: "DELETE" }, "待跟踪项已删除");
 }
 
 function openWorkstreamDialog(id, parentId = null) {
@@ -2966,9 +2996,9 @@ async function submitWorkstreamForm(event) {
       body: JSON.stringify(body),
     });
     $("workstream-dialog").close();
-    if (!id && data.id) state.workstreamId = data.id;
     await loadWorkspace();
-    if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
+    if (!id && data.id) await openWorkstreamTab(data.id);
+    else if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
     toast(id ? "工作线已更新" : "工作线已创建");
   } catch (error) {
     toast(error.message);
@@ -3060,10 +3090,6 @@ async function setWorkstreamClosed(id, closed) {
       method: "PUT",
       body: JSON.stringify({ status: closed ? "done" : "active" }),
     });
-    if (closed && !state.workstreamShowClosed && state.workstreamId === id) {
-      state.workstreamId = null;
-      state.workstreamDetail = null;
-    }
     await loadWorkspace();
     if (state.workstreamId) await loadWorkstreamDetail(state.workstreamId);
     toast(closed ? `工作线「${name}」已关闭` : `工作线「${name}」已重新打开`);
@@ -3079,10 +3105,8 @@ function wsOpenKids(item) {
 async function deleteWorkstream(id) {
   const item = workstreamById(id);
   const kids = item && (item.children || []).length ? `它的 ${item.children.length} 条子工作线会变成一级工作线。` : "";
-  if (!window.confirm(`删除工作线「${item ? item.name : ""}」？关联资料和 TODO 会保留，只移除归属、周快照和待跟踪项。${kids}`)) return;
+  if (!window.confirm(`删除工作线「${item ? item.name : ""}」？关联资料和 TODO 会保留，只移除归属和周快照。${kids}`)) return;
   await api(`/api/projects/${state.projectId}/workstreams/${id}`, { method: "DELETE" });
-  state.workstreamId = null;
-  state.workstreamDetail = null;
   await loadWorkspace();
   toast("工作线已删除");
 }
@@ -3258,7 +3282,7 @@ function renderOverviewWorkstreams(ws) {
     return `<tr onclick="openWorkstreamFromOverview(${item.id})" class="ws-overview-row${item.parent_id ? " is-child" : ""}">
       <td data-label="工作线"><span class="ws-name-line">${item.parent_id ? `<span class="ws-branch" aria-hidden="true">└</span>` : ""}${wsHealthDot(item.health)}<strong>${escapeHtml(item.name)}</strong></span></td>
       <td data-label="最近进展">${latest ? `${escapeHtml(wsShortWeek(latest.week_key))} · ${escapeHtml(latest.snapshot.summary)}` : "—"}</td>
-      <td data-label="待跟踪" class="ws-overview-items">${item.items_open ? `${item.items_open} 待跟踪${item.items_overdue ? ` · <b class="is-overdue">${item.items_overdue} 逾期</b>` : ""}` : "—"}</td>
+      <td data-label="TODO" class="ws-overview-items">${item.todos_open ? `${item.todos_open} 项 TODO` : "—"}</td>
     </tr>`;
   }).join("");
   return `
@@ -3271,7 +3295,7 @@ function renderOverviewWorkstreams(ws) {
 
 async function openWorkstreamFromOverview(id) {
   switchTab("workstreams");
-  if (state.workstreamId !== id) await selectWorkstream(id);
+  await openWorkstreamTab(id);
 }
 
 function renderSettings(ws) {
@@ -3968,7 +3992,7 @@ async function savePlan(event) {
     state.workspace.plan = data.plan;
     state.workspace.risks = data.risks || state.workspace.risks;
     state.workspace.progress_status = data.progress_status || state.workspace.progress_status;
-    renderWorkstreamRisks(state.workspace);
+    renderOverview(state.workspace);
   }
 }
 
@@ -5536,6 +5560,7 @@ $("close-todo-form").onsubmit = async (event) => {
     updateTodos(await api(`/api/todos/${id}/close`, { method: "POST", body: JSON.stringify(payload) }));
     $("close-todo-dialog").close();
     toast(payload.project_id ? "TODO 已关闭并添加到项目资料" : "TODO 已关闭");
+    if (state.mode === "reports") refreshWorkstreamTodos().catch(() => {});
   } catch (error) {
     toast(error.message);
   } finally {

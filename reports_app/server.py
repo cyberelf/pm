@@ -132,9 +132,7 @@ from .timeutil import current_week_key, iso_now, week_bounds
 from .timeutil import get_zone, parse_iso
 from .todos import close_todo, create_todo, delete_todo, reorder_todos, todo_rows, toggle_todo_star, update_todo
 from .workstreams import (
-    create_item,
     create_workstream,
-    delete_item,
     delete_workstream,
     get_workstream,
     material_links_map,
@@ -144,7 +142,6 @@ from .workstreams import (
     set_material_links,
     set_todo_links,
     todo_workstream_options,
-    update_item,
     update_workstream,
     workstream_detail,
     workstream_overview,
@@ -803,7 +800,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.json({"todos": todo_rows(conn, user_id)})
                 return
             if path == "/api/todos" and method == "POST":
-                todo_id = create_todo(conn, self.body_json(), user_id)
+                payload = self.body_json()
+                todo_id = create_todo(conn, payload, user_id)
+                if payload.get("workstream_id"):
+                    # created from a workstream's TODO list: link it there in the same transaction
+                    set_todo_links(conn, user_id, todo_id, payload["workstream_id"])
                 conn.commit()
                 self.json({"id": todo_id, "todos": todo_rows(conn, user_id)}, HTTPStatus.CREATED)
                 return
@@ -1087,7 +1088,7 @@ class Handler(BaseHTTPRequestHandler):
                 if role != "owner":
                     touch_share_access(conn, project_id, user_id)
                 if len(parts) == 4 and parts[3] == "workspace" and method == "GET":
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "GET":
                     material = material_detail(conn, project_id, int(parts[4]))
@@ -1185,7 +1186,7 @@ class Handler(BaseHTTPRequestHandler):
                     require_role(role, "manage")
                     update_settings(conn, project_id, self.body_json())
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 4 and parts[3] == "suggest-template" and method == "POST":
                     require_role(role, "manage")
@@ -1251,7 +1252,7 @@ class Handler(BaseHTTPRequestHandler):
                     set_material_links(conn, project_id, int(parts[4]), payload.get("primary"), payload.get("related") or [])
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 4 and parts[3] == "materials" and method == "POST":
                     require_role(role, "upload")
@@ -1280,7 +1281,7 @@ class Handler(BaseHTTPRequestHandler):
                         update_manual_material(conn, project_id, int(parts[4]), payload)
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 5 and parts[3] == "materials" and method == "DELETE":
                     require_role(role, "manage")
@@ -1288,7 +1289,7 @@ class Handler(BaseHTTPRequestHandler):
                     evaluate_risks(conn, project_id)
                     conn.commit()
                     remove_material_file(storage_path)
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 4 and parts[3] == "repos" and method == "POST":
                     require_role(role, "manage")
@@ -1302,14 +1303,14 @@ class Handler(BaseHTTPRequestHandler):
                     update_repo_notes(conn, project_id, int(parts[4]), self.body_json(), auth_info=git_auth_for_user(conn, user_id))
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 5 and parts[3] == "repos" and method == "DELETE":
                     require_role(role, "manage")
                     delete_repo(conn, project_id, int(parts[4]))
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 6 and parts[3] == "repos" and parts[5] == "branches" and method == "GET":
                     self.json(repo_branches(conn, project_id, int(parts[4]), auth_info=git_auth_for_user(conn, user_id)))
@@ -1322,21 +1323,21 @@ class Handler(BaseHTTPRequestHandler):
                     refresh_repo(conn, int(parts[4]))
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 4 and parts[3] == "plan" and method == "PUT":
                     require_role(role, "write")
                     save_plan_payload(conn, project_id, self.body_json())
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 4 and parts[3] == "weekly-update" and method == "PUT":
                     require_role(role, "write")
                     save_weekly_update(conn, project_id, self.body_json())
                     evaluate_risks(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
                 if len(parts) == 4 and parts[3] == "generate" and method == "POST":
                     require_role(role, "write")
@@ -1351,7 +1352,7 @@ class Handler(BaseHTTPRequestHandler):
                     require_role(role, "write")
                     evaluate_schedules(conn, project_id)
                     conn.commit()
-                    self.json(workspace(conn, project_id, role))
+                    self.json(workspace(conn, project_id, role, user_id))
                     return
             if len(parts) == 4 and parts[:2] == ["api", "risks"] and parts[2].isdigit() and method == "POST":
                 status = parts[3]
@@ -1511,21 +1512,6 @@ class Handler(BaseHTTPRequestHandler):
                 conn.commit()
                 self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
                 return True
-            item_route = tail[1:2] == ["items"] and (
-                (len(tail) == 2 and method == "POST") or (len(tail) == 3 and tail[2].isdigit() and method in ("PUT", "DELETE"))
-            )
-            if item_route:
-                require_role(role, "write")
-                if method == "POST":
-                    create_item(conn, project_id, workstream_id, self.body_json())
-                elif method == "PUT":
-                    update_item(conn, project_id, workstream_id, int(tail[2]), self.body_json())
-                else:
-                    delete_item(conn, project_id, workstream_id, int(tail[2]))
-                evaluate_risks(conn, project_id)
-                conn.commit()
-                self.json(workstream_detail(conn, project_id, workstream_id, timezone, user_id))
-                return True
         return False
 
     def json(self, payload, status=HTTPStatus.OK, extra_headers=None):
@@ -1577,7 +1563,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def workspace(conn, project_id, role="owner"):
+def workspace(conn, project_id, role="owner", viewer_id=None):
     evaluate_risks(conn, project_id)
     project = dict(conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone())
     week_key = current_week_key(project["timezone"])
@@ -1623,9 +1609,9 @@ def workspace(conn, project_id, role="owner"):
         "jobs": [dict(row) for row in conn.execute("SELECT id, week_key, trigger_type, provider, status, input_snapshot_hash, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND week_key = ? AND trigger_type NOT IN ('template', 'workstreams') ORDER BY id DESC", (project_id, week_key))],
         "workstream_job": row_to_dict(conn.execute("SELECT id, status, output_md, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'workstreams' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
         "template_job": row_to_dict(conn.execute("SELECT id, week_key, trigger_type, provider, status, input_summary, failure_reason, queued_at, started_at, completed_at FROM generation_jobs WHERE project_id = ? AND trigger_type = 'template' ORDER BY id DESC LIMIT 1", (project_id,)).fetchone()),
-        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue', 'workstream_stale', 'workstream_item_overdue') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
+        "risks": [dict(row) for row in conn.execute("SELECT * FROM risk_warnings WHERE project_id = ? AND week_key = ? AND rule IN ('missing_update', 'overdue_milestone', 'workstream_overdue', 'workstream_stale') ORDER BY status, severity DESC, updated_at DESC", (project_id, week_key))],
         "source_diagnostics": source_diagnostics(conn, project_id, week_key),
-        "workstreams": workstream_overview(conn, project_id, project["timezone"]),
+        "workstreams": workstream_overview(conn, project_id, project["timezone"], viewer_id=viewer_id),
         "members": list_members(conn, project_id),
         "progress_status": progress_status(conn, project_id),
     }

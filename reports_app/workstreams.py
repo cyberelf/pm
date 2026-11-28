@@ -25,11 +25,10 @@ from .validation import ValidationError
 WORKSTREAM_STATUSES = ("active", "paused", "done")
 SNAPSHOT_STATUSES = ("advanced", "steady", "blocked")
 LINK_SOURCES = ("auto", "manual")
-ITEM_STATUSES = ("open", "done")
 MATRIX_WEEKS = 8
 TIMELINE_FUTURE_MIN = 4
 TIMELINE_FUTURE_MAX = 26
-ITEM_TITLE_LIMIT = 200
+TODO_TITLE_LIMIT = 200
 NAME_LIMIT = 60
 SEED_NAME_LIMIT = 30
 
@@ -569,166 +568,169 @@ def week_materials_by_workstream(conn, project_id, tz_name, week_key, per_workst
     return result
 
 
-# ---------------------------------------------------------------- 待跟踪项
+# ---------------------------------------------------------------- 工作线 TODO
+#
+# Follow-ups of a workstream are ordinary TODOs linked to it. TODOs stay
+# private to their account: a viewer sees their own, the project owner also
+# sees the members' (read-only). AI 整理 creates its follow-ups as TODOs of
+# the workstream's 负责人 account (or the project owner) and may close only
+# its own ones nobody has edited (todos.source = 'auto').
 
-
-def _due_date(value):
-    value = str(value or "").strip()
-    if not value:
-        return ""
-    try:
-        date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValidationError("due date must be YYYY-MM-DD") from exc
-    return value
+AGENT_CLOSE_REASON = "AI 整理：本周证据显示已完成"
 
 
 def normalize_title(title):
     return re.sub(r"[\s，,。.;；:：!！?？、\"'“”‘’（）()]+", "", str(title or "")).lower()
 
 
-def list_items(conn, workstream_id):
-    """Open items first (earliest due first, undated last), then done ones
-    newest first."""
-    return [
-        dict(r)
-        for r in conn.execute(
-            """
-            SELECT id, workstream_id, title, owner_label, due_date, status, source, created_week, done_at, created_at, updated_at
-            FROM workstream_items WHERE workstream_id = ?
-            ORDER BY status = 'done', CASE WHEN status = 'open' AND due_date = '' THEN 1 ELSE 0 END,
-                     CASE WHEN status = 'open' THEN due_date END, done_at DESC, id
-            """,
-            (workstream_id,),
-        )
-    ]
-
-
-def get_item(conn, project_id, workstream_id, item_id):
+def workstream_todo_user(conn, workstream_id):
+    """Whose board an agent follow-up lands on: the 负责人's account when it
+    can still open the project, else the project owner."""
     row = conn.execute(
         """
-        SELECT i.* FROM workstream_items i JOIN workstreams w ON w.id = i.workstream_id
-        WHERE i.id = ? AND i.workstream_id = ? AND w.project_id = ?
+        SELECT w.project_id, p.user_id AS owner_id, m.user_id AS member_user_id
+        FROM workstreams w JOIN projects p ON p.id = w.project_id
+        LEFT JOIN project_members m ON m.id = w.owner_member_id
+        WHERE w.id = ?
         """,
-        (item_id, workstream_id, project_id),
+        (workstream_id,),
     ).fetchone()
     if not row:
-        raise LookupError("tracking item not found")
-    return row
+        return None
+    member = row["member_user_id"]
+    if member and project_role(conn, row["project_id"], member) is not None:
+        return member
+    return row["owner_id"]
 
 
-def create_item(conn, project_id, workstream_id, payload, source="manual"):
-    get_workstream(conn, project_id, workstream_id)
-    title = _text(payload.get("title"), ITEM_TITLE_LIMIT)
-    if not title:
-        raise ValidationError("tracking item title is required")
-    tz_name = conn.execute("SELECT timezone FROM projects WHERE id = ?", (project_id,)).fetchone()["timezone"]
-    now = iso_now()
+def link_agent_todo(conn, user_id, workstream_id, title, description="", status="todo", now=None):
+    now = now or iso_now()
     cur = conn.execute(
         """
-        INSERT INTO workstream_items (workstream_id, title, owner_label, due_date, status, source, created_week, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)
+        INSERT INTO todos (title, description, status, user_id, source, created_at, updated_at, position)
+        VALUES (?, ?, ?, ?, 'auto', ?, ?, (SELECT COALESCE(MIN(position), 0) - 1 FROM todos WHERE user_id = ? AND status = ?))
         """,
-        (workstream_id, title, _text(payload.get("owner_label"), NAME_LIMIT), _due_date(payload.get("due_date")),
-         source, current_week_key(tz_name), now, now),
+        (title, description, status, user_id, now, now, user_id, status),
+    )
+    conn.execute(
+        "INSERT INTO todo_workstreams (todo_id, workstream_id, is_primary, source, created_at) VALUES (?, ?, 1, 'auto', ?)",
+        (cur.lastrowid, workstream_id, now),
     )
     return cur.lastrowid
 
 
-def update_item(conn, project_id, workstream_id, item_id, payload):
-    """A person's edit; it turns an agent item into a manual one, so the
-    agent never closes it afterwards."""
-    row = get_item(conn, project_id, workstream_id, item_id)
-    title = _text(payload.get("title"), ITEM_TITLE_LIMIT) if "title" in payload else row["title"]
-    if not title:
-        raise ValidationError("tracking item title is required")
-    status = str(payload.get("status") or row["status"])
-    if status not in ITEM_STATUSES:
-        raise ValidationError("tracking item status must be open or done")
-    owner = _text(payload.get("owner_label"), NAME_LIMIT) if "owner_label" in payload else row["owner_label"]
-    due = _due_date(payload.get("due_date")) if "due_date" in payload else row["due_date"]
-    now = iso_now()
-    done_at = (row["done_at"] or now) if status == "done" else ""
-    conn.execute(
-        """
-        UPDATE workstream_items SET title = ?, owner_label = ?, due_date = ?, status = ?, source = 'manual',
-            done_at = ?, updated_at = ? WHERE id = ?
-        """,
-        (title, owner, due, status, done_at, now, item_id),
-    )
-
-
-def delete_item(conn, project_id, workstream_id, item_id):
-    get_item(conn, project_id, workstream_id, item_id)
-    conn.execute("DELETE FROM workstream_items WHERE id = ?", (item_id,))
-
-
-def add_agent_items(conn, workstream_id, week_key, titles, limit=3):
+def add_agent_todos(conn, workstream_id, titles, limit=3):
     """New follow-ups the agent found in this week's evidence; a title that
-    matches any existing item of the workstream (open or done) is skipped."""
-    seen = {normalize_title(r["title"]) for r in conn.execute("SELECT title FROM workstream_items WHERE workstream_id = ?", (workstream_id,))}
+    matches any TODO linked to the workstream (open or closed) is skipped."""
+    seen = {
+        normalize_title(r["title"])
+        for r in conn.execute(
+            "SELECT t.title FROM todo_workstreams tw JOIN todos t ON t.id = tw.todo_id WHERE tw.workstream_id = ?",
+            (workstream_id,),
+        )
+    }
+    user_id = workstream_todo_user(conn, workstream_id)
     added, now = 0, iso_now()
+    if not user_id:
+        return 0
     for title in titles or []:
-        title = _text(title, ITEM_TITLE_LIMIT)
+        title = _text(title, TODO_TITLE_LIMIT)
         key = normalize_title(title)
         if not key or key in seen or added >= limit:
             continue
-        conn.execute(
-            """
-            INSERT INTO workstream_items (workstream_id, title, status, source, created_week, created_at, updated_at)
-            VALUES (?, ?, 'open', 'auto', ?, ?, ?)
-            """,
-            (workstream_id, title, week_key, now, now),
-        )
+        link_agent_todo(conn, user_id, workstream_id, title, now=now)
         seen.add(key)
         added += 1
     return added
 
 
-def close_agent_items(conn, workstream_id, item_ids):
-    """The agent may close only its own open items; a person's items stay
-    under their control."""
-    ids = [i for i in item_ids or [] if isinstance(i, int)]
+def close_agent_todos(conn, workstream_id, todo_ids):
+    """The agent may close only its own open TODOs that nobody edited."""
+    ids = [i for i in todo_ids or [] if isinstance(i, int)]
     if not ids:
         return 0
-    now = iso_now()
-    cur = conn.execute(
+    rows = conn.execute(
         f"""
-        UPDATE workstream_items SET status = 'done', done_at = ?, updated_at = ?
-        WHERE workstream_id = ? AND source = 'auto' AND status = 'open' AND id IN ({",".join("?" for _ in ids)})
+        SELECT t.id, t.user_id FROM todos t JOIN todo_workstreams tw ON tw.todo_id = t.id
+        WHERE tw.workstream_id = ? AND t.source = 'auto' AND t.status IN ('todo', 'doing')
+          AND t.id IN ({",".join("?" for _ in ids)})
         """,
-        (now, now, workstream_id, *ids),
-    )
-    return cur.rowcount
+        (workstream_id, *ids),
+    ).fetchall()
+    now = iso_now()
+    for row in rows:
+        conn.execute(
+            """
+            UPDATE todos SET status = 'closed', close_reason = ?, closed_at = ?, updated_at = ?,
+                position = (SELECT COALESCE(MIN(position), 0) - 1 FROM todos WHERE user_id = ? AND status = 'closed')
+            WHERE id = ?
+            """,
+            (AGENT_CLOSE_REASON, now, now, row["user_id"], row["id"]),
+        )
+    return len(rows)
 
 
-def open_items_for_prompt(conn, workstream_id, limit=20):
+def open_todos_for_prompt(conn, workstream_id, limit=20):
     return [
-        {"id": r["id"], "title": r["title"], "due_date": r["due_date"]}
+        {"id": r["id"], "title": r["title"]}
         for r in conn.execute(
-            "SELECT id, title, due_date FROM workstream_items WHERE workstream_id = ? AND status = 'open' ORDER BY id LIMIT ?",
+            """
+            SELECT t.id, t.title FROM todo_workstreams tw JOIN todos t ON t.id = tw.todo_id
+            WHERE tw.workstream_id = ? AND t.status IN ('todo', 'doing') ORDER BY t.id LIMIT ?
+            """,
             (workstream_id, limit),
         )
     ]
 
 
-def _item_counts(conn, project_id, today):
+def _todo_scope(conn, project_id, viewer_id):
+    """SQL filter and params for the TODOs a viewer may see in a project: all
+    of them for the project owner (or no viewer), else only their own."""
+    if viewer_id is None:
+        return "", ()
+    owner = conn.execute("SELECT user_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if owner and owner["user_id"] == viewer_id:
+        return "", ()
+    return " AND t.user_id = ?", (viewer_id,)
+
+
+def _todo_counts(conn, project_id, viewer_id):
+    scope, params = _todo_scope(conn, project_id, viewer_id)
     counts = {}
     for r in conn.execute(
-        """
-        SELECT i.workstream_id, i.status, i.due_date FROM workstream_items i
-        JOIN workstreams w ON w.id = i.workstream_id WHERE w.project_id = ?
+        f"""
+        SELECT tw.workstream_id, t.status FROM todo_workstreams tw
+        JOIN todos t ON t.id = tw.todo_id JOIN workstreams w ON w.id = tw.workstream_id
+        WHERE w.project_id = ?{scope}
         """,
-        (project_id,),
+        (project_id, *params),
     ):
-        c = counts.setdefault(r["workstream_id"], {"open": 0, "done": 0, "overdue": 0, "next_due": ""})
-        c[r["status"]] = c.get(r["status"], 0) + 1
-        if r["status"] == "open" and r["due_date"]:
-            if r["due_date"] < today:
-                c["overdue"] += 1
-            elif not c["next_due"] or r["due_date"] < c["next_due"]:
-                c["next_due"] = r["due_date"]
+        c = counts.setdefault(r["workstream_id"], {"open": 0, "done": 0})
+        c["done" if r["status"] == "closed" else "open"] += 1
     return counts
+
+
+def workstream_todos(conn, project_id, workstream_id, viewer_id, closed_limit=20):
+    """Open TODOs linked to the workstream, then the most recently closed."""
+    scope, params = _todo_scope(conn, project_id, viewer_id)
+    sql = f"""
+        SELECT t.id, t.title, t.description, t.status, t.source, t.user_id, t.updated_at, t.closed_at, t.close_reason,
+               tw.is_primary, u.username
+        FROM todo_workstreams tw JOIN todos t ON t.id = tw.todo_id LEFT JOIN users u ON u.id = t.user_id
+        WHERE tw.workstream_id = ?{scope} AND {{status}}
+    """
+    open_rows = conn.execute(
+        sql.format(status="t.status != 'closed'") + " ORDER BY t.status = 'todo', t.starred DESC, t.position, t.id DESC",
+        (workstream_id, *params),
+    ).fetchall()
+    closed_rows = conn.execute(
+        sql.format(status="t.status = 'closed'") + " ORDER BY t.closed_at DESC, t.id DESC LIMIT ?",
+        (workstream_id, *params, closed_limit),
+    ).fetchall()
+    return [
+        {**dict(r), "is_primary": bool(r["is_primary"]), "mine": r["user_id"] == viewer_id}
+        for r in [*open_rows, *closed_rows]
+    ]
 
 
 # ---------------------------------------------------------------- health
@@ -771,13 +773,11 @@ def workstream_conditions(conn, project_id, tz_name):
 
     for workstream_id, weeks in activity_counts(conn, project_id).items():
         recent[workstream_id] = recent.get(workstream_id, 0) + sum(n for week, n in weeks.items() if week in window)
-    items = _item_counts(conn, project_id, today)
     rows = list_workstreams(conn, project_id)
     children = _children(rows)
     result = {}
     for row in rows:
         overdue, stale = [], False
-        counts = items.get(row["id"], {"open": 0, "done": 0, "overdue": 0, "next_due": ""})
         if row["status"] == "active":
             if row["target_date"] and row["target_date"] < today:
                 overdue.append(f"目标日期 {row['target_date']} 已过")
@@ -796,8 +796,6 @@ def workstream_conditions(conn, project_id, tz_name):
             "overdue": overdue,
             "stale": stale,
             "recent_materials": recent.get(row["id"], 0),
-            "items": counts,
-            "items_overdue": counts["overdue"] if row["status"] == "active" else 0,
         }
     return result
 
@@ -809,7 +807,7 @@ def health_of(row, condition):
         return "paused"
     if condition["overdue"]:
         return "blocked"
-    if condition["stale"] or condition.get("items_overdue"):
+    if condition["stale"]:
         return "at risk"
     return "on track"
 
@@ -837,7 +835,8 @@ def roll_up(items):
 # ---------------------------------------------------------------- payloads
 
 
-def _item(row, condition, paths=None, children=None):
+def _item(row, condition, paths=None, children=None, todos=None):
+    todo = (todos or {}).get(row["id"], {"open": 0, "done": 0})
     return {
         "id": row["id"],
         "name": row["name"],
@@ -856,16 +855,15 @@ def _item(row, condition, paths=None, children=None):
         "own_health": health_of(row, condition),
         "overdue_reasons": condition["overdue"],
         "recent_materials": condition["recent_materials"],
-        "items_open": condition["items"]["open"],
-        "items_done": condition["items"]["done"],
-        "items_overdue": condition["items"]["overdue"],
-        "next_due": condition["items"]["next_due"],
+        "todos_open": todo["open"],
+        "todos_done": todo["done"],
     }
 
 
-def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
+def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS, viewer_id=None):
     """The matrix payload: workstreams with health, per-week snapshot cells
-    and current-week linked material counts, plus the unassigned count."""
+    and current-week linked material counts, plus the unassigned count.
+    TODO counts cover what the viewer may see (all of them without one)."""
     rows = list_workstreams(conn, project_id)
     week_keys = recent_week_keys(tz_name, weeks)
     current = week_keys[-1]
@@ -902,9 +900,10 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
     git = activity_counts(conn, project_id)
     milestones = _plan_milestones(conn, project_id)
     paths, children = workstream_paths(rows), _children(rows)
+    todos = _todo_counts(conn, project_id, viewer_id)
     items = []
     for row in rows:
-        item = _item(row, conditions[row["id"]], paths, children)
+        item = _item(row, conditions[row["id"]], paths, children, todos)
         item["material_total"] = totals.get(row["id"], 0)
         item["git_week"] = git.get(row["id"], {}).get(current, 0)
         item["last_material_at"] = last_at.get(row["id"], "")
@@ -945,10 +944,10 @@ def workstream_overview(conn, project_id, tz_name, weeks=MATRIX_WEEKS):
 
 def timeline_weeks(week_keys, items, today):
     """Weeks for the progress view: the matrix weeks plus enough future weeks
-    to reach the latest target, milestone or due date (4 to 26 ahead)."""
+    to reach the latest target or milestone date (4 to 26 ahead)."""
     dates = []
     for item in items:
-        dates += [item["target_date"], item["next_due"]]
+        dates.append(item["target_date"])
         dates += [m.get("target_date") for m in item["milestones"]]
     horizon = max([d for d in dates if d] or [""])
     first = week_monday(week_keys[0])
@@ -974,10 +973,11 @@ def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, materia
     conditions = workstream_conditions(conn, project_id, tz_name)
     paths, children = workstream_paths(rows), _children(rows)
     family = [r for r in rows if r["id"] == row["id"] or r["parent_id"] == row["id"]]
-    members = roll_up([_item(r, conditions[r["id"]], paths, children) for r in family])
+    todos = _todo_counts(conn, project_id, user_id)
+    members = roll_up([_item(r, conditions[r["id"]], paths, children, todos) for r in family])
     item = next(m for m in members if m["id"] == row["id"])
     item["child_items"] = [
-        {k: m[k] for k in ("id", "name", "status", "health", "owner_label", "target_date", "items_open", "items_overdue")}
+        {k: m[k] for k in ("id", "name", "status", "health", "owner_label", "target_date", "todos_open")}
         for m in members if m["id"] != row["id"]
     ]
     item["parent"] = {"id": row["parent_id"], "name": paths[row["parent_id"]]} if row["parent_id"] in paths else None
@@ -1008,20 +1008,8 @@ def workstream_detail(conn, project_id, workstream_id, tz_name, user_id, materia
     from .workstream_git import workstream_git_items
 
     item["git_items"] = workstream_git_items(conn, workstream_id)
-    item["items"] = list_items(conn, workstream_id)
     item["current_week"] = current_week_key(tz_name)
-    item["todos"] = [
-        dict(r)
-        for r in conn.execute(
-            """
-            SELECT t.id, t.title, t.status, t.updated_at, tw.is_primary FROM todo_workstreams tw
-            JOIN todos t ON t.id = tw.todo_id
-            WHERE tw.workstream_id = ? AND t.user_id = ? AND t.status != 'closed'
-            ORDER BY t.updated_at DESC
-            """,
-            (workstream_id, user_id),
-        )
-    ]
+    item["todos"] = workstream_todos(conn, project_id, workstream_id, user_id)
     return item
 
 

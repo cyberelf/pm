@@ -22,9 +22,7 @@ from reports_app.todos import close_todo, create_todo, todo_rows
 from reports_app.validation import ValidationError
 from reports_app.workstream_agent import run_workstream_job
 from reports_app.workstreams import (
-    create_item,
     create_workstream,
-    delete_item,
     delete_workstream,
     parse_objective_lines,
     previous_week_key,
@@ -32,7 +30,6 @@ from reports_app.workstreams import (
     seed_from_objectives,
     set_material_links,
     set_todo_links,
-    update_item,
     update_workstream,
     workstream_detail,
     workstream_overview,
@@ -173,7 +170,9 @@ class WorkstreamTest(unittest.TestCase):
         row = next(r for r in todo_rows(self.conn, self.writer) if r["id"] == todo)
         self.assertEqual(row["workstreams"]["primary"]["name"], "东风交付")
         self.assertEqual(workstream_detail(self.conn, self.project, ws, self.tz, self.writer)["todos"][0]["id"], todo)
-        self.assertEqual(workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])["todos"], [])
+        # the project owner sees a member's linked TODO read-only; other members do not
+        self.assertEqual([t["mine"] for t in workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])["todos"]], [False])
+        self.assertEqual(workstream_detail(self.conn, self.project, ws, self.tz, self.reader)["todos"], [])
         material = close_todo(self.conn, todo, {"reason": "已交付", "project_id": self.project}, self.writer)
         self.assertEqual(
             self.conn.execute("SELECT workstream_id FROM material_workstreams WHERE material_id = ? AND is_primary = 1", (material,)).fetchone()[0],
@@ -338,55 +337,90 @@ class WorkstreamTest(unittest.TestCase):
         self.assertEqual(refresh_after_report(self.conn, self.project, previous_week_key(self.tz), "# 旧周报"), 0)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM workstream_weekly").fetchone()[0], 1)
 
-    def test_tracking_items_crud_health_and_warning(self):
-        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
-        first = create_item(self.conn, self.project, ws, {"title": "确认实车排期", "owner_label": "高鹏", "due_date": "2026-01-05"})
-        second = create_item(self.conn, self.project, ws, {"title": "提交安全报告"})
-        with self.assertRaises(ValidationError):
-            create_item(self.conn, self.project, ws, {"title": " "})
-        with self.assertRaises(ValidationError):
-            create_item(self.conn, self.project, ws, {"title": "x", "due_date": "明天"})
-        with self.assertRaises(LookupError):
-            update_item(self.conn, self.other, ws, first, {"status": "done"})
-        item = self.overview_item(ws)
-        self.assertEqual((item["items_open"], item["items_overdue"], item["health"]), (2, 1, "at risk"))
-        evaluate_risks(self.conn, self.project)
-        warning = self.conn.execute(
-            "SELECT severity, title FROM risk_warnings WHERE rule = 'workstream_item_overdue' AND status = 'active'"
-        ).fetchone()
-        self.assertEqual(warning["severity"], "medium")
-        self.assertIn("1 条待跟踪项逾期", warning["title"])
-        update_item(self.conn, self.project, ws, first, {"status": "done"})
-        items = workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])["items"]
-        self.assertEqual([(i["id"], i["status"]) for i in items], [(second, "open"), (first, "done")])
-        self.assertTrue(items[1]["done_at"])
-        evaluate_risks(self.conn, self.project)
-        self.assertIsNone(self.conn.execute(
-            "SELECT 1 FROM risk_warnings WHERE rule = 'workstream_item_overdue' AND status = 'active'"
-        ).fetchone())
-        self.assertEqual(self.overview_item(ws)["health"], "on track")
-        delete_item(self.conn, self.project, ws, second)
-        delete_workstream(self.conn, self.project, ws)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM workstream_items").fetchone()[0], 0)
+    def link_todo(self, user_id, ws, title):
+        todo = create_todo(self.conn, {"title": title}, user_id)
+        set_todo_links(self.conn, user_id, todo, ws)
+        return todo
 
-    def test_agent_adds_and_closes_only_its_own_items(self):
+    def test_workstream_todos_follow_account_visibility(self):
         ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
-        manual = create_item(self.conn, self.project, ws, {"title": "签署交付确认单"})
+        mine = self.link_todo(self.owner["id"], ws, "确认实车排期")
+        theirs = self.link_todo(self.writer, ws, "提交安全报告")
+        close_todo(self.conn, mine, {}, self.owner["id"])
+        # the project owner sees members' TODOs too; a member sees only their own
+        owner_view = workstream_detail(self.conn, self.project, ws, self.tz, self.owner["id"])["todos"]
+        self.assertEqual([(t["id"], t["mine"], t["username"]) for t in owner_view], [(theirs, False, "writer"), (mine, True, "darren")])
+        writer_view = workstream_detail(self.conn, self.project, ws, self.tz, self.writer)["todos"]
+        self.assertEqual([t["id"] for t in writer_view], [theirs])
+        counts = lambda viewer: next(
+            (i["todos_open"], i["todos_done"])
+            for i in workstream_overview(self.conn, self.project, self.tz, viewer_id=viewer)["workstreams"] if i["id"] == ws
+        )
+        self.assertEqual((counts(self.owner["id"]), counts(self.writer), counts(self.reader)), ((1, 1), (1, 0), (0, 0)))
+        delete_workstream(self.conn, self.project, ws)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM todos").fetchone()[0], 2)  # TODOs outlive the line
+
+    def test_agent_adds_todos_and_closes_only_its_own_unedited_ones(self):
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        manual = self.link_todo(self.owner["id"], ws, "签署交付确认单")
         add_uploaded_materials(self.conn, self.project, [self.file("东风周会.txt", "东风交付 待跟进：确认实车排期")])
         self.conn.commit()
-        self.assertIn("新增 1 条待跟踪项", self.queue_organize())
-        auto = self.conn.execute("SELECT id, source, title FROM workstream_items WHERE id != ?", (manual,)).fetchone()
-        self.assertEqual((auto["source"], auto["title"]), ("auto", "确认实车排期"))
-        # the same follow-up again is a duplicate; finished items close only when the agent created them
+        self.assertIn("新增 1 条 TODO", self.queue_organize())
+        auto = self.conn.execute("SELECT * FROM todos WHERE id != ?", (manual,)).fetchone()
+        # no 负责人 account: the follow-up lands on the project owner's board, linked to the line
+        self.assertEqual((auto["source"], auto["title"], auto["user_id"], auto["status"]), ("auto", "确认实车排期", self.owner["id"], "todo"))
+        self.assertEqual(todo_rows(self.conn, self.owner["id"])[0]["workstreams"]["primary"]["id"], ws)
+        # the same follow-up again is a duplicate; finished TODOs close only when the agent created them
         add_uploaded_materials(self.conn, self.project, [
             self.file("东风周会2.txt", "东风交付 待跟进：确认 实车排期。已完成：确认实车排期 已完成：签署交付确认单"),
         ])
         self.conn.commit()
         self.assertIn("关闭 1 条", self.queue_organize())
-        rows = dict(self.conn.execute("SELECT id, status FROM workstream_items").fetchall())
-        self.assertEqual(rows, {manual: "open", auto["id"]: "done"})
+        rows = {r["id"]: (r["status"], r["close_reason"]) for r in self.conn.execute("SELECT * FROM todos")}
+        self.assertEqual(rows[manual], ("todo", ""))
+        self.assertEqual(rows[auto["id"]][0], "closed")
+        self.assertIn("AI 整理", rows[auto["id"]][1])
         context, _hash = assemble_context(self.conn, self.project)
-        self.assertEqual(context["workstreams"][0]["open_items"], [{"title": "签署交付确认单", "due_date": ""}])
+        self.assertEqual(context["workstreams"][0]["open_items"], [{"title": "签署交付确认单"}])
+
+    def test_agent_todo_goes_to_owner_account_and_edits_protect_it(self):
+        from reports_app.members import add_member
+        from reports_app.todos import update_todo
+        from reports_app.workstreams import add_agent_todos, close_agent_todos
+
+        member = add_member(self.conn, self.project, {"user_id": self.writer})
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付", "owner_member_id": member})
+        self.assertEqual(add_agent_todos(self.conn, ws, ["确认实车排期", "确认 实车排期", "提交报告"]), 2)
+        todos = self.conn.execute("SELECT id, user_id FROM todos ORDER BY id").fetchall()
+        self.assertEqual({t["user_id"] for t in todos}, {self.writer})
+        update_todo(self.conn, todos[0]["id"], {"title": "确认实车排期（改）"}, self.writer)
+        update_todo(self.conn, todos[1]["id"], {"status": "doing"}, self.writer)  # moving lanes is not an edit
+        self.assertEqual(close_agent_todos(self.conn, ws, [t["id"] for t in todos]), 1)
+        status = dict(self.conn.execute("SELECT id, status FROM todos").fetchall())
+        self.assertEqual(status, {todos[0]["id"]: "todo", todos[1]["id"]: "closed"})
+
+    def test_legacy_tracking_items_migrate_to_todos(self):
+        from reports_app.db import migrate_schema
+
+        ws = create_workstream(self.conn, self.project, {"name": "东风交付"})
+        self.conn.executescript("""
+            CREATE TABLE workstream_items (id INTEGER PRIMARY KEY, workstream_id INTEGER, title TEXT, owner_label TEXT DEFAULT '',
+                due_date TEXT DEFAULT '', status TEXT, source TEXT, created_week TEXT DEFAULT '', done_at TEXT DEFAULT '',
+                created_at TEXT, updated_at TEXT);
+        """)
+        now = iso_now()
+        for title, status, source, due in (("开放项", "open", "auto", ""), ("手工项", "open", "manual", "2026-12-01"), ("旧项", "done", "auto", "")):
+            self.conn.execute(
+                "INSERT INTO workstream_items (workstream_id, title, due_date, status, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ws, title, due, status, source, now, now),
+            )
+        migrate_schema(self.conn)
+        rows = self.conn.execute("SELECT title, description, source, user_id FROM todos ORDER BY id").fetchall()
+        self.assertEqual([tuple(r) for r in rows], [
+            ("开放项", "", "auto", self.owner["id"]), ("手工项", "截止 2026-12-01", "manual", self.owner["id"]),
+        ])
+        self.assertFalse(self.conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'workstream_items'").fetchone())
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM todo_workstreams WHERE workstream_id = ?", (ws,)).fetchone()[0], 2)
 
     def test_timeline_reaches_latest_target(self):
         create_workstream(self.conn, self.project, {"name": "东风交付", "target_date": (utc_now() + timedelta(days=70)).date().isoformat()})
@@ -446,16 +480,16 @@ class WorkstreamTest(unittest.TestCase):
         self.age(parent)
         self.age(child)
         set_material_links(self.conn, self.project, store_manual_material(self.conn, self.project, {"title": "n", "content": "x"}), child)
-        create_item(self.conn, self.project, child, {"title": "确认排期", "due_date": "2020-01-01"})
+        update_workstream(self.conn, self.project, child, {"target_date": "2020-01-01"})
         evaluate_risks(self.conn, self.project)
         item = self.overview_item(parent)
-        # the child's material keeps the parent from looking stale; the child's overdue item pulls it to at risk
-        self.assertEqual((item["own_health"], item["health"]), ("on track", "at risk"))
-        self.assertEqual(item["child_alerts"], ["子工作线「实车测试」有风险"])
+        # the child's material keeps the parent from looking stale; the child's overdue target pulls it to blocked
+        self.assertEqual((item["own_health"], item["health"]), ("on track", "blocked"))
+        self.assertEqual(item["child_alerts"], ["子工作线「实车测试」受阻"])
         refs = {r[0] for r in self.conn.execute("SELECT source_ref FROM risk_warnings WHERE status = 'active' AND rule LIKE 'workstream_%'")}
         self.assertEqual(refs, {f"workstream:{child}"})  # warnings stay per line
         detail = workstream_detail(self.conn, self.project, parent, self.tz, self.owner["id"])
-        self.assertEqual([(c["id"], c["health"], c["items_overdue"]) for c in detail["child_items"]], [(child, "at risk", 1)])
+        self.assertEqual([(c["id"], c["health"], c["todos_open"]) for c in detail["child_items"]], [(child, "blocked", 0)])
         child_detail = workstream_detail(self.conn, self.project, child, self.tz, self.owner["id"])
         self.assertEqual(child_detail["parent"], {"id": parent, "name": "东风交付"})
         update_workstream(self.conn, self.project, parent, {"status": "paused"})
@@ -487,7 +521,7 @@ class WorkstreamTest(unittest.TestCase):
         self.assertEqual(result["snapshots"], 2)
         summaries = dict(self.conn.execute("SELECT workstream_id, summary FROM workstream_weekly").fetchall())
         self.assertIn("实车周会", summaries[parent])  # the parent's snapshot sees its children's material
-        items = self.conn.execute("SELECT workstream_id, title FROM workstream_items").fetchall()
+        items = self.conn.execute("SELECT tw.workstream_id, t.title FROM todos t JOIN todo_workstreams tw ON tw.todo_id = t.id").fetchall()
         self.assertEqual([tuple(r) for r in items], [(child, "确认场地")])  # follow-ups stay on the child
         context, _hash = assemble_context(self.conn, self.project)
         self.assertEqual(context["workstreams"][1]["parent"], "东风交付")
@@ -638,7 +672,7 @@ class WorkstreamTest(unittest.TestCase):
         result = invoke(ctx, "materials_add", {"project": "agent guard", "text": "联调完成", "title": "日报", "workstream": "东风交付"})
         listing = invoke(ctx, "materials_list", {"project": "agent guard"})
         self.assertEqual(listing["materials"][0]["workstream"], "东风交付")
-        create_item(self.conn, self.project, ws, {"title": "确认实车排期", "due_date": "2030-01-05"})
+        self.link_todo(self.owner["id"], ws, "确认实车排期")
         save_manual_snapshot(self.conn, self.project, ws, {"status": "advanced", "summary": "完成联调", "next_step": "验收"})
         rows = invoke(ctx, "workstream_list", {"project": "agent guard"})["workstreams"]
         self.assertEqual((rows[0]["name"], rows[0]["material_total"]), ("东风交付", 1))
@@ -646,8 +680,8 @@ class WorkstreamTest(unittest.TestCase):
         shown = invoke(agent, "workstream_show", {"workstream": "东风交付", "project": "embody"})
         self.assertEqual(shown["materials"][0]["id"], result["id"])
         self.assertIn(f"{current_week_key(self.tz)} [advanced] 完成联调 → 验收", shown["timeline"])
-        self.assertEqual(shown["items_text"], "[ ] 确认实车排期 (due 2030-01-05)")
-        self.assertEqual(rows[0]["items_open"], 1)
+        self.assertRegex(shown["todos_text"], r"^\[ \] #\d+ 确认实车排期$")
+        self.assertEqual(rows[0]["todos_open"], 1)
         child = create_workstream(self.conn, self.project, {"name": "实车测试", "parent_id": ws})
         from reports_app.plans import create_milestone
 
@@ -764,15 +798,7 @@ class WorkstreamTest(unittest.TestCase):
         status, detail = call("writer", "PUT", f"{base}/{ids[0]}/snapshots", {"status": "advanced", "summary": "推进"})
         self.assertEqual((status, detail["snapshots"][0]["source"]), (200, "manual"))
 
-        self.assertEqual(call("reader", "POST", f"{base}/{ids[0]}/items", {"title": "确认排期"})[0], 403)
-        status, detail = call("writer", "POST", f"{base}/{ids[0]}/items", {"title": "确认排期", "due_date": "2030-01-01"})
-        self.assertEqual((status, [i["title"] for i in detail["items"]]), (200, ["确认排期"]))
-        item_id = detail["items"][0]["id"]
-        self.assertEqual(call("writer", "PUT", f"{base}/{ids[1]}/items/{item_id}", {"status": "done"})[0], 404)
-        status, detail = call("writer", "PUT", f"{base}/{ids[0]}/items/{item_id}", {"status": "done"})
-        self.assertEqual((status, detail["items"][0]["status"]), (200, "done"))
-        status, detail = call("writer", "DELETE", f"{base}/{ids[0]}/items/{item_id}")
-        self.assertEqual((status, detail["items"]), (200, []))
+        self.assertEqual(call("writer", "POST", f"{base}/{ids[0]}/items", {"title": "确认排期"})[0], 404)  # 待跟踪项 are TODOs now
 
         upload = {"files": [{"filename": "周报.txt", "content_base64": base64.b64encode("浩瀚融资".encode()).decode()}], "workstream_id": ids[0]}
         status, created = call("writer", "POST", f"/api/projects/{self.project}/materials", upload)

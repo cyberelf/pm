@@ -34,7 +34,8 @@ class FrontendTest(unittest.TestCase):
         self.assertNotIn("function renderWorkstreamPlan(", source)
         self.assertNotIn('id="ws-plan"', source)
         self.assertIn("function workstreamMilestoneRows(", source)
-        self.assertIn("function renderWorkstreamRisks(", source)
+        self.assertIn("function renderProjectRisks(", source)
+        self.assertIn("${renderProjectRisks(ws)}", source)
         self.assertIn("function switchSettingsSubTab(", source)
         self.assertIn('data-subtab="diagnostics"', source)
         self.assertIn('id="settings-sub-diagnostics"', source)
@@ -1549,12 +1550,12 @@ class WorkstreamFrontendTest(unittest.TestCase):
         for marker in ('id="tab-workstreams"', 'id="workstream-dialog"', 'id="workstream-assign-dialog"', 'id="workstream-assign-primary"'):
             self.assertIn(marker, html)
         self.assertIn('id="workstream-parent-select"', html)
-        for marker in ("/workstreams/seed", "/workstreams/organize", "/workstreams/reorder", "/snapshots", '"items"', '"milestones"',
+        for marker in ("/workstreams/seed", "/workstreams/organize", "/workstreams/reorder", "/snapshots", '"milestones"', "workstream_id: workstreamId",
                        "project_milestones", "body.parent_id",
                        "/api/todos/${target.id}/workstreams", 'kind === "workstreams"', "workstream_options",
                        'name="workstream_id"', "body.workstream_id = wsFilter"):
             self.assertIn(marker, source)
-        for marker in (".ws-matrix {", ".ws-tag, .todo-ws-tag {", ".workstream-timeline {", ".ws-progress-track {", ".ws-item {"):
+        for marker in (".ws-matrix {", ".ws-tag, .todo-ws-tag {", ".workstream-timeline {", ".ws-progress-track {", ".ws-item {", ".ws-subtab {"):
             self.assertIn(marker, styles)
 
     def test_matrix_filter_and_assignment_behaviour(self):
@@ -1624,14 +1625,14 @@ globalThis.fetch = async (path, options) => {
     ],
   });
   Object.assign(state.workspace.workstreams.workstreams[0], {
-    target_date: "2026-12-07", items_open: 2, items_done: 1, items_overdue: 1,
+    target_date: "2026-12-07", todos_open: 2, todos_done: 1,
     milestones: [{ title: "实车测试", target_date: "2026-11-30", status: "planned" }],
   });
   state.workstreamView = "progress";
   renderWorkstreams(state.workspace);
   const lanes = document.getElementById("ws-board").innerHTML;
   for (const needle of ['ws-seg is-advanced"', "is-pending is-current", 'ws-seg is-future"', "里程碑：实车测试（2026-11-30）",
-                        'ws-target" style="left:75.00%"', 'class="ws-today" style="left:28.57%"', "1 逾期", "width:33%", "2 待跟踪",
+                        'ws-target" style="left:75.00%"', 'class="ws-today" style="left:28.57%"', "width:33%", "2 未完成", "未完成 TODO",
                         "本周有进展"]) {
     if (!lanes.includes(needle)) throw new Error(`progress view missing ${needle}`);
   }
@@ -1657,26 +1658,43 @@ globalThis.fetch = async (path, options) => {
   if (JSON.stringify(JSON.parse(call.options.body)) !== JSON.stringify({ primary: 12, related: [] })) throw new Error(`unexpected body ${call.options.body}`);
   if (!adopted) throw new Error("assignment response was not adopted");
 
-  // tracking items in the detail panel: open first, done folded, edits go to the items API
+  // a workstream opens in its own closable sub-tab next to the board
+  loadWorkspace = async () => {};
+  await openWorkstreamTab(11);
+  if (JSON.stringify(state.workstreamTabs) !== "[11]" || state.workstreamId !== 11) throw new Error("opening should add and select a tab");
+  const strip = document.getElementById("ws-subtabs").innerHTML;
+  for (const needle of ["全部工作线", "showWorkstreamBoard()", "openWorkstreamTab(11)", "closeWorkstreamTab(11)", "东风交付"]) {
+    if (!strip.includes(needle)) throw new Error(`sub-tabs missing ${needle}`);
+  }
+  await openWorkstreamTab(12);
+  closeWorkstreamTab(12);
+  if (state.workstreamId !== 11 || JSON.stringify(state.workstreamTabs) !== "[11]") throw new Error("closing the active tab should select its neighbour");
+  showWorkstreamBoard();
+  if (state.workstreamId !== null || JSON.stringify(state.workstreamTabs) !== "[11]") throw new Error("the board tab keeps other tabs open");
+
+  // linked TODOs in the detail: own ones closable, members' read-only, recently closed folded
   state.workstreamId = 11;
   state.workstreamDetail = {
-    id: 11, projectId: 3, name: "东风交付", health: "at risk", current_week: "2026-W48", snapshots: [], materials: [], todos: [], milestones: [],
-    items: [
-      { id: 7, title: "确认实车排期", owner_label: "高鹏", due_date: "2026-11-20", status: "open", source: "auto" },
-      { id: 8, title: "签署确认单", owner_label: "", due_date: "", status: "done", source: "manual", done_at: "2026-11-23T10:00:00+00:00" },
+    id: 11, projectId: 3, name: "东风交付", health: "at risk", current_week: "2026-W48", snapshots: [], materials: [], milestones: [],
+    todos: [
+      { id: 7, title: "确认实车排期", status: "doing", source: "auto", mine: true, username: "darren" },
+      { id: 9, title: "提交安全报告", status: "todo", source: "manual", mine: false, username: "writer" },
+      { id: 8, title: "签署确认单", status: "closed", source: "manual", mine: true, username: "darren", closed_at: "2026-11-23T10:00:00+00:00" },
     ],
   };
   renderWorkstreamDetail();
   const detail = document.getElementById("workstream-detail").innerHTML;
-  for (const needle of ["待跟踪项", "1 项待跟踪", "已逾期 · 2026-11-20", "AI 提取", "已完成 1", "本周 W48", "过去的周已锁定"]) {
+  for (const needle of ["TODO <small>2 项未完成 · 含成员的 TODO", "AI 整理", "进行中", "writer", "最近关闭 1", "closeWorkstreamTodo(7)",
+                        "moveWorkstreamTodo(7, 'todo')", "本周 W48", "过去的周已锁定", "addWorkstreamTodo(event, 11)"]) {
     if (!detail.includes(needle)) throw new Error(`detail missing ${needle}`);
   }
+  if (detail.includes("closeWorkstreamTodo(9)")) throw new Error("members' TODOs are read-only");
   if (detail.includes('id="ws-snap-week"')) throw new Error("past weeks should not be selectable");
-  loadWorkspace = async () => {};
-  await toggleWorkstreamItem(11, 7, true);
-  const toggle = fetchCalls.at(-1);
-  if (toggle.path !== "/api/projects/3/workstreams/11/items/7" || toggle.options.method !== "PUT" || JSON.parse(toggle.options.body).status !== "done") {
-    throw new Error(`unexpected toggle ${toggle.path} ${toggle.options.body}`);
+  updateTodos = () => {};
+  await addWorkstreamTodo({ preventDefault() {}, target: { elements: { title: { value: "确认场地" } } } }, 11);
+  const added = fetchCalls.find((c) => c.path === "/api/todos" && c.options.method === "POST");
+  if (!added || JSON.stringify(JSON.parse(added.options.body)) !== JSON.stringify({ title: "确认场地", workstream_id: 11 })) {
+    throw new Error(`unexpected TODO create ${added && added.options.body}`);
   }
 
   // 子工作线: nested lanes with a fold toggle, parent filters include children, sibling-only moves
@@ -1715,13 +1733,13 @@ globalThis.fetch = async (path, options) => {
   // detail: children and editable milestones
   state.workstreamId = 11;
   state.workstreamDetail = { id: 11, projectId: 3, name: "东风交付", health: "at risk", current_week: "2026-W48", snapshots: [], materials: [],
-    todos: [], items: [], children: [13], parent: null, child_alerts: ["子工作线「实车测试」有风险"],
-    child_items: [{ id: 13, name: "实车测试", status: "active", health: "at risk", owner_label: "", target_date: "", items_open: 2, items_overdue: 0 }],
+    todos: [], children: [13], parent: null, child_alerts: ["子工作线「实车测试」有风险"],
+    child_items: [{ id: 13, name: "实车测试", status: "active", health: "at risk", owner_label: "", target_date: "", todos_open: 2 }],
     milestones: [{ id: 2, title: "验收", target_date: "2026-12-20", status: "planned", workstream_id: 11 },
                  { id: 1, title: "联调", target_date: "2026-11-10", status: "complete", workstream_id: 11 }] };
   renderWorkstreamDetail();
   const family = document.getElementById("workstream-detail").innerHTML;
-  for (const needle of ["子工作线 <small>1</small>", "实车测试", "2 待跟踪", "子工作线「实车测试」有风险", "已完成 1/2", "新增里程碑", "＋ 子工作线"]) {
+  for (const needle of ["子工作线 <small>1</small>", "实车测试", "2 项 TODO", "子工作线「实车测试」有风险", "已完成 1/2", "新增里程碑", "＋ 子工作线"]) {
     if (!family.includes(needle)) throw new Error(`detail missing ${needle}`);
   }
   if (family.indexOf("联调") > family.indexOf("验收")) throw new Error("milestones should be ordered by date");
@@ -1770,12 +1788,11 @@ globalThis.fetch = async (path, options) => {
   if (!link || link.options.method !== "PUT" || JSON.parse(link.options.body).workstream_id !== 13) throw new Error("git assignment call missing");
   if (!renderRepoWorkstream({ id: 3, workstream_id: 11 }).includes('value="11" selected')) throw new Error("repo default workstream not preselected");
 
-  // risks moved into the tab; a workstream warning links to its line
+  // risks live in the project overview; a workstream warning opens its line
   state.workspace.progress_status = "at risk";
-  state.workspace.risks = [{ rule: "workstream_item_overdue", severity: "medium", title: "工作线「东风交付」有 1 条待跟踪项逾期", details: "", status: "active", source_ref: "workstream:11" }];
-  renderWorkstreamRisks(state.workspace);
-  const risks = document.getElementById("ws-risks").innerHTML;
-  for (const needle of ["风险提醒", "待跟踪项逾期", "focusWorkstream(11)", "本周 1 条活跃"]) {
+  state.workspace.risks = [{ rule: "workstream_overdue", severity: "high", title: "工作线「东风交付」逾期", details: "", status: "active", source_ref: "workstream:11" }];
+  const risks = renderProjectRisks(state.workspace);
+  for (const needle of ["风险提醒", "工作线逾期", "openWorkstreamFromOverview(11)", "本周 1 条活跃"]) {
     if (!risks.includes(needle)) throw new Error(`risk panel missing ${needle}`);
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

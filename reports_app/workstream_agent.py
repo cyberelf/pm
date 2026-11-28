@@ -1,5 +1,5 @@
 """Internal-agent work for 工作线: weekly snapshot extraction, batch
-classification of unassigned materials, follow-up (待跟踪项) suggestions and
+classification of unassigned materials, follow-up TODO suggestions and
 the queued 「AI 整理」 job, which also syncs this week's PR / issue activity
 (workstream_git.py) and uses it as snapshot evidence.
 
@@ -22,11 +22,11 @@ from .timeutil import current_week_key, iso_now, parse_iso, week_key_for
 from .workstreams import (
     MATRIX_WEEKS,
     SNAPSHOT_STATUSES,
-    add_agent_items,
+    add_agent_todos,
     auto_link_material,
-    close_agent_items,
+    close_agent_todos,
     list_workstreams,
-    open_items_for_prompt,
+    open_todos_for_prompt,
     recent_week_keys,
     upsert_snapshot,
     week_materials_by_workstream,
@@ -133,7 +133,7 @@ def classify_unassigned(conn, project_id, timeout=120, week_key=None):
 
 def build_snapshot_prompt(week_key, workstreams, report_md, with_items=False):
     items_rule = (
-        "open_items 是该工作线尚未关闭的待跟踪项。new_items 写证据中明确提到、需要后续跟进且不在 open_items 里的事项，"
+        "open_items 是该工作线尚未关闭的 TODO。new_items 写证据中明确提到、需要后续跟进且不在 open_items 里的事项，"
         "每条不超过40个汉字，最多3条，没有就给空数组；done_item_ids 写证据明确表明已完成的 open_items 的 id，没有就给空数组。"
         if with_items else ""
     )
@@ -147,9 +147,9 @@ def build_snapshot_prompt(week_key, workstreams, report_md, with_items=False):
         "blocked（明确受阻或等待外部）。summary 用一句话写本周进展，不超过60个汉字；没有证据时写“本周无进展”。"
         "next_step 写证据中提到的下一步，不超过60个汉字，没有则留空。不要写风险预测。"
         "pull_requests_and_issues 是本周更新过的代码仓库 PR / Issue（state：merged 已合并、closed 已关闭、open 进行中、draft 草稿），"
-        "合并的 PR 和关闭的 Issue 算实质进展，长期 open 或明确卡住的算受阻证据；它们也是待跟踪项的证据来源。"
+        "合并的 PR 和关闭的 Issue 算实质进展，长期 open 或明确卡住的算受阻证据；它们也是后续跟进事项的证据来源。"
         "带 parent 的是子工作线，只写它自己的进展；父工作线的资料里含其子工作线的资料（带 sub_workstream 字段），"
-        "父工作线的快照概括整条线，待跟踪项只写属于父工作线本身的事项。"
+        "父工作线的快照概括整条线，new_items 只写属于父工作线本身的事项。"
         f"{items_rule}"
         f"只输出 JSON 数组，每项严格使用 {shape}，不要 Markdown。\n\n"
         f"工作线及本周关联资料：\n{json.dumps(workstreams, ensure_ascii=False, indent=2)}\n\n"
@@ -187,8 +187,8 @@ def _fake_snapshot(item):
 
 def extract_snapshots(conn, project_id, week_key, report_md, source="generated", timeout=120, only_missing=False):
     """Write one snapshot per active workstream for the week; manual
-    snapshots are kept. For the current week the agent also proposes new
-    待跟踪项 and closes its own finished ones; a past week (history
+    snapshots are kept. For the current week the agent also adds follow-ups
+    as TODOs linked to the line and closes its own finished, unedited ones; a past week (history
     initialisation) only fills workstreams that have no snapshot yet.
     Returns {"snapshots", "items_added", "items_closed"}."""
     result = {"snapshots": 0, "items_added": 0, "items_closed": 0}
@@ -240,7 +240,7 @@ def extract_snapshots(conn, project_id, week_key, report_md, source="generated",
         if r["parent_id"] in names:
             entry["parent"] = names[r["parent_id"]]
         if with_items:
-            entry["open_items"] = open_items_for_prompt(conn, r["id"])
+            entry["open_items"] = open_todos_for_prompt(conn, r["id"])
         evidence.append(entry)
     if _fake():
         answers = {item["id"]: _fake_snapshot(item) for item in evidence}
@@ -260,8 +260,8 @@ def extract_snapshots(conn, project_id, week_key, report_md, source="generated",
         if with_items:
             new_items = answer.get("new_items") if isinstance(answer.get("new_items"), list) else []
             done_ids = answer.get("done_item_ids") if isinstance(answer.get("done_item_ids"), list) else []
-            result["items_added"] += add_agent_items(conn, item["id"], week_key, [t for t in new_items if isinstance(t, str)])
-            result["items_closed"] += close_agent_items(conn, item["id"], done_ids)
+            result["items_added"] += add_agent_todos(conn, item["id"], [t for t in new_items if isinstance(t, str)])
+            result["items_closed"] += close_agent_todos(conn, item["id"], done_ids)
     return result
 
 
@@ -359,7 +359,7 @@ def run_workstream_job(db_path, job_id, project_id, timeout=180):
             parts.append(f"同步 {git['items']} 条 PR/Issue（AI 归类 {git['linked']} 条）")
         parts.append(f"更新本周 {current['snapshots']} 条快照")
         if current["items_added"]:
-            parts.append(f"新增 {current['items_added']} 条待跟踪项")
+            parts.append(f"新增 {current['items_added']} 条 TODO")
         if current["items_closed"]:
             parts.append(f"关闭 {current['items_closed']} 条")
         summary = ("首次整理：" if initial else "本周：") + "，".join(parts)

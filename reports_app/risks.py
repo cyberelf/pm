@@ -32,7 +32,7 @@ def evaluate_risks(conn, project_id):
             'material_extraction_failed',
             'workstream_stale',
             'workstream_overdue',
-            'workstream_item_overdue'
+            'workstream_item_overdue'  -- retired rule: resolves leftover warnings
           )
         """,
         (iso_now(), project_id, week_key),
@@ -82,11 +82,6 @@ def evaluate_risks(conn, project_id):
             upsert_warning(
                 conn, project_id, week_key, "workstream_stale", "medium",
                 f"工作线「{row['name']}」两周无新资料", "本周和上周都没有关联到这条工作线的资料", ref,
-            )
-        if condition["items_overdue"]:
-            upsert_warning(
-                conn, project_id, week_key, "workstream_item_overdue", "medium",
-                f"工作线「{row['name']}」有 {condition['items_overdue']} 条待跟踪项逾期", "待跟踪项已过截止日期仍未关闭", ref,
             )
 
 

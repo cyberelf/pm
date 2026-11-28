@@ -88,9 +88,15 @@ def update_todo(conn, todo_id, payload, user_id):
     position = row["position"]
     if status != row["status"]:
         position = _lane_top_position(conn, user_id, status)
+    # a person's content edit takes an AI 整理 TODO out of the agent's hands
+    edited = title != row["title"] or description != (row["description"] or "")
     conn.execute(
-        "UPDATE todos SET title = ?, description = ?, status = ?, position = ?, updated_at = ? WHERE id = ?",
-        (title, description, status, position, iso_now(), todo_id),
+        """
+        UPDATE todos SET title = ?, description = ?, status = ?, position = ?, updated_at = ?,
+            source = CASE WHEN ? THEN 'manual' ELSE source END
+        WHERE id = ?
+        """,
+        (title, description, status, position, iso_now(), int(edited), todo_id),
     )
     if sync_material:
         content = _material_content({"title": title, "description": description}, row["close_reason"])

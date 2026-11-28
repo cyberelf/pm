@@ -361,22 +361,6 @@ CREATE TABLE IF NOT EXISTS workstream_weekly (
     UNIQUE(workstream_id, week_key)
 );
 
-CREATE TABLE IF NOT EXISTS workstream_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    workstream_id INTEGER NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    owner_label TEXT NOT NULL DEFAULT '',
-    due_date TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'open',
-    source TEXT NOT NULL DEFAULT 'manual',
-    created_week TEXT NOT NULL DEFAULT '',
-    done_at TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_workstream_items_workstream ON workstream_items(workstream_id, status);
-
 -- PR / issue activity synced from connected repositories (workstream_git.py):
 -- one row per item and project week it was updated in, linked to one
 -- workstream by the repository default, the agent or a person.
@@ -523,6 +507,9 @@ def migrate_schema(conn):
         conn.execute("ALTER TABLE todos ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
     if "starred" not in table_columns["todos"]:
         conn.execute("ALTER TABLE todos ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+    if "source" not in table_columns["todos"]:
+        # 'auto' marks an AI 整理 follow-up nobody has edited; only those may be closed by the agent
+        conn.execute("ALTER TABLE todos ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
     share_columns = {row["name"] for row in conn.execute("PRAGMA table_info(project_shares)")}
     if "last_accessed_at" not in share_columns:
         conn.execute("ALTER TABLE project_shares ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''")
@@ -535,6 +522,7 @@ def migrate_schema(conn):
     )
     # free-text workstream owners become 项目组成员 (needs users bootstrapped)
     members.migrate_workstream_owners(conn)
+    _migrate_workstream_items(conn)
     # the Codex/Claude CLI providers are gone; every project now generates
     # through the internal agent
     conn.execute("UPDATE projects SET report_provider = ? WHERE report_provider != ?", (REPORT_PROVIDER, REPORT_PROVIDER))
@@ -657,3 +645,22 @@ def create_project(conn, data, user=None):
         (project_id, now),
     )
     return project_id
+
+
+def _migrate_workstream_items(conn):
+    """待跟踪项 became workstream-linked TODOs: each open item turns into a TODO
+    of the workstream's 负责人 account (or the project owner); done items are
+    dropped with the old table."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workstream_items'").fetchone():
+        return
+    from .workstreams import link_agent_todo, workstream_todo_user
+
+    for item in conn.execute("SELECT * FROM workstream_items WHERE status = 'open' ORDER BY id").fetchall():
+        user_id = workstream_todo_user(conn, item["workstream_id"])
+        if not user_id:
+            continue
+        notes = [f"截止 {item['due_date']}" if item["due_date"] else "", f"负责人 {item['owner_label']}" if item["owner_label"] else ""]
+        todo_id = link_agent_todo(conn, user_id, item["workstream_id"], item["title"], " · ".join(n for n in notes if n), now=item["created_at"])
+        if item["source"] != "auto":
+            conn.execute("UPDATE todos SET source = 'manual' WHERE id = ?", (todo_id,))
+    conn.execute("DROP TABLE workstream_items")
