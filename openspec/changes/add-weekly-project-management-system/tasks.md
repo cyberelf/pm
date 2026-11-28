@@ -101,7 +101,7 @@
 
 ## 11. Personal TODO Board
 
-- [x] 11.1 Add TODO persistence and validation for open status transitions and mandatory close reasons
+- [x] 11.1 Add TODO persistence and validation for open status transitions and optional close reasons
 - [x] 11.2 Add TODO APIs with atomic optional project-material archiving on closure
 - [x] 11.3 Add a separate responsive Trello-style board and top-right TODO/weekly-report switch
 - [x] 11.4 Add backend and frontend regression tests and run required verification

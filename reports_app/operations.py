@@ -872,7 +872,7 @@ def todo_status(ctx, id, status):
     name="todo_done",
     command=("todo", "done"),
     summary="close a TODO and archive it to a project",
-    description="Close a TODO with a reason and archive it as a material of the project.",
+    description="Close a TODO with an optional reason and archive it as a material of the project.",
     params=(Param("id", "integer", "TODO ID", required=True, positional=True),
             Param("project", "project", "project to archive into (ID or name)", required=True, flags=("-p", "--project")),
             Param("reason", "string", "closing reason", default="done", flags=("-r", "--reason"))),

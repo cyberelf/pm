@@ -56,11 +56,11 @@ The system SHALL provide a workspace-level personal TODO board separate from pro
 - **THEN** the board renders sanitized formatted HTML while the inline editor retains the original Markdown source
 
 ### Requirement: Controlled TODO closure
-The system SHALL close TODOs only through a dedicated operation that records a non-empty close reason.
+The system SHALL close TODOs only through a dedicated operation that records an optional close reason.
 
-#### Scenario: Reject closure without reason
-- **WHEN** the user attempts to close a TODO without a non-empty reason
-- **THEN** the system rejects the operation and leaves the TODO open
+#### Scenario: Close TODO without reason
+- **WHEN** the user closes a TODO and leaves the close reason empty
+- **THEN** the system closes the TODO with an empty reason, the board shows no close-reason block, and any archived project material marks the reason as 未填写
 
 #### Scenario: Close TODO without project
 - **WHEN** the user supplies a close reason and does not select a project

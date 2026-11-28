@@ -354,7 +354,7 @@
         <h2>关闭 TODO</h2>
         <p id="close-todo-title" class="dialog-context"></p>
         <input id="close-todo-id" name="todo_id" type="hidden" />
-        <label>关闭原因 <textarea name="reason" required maxlength="4000" placeholder="说明为什么可以关闭，以及最终结果"></textarea></label>
+        <label>关闭原因（可选） <textarea name="reason" maxlength="4000" placeholder="说明为什么可以关闭，以及最终结果"></textarea></label>
         <label>归属项目（可选）
           <select id="close-todo-project" name="project_id">
             <option value="">不归属项目</option>
@@ -362,7 +362,7 @@
         </label>
         <div class="modal-actions">
           <button id="cancel-close-todo" type="button">取消</button>
-          <button class="primary" value="default">确认关闭</button>
+          <button id="confirm-close-todo" class="primary" value="default">确认关闭</button>
         </div>
       </form>
     </dialog>
@@ -550,6 +550,6 @@
         <span id="loading-detail">Please wait...</span>
       </div>
     </div>
-    <script src="/app.js?v=84"></script>
+    <script src="/app.js?v=85"></script>
   </body>
 </html>

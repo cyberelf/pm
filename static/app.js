@@ -944,7 +944,7 @@ function renderTodoCard(todo) {
       <h3>${escapeHtml(todo.title)}</h3>
       ${todo.description ? `<div class="todo-markdown">${todo.description_html}</div>` : ""}
       ${todo.status === "closed" ? `
-        <div class="todo-close-reason"><span>关闭原因</span><div class="todo-markdown">${todo.close_reason_html}</div></div>
+        ${todo.close_reason ? `<div class="todo-close-reason"><span>关闭原因</span><div class="todo-markdown">${todo.close_reason_html}</div></div>` : ""}
         ${todo.project_name ? `<span class="todo-project">${escapeHtml(todo.project_name)}</span>` : ""}
       ` : ""}
       <div class="todo-card-meta"><span>更新于 ${escapeHtml(formatChinaTime(todo.updated_at))}</span>${todoWorkstreamTag(todo)}</div>
@@ -5460,9 +5460,19 @@ $("close-todo-form").onsubmit = async (event) => {
   const payload = Object.fromEntries(new FormData(event.target).entries());
   const id = Number(payload.todo_id);
   delete payload.todo_id;
-  updateTodos(await api(`/api/todos/${id}/close`, { method: "POST", body: JSON.stringify(payload) }));
-  $("close-todo-dialog").close();
-  toast(payload.project_id ? "TODO 已关闭并添加到项目资料" : "TODO 已关闭");
+  const button = $("confirm-close-todo");
+  button.disabled = true;
+  button.textContent = "关闭中…";
+  try {
+    updateTodos(await api(`/api/todos/${id}/close`, { method: "POST", body: JSON.stringify(payload) }));
+    $("close-todo-dialog").close();
+    toast(payload.project_id ? "TODO 已关闭并添加到项目资料" : "TODO 已关闭");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "确认关闭";
+  }
 };
 document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => switchTab(btn.dataset.tab));
 

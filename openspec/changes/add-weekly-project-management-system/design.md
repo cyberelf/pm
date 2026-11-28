@@ -112,7 +112,7 @@ The first release runs as a local personal web application: the browser provides
 
 19. Model TODO closure as a dedicated, atomic operation.
 
-   Rationale: every closed TODO must retain a non-empty close reason. The close operation may also select one project; in that case the system creates a Markdown manual material containing the TODO and its close reason in the same database transaction, then records the material association on the TODO. A normal status update cannot bypass these closure requirements.
+   Rationale: closing goes through a dedicated operation that records an optional close reason (empty is allowed). The close operation may also select one project; in that case the system creates a Markdown manual material containing the TODO and its close reason in the same database transaction, then records the material association on the TODO. A normal status update cannot bypass these closure requirements.
 
 20. Keep TODO navigation separate from weekly reporting.
 

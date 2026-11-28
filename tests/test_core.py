@@ -1255,13 +1255,19 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             delete_todo(self.conn, todo_id, self.user_id)
 
-    def test_todo_close_requires_reason_and_optionally_archives_project_material(self):
+    def test_todo_close_reason_is_optional(self):
+        todo_id = create_todo(self.conn, {"title": "Quick close"}, self.user_id)
+        material_id = close_todo(self.conn, todo_id, {"reason": "   ", "project_id": self.project_id}, self.user_id)
+        row = self.conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
+        self.assertEqual(row["status"], "closed")
+        self.assertEqual(row["close_reason"], "")
+        material = self.conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+        self.assertIn("（未填写）", material["extracted_text"])
+        other = create_todo(self.conn, {"title": "No payload reason"}, self.user_id)
+        self.assertIsNone(close_todo(self.conn, other, {}, self.user_id))
+
+    def test_todo_close_optionally_archives_project_material(self):
         todo_id = create_todo(self.conn, {"title": "Finish release", "description": "Validate TODO board"}, self.user_id)
-        with self.assertRaises(ValidationError):
-            close_todo(self.conn, todo_id, {"reason": "   ", "project_id": self.project_id}, self.user_id)
-        open_row = self.conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
-        self.assertEqual(open_row["status"], "todo")
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) AS n FROM materials").fetchone()["n"], 0)
 
         material_id = close_todo(self.conn, todo_id,
             {"reason": "Acceptance checks passed", "project_id": self.project_id}, self.user_id)

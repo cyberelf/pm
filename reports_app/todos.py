@@ -135,7 +135,7 @@ def close_todo(conn, todo_id, payload, user_id):
     row = _todo(conn, todo_id, user_id)
     if row["status"] == "closed":
         raise ValidationError("TODO is already closed")
-    reason = _required_text(payload.get("reason"), "close reason is required", 4000)
+    reason = (payload.get("reason") or "").strip()[:4000]  # 关闭原因可选
     raw_project_id = payload.get("project_id")
     project_id = None
     material_id = None
@@ -246,5 +246,5 @@ def _material_content(todo, reason):
     return (
         f"# TODO 完成：{todo['title']}\n\n"
         f"## TODO 内容\n\n{description}\n\n"
-        f"## 关闭原因\n\n{reason}\n"
+        f"## 关闭原因\n\n{(reason or '').strip() or '（未填写）'}\n"
     )
