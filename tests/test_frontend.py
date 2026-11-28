@@ -849,7 +849,7 @@ function makeEl(name, rect) {
     },
     querySelector(selector) {
       if (selector === ".todo-card-list") return this.children.find((c) => c._isList) || null;
-      if (selector === ".todo-draft, .todo-empty") return this.children.find((c) => c._isDraft || c._isEmpty) || null;
+      if (selector === ".todo-empty") return this.children.find((c) => c._isEmpty) || null;
       return null;
     },
     querySelectorAll(selector) {
@@ -881,7 +881,7 @@ for (const lane of ["todo", "doing", "closed"]) {
   column.appendChild(list);
   columns[lane] = { column, list };
 }
-const draft = makeEl("draft", { left: 0, top: 300, right: 320, bottom: 380 });
+const draft = makeEl("draft", { left: 0, top: 40, right: 320, bottom: 55 });
 draft._isDraft = true;
 const emptyNote = makeEl("empty", { left: 640, top: 60, right: 960, bottom: 100 });
 emptyNote._isEmpty = true;
@@ -895,9 +895,9 @@ const cardA = makeCard(1, { left: 0, top: 60, right: 320, bottom: 140 });
 const cardB = makeCard(2, { left: 0, top: 150, right: 320, bottom: 230 });
 const cardC = makeCard(3, { left: 320, top: 60, right: 640, bottom: 140 });
 const cardD = makeCard(4, { left: 640, top: 60, right: 960, bottom: 140 });
+columns.todo.list.appendChild(draft);
 columns.todo.list.appendChild(cardA);
 columns.todo.list.appendChild(cardB);
-columns.todo.list.appendChild(draft);
 columns.doing.list.appendChild(cardC);
 columns.closed.list.appendChild(cardD);
 columns.closed.list.appendChild(emptyNote);
@@ -962,11 +962,12 @@ const fire = (type, event) => {
   fire("pointerdown", pointerEvent("pointerdown", 160, 100, cardA));
   fire("pointermove", pointerEvent("pointermove", 160, 250, cardA));
   if (!todoDrag.active) throw new Error("mouse drag did not lift the card");
-  // 仍在「待办」列内：A 应排到 B 之后、草稿卡片之前
+  // 仍在「待办」列内：A 应排到 B 之后（列尾），列首的添加入口保持不动
   pump();
   if (cardIds(columns.todo.list).join() !== "2,1") {
     throw new Error(`same-lane reorder failed: ${cardIds(columns.todo.list)}`);
   }
+  if (columns.todo.list.children[0] !== draft) throw new Error("draft entry moved off the top of the todo lane");
   // 指针进入「进行中」列且低于 C 的中点：A 应跨列排在 C 之后
   fire("pointermove", pointerEvent("pointermove", 500, 200, cardA));
   pump();

@@ -623,7 +623,8 @@ function syncTodoBoardDots(board) {
 
 function renderTodoColumnItems(status, title, items) {
   if (status !== "closed") {
-    return `${items.map(renderTodoCard).join("")}${status === "todo" ? renderTodoDraft() : (!items.length ? `<p class="todo-empty">暂无${title}事项</p>` : "")}`;
+    if (status === "todo") return `${renderTodoDraft()}${items.map(renderTodoCard).join("")}`;
+    return `${items.map(renderTodoCard).join("")}${!items.length ? `<p class="todo-empty">暂无${title}事项</p>` : ""}`;
   }
   if (!items.length) return `<p class="todo-empty">暂无${title}事项</p>`;
   const todayItems = [];
@@ -803,7 +804,7 @@ function updateTodoInsertion(x, y) {
       break;
     }
   }
-  const ref = before || list.querySelector(".todo-draft, .todo-empty");
+  const ref = before || list.querySelector(".todo-empty"); // 添加入口在列首，落到列尾时直接追加
   if (card.parentNode === ref?.parentNode && card.nextElementSibling === ref) return;
   (ref?.parentNode || list).insertBefore(card, ref);
 }
